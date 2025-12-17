@@ -1,0 +1,139 @@
+/* Ionic Variables and Theming */
+/* Color palette based on Trova logo - Darker/Warmer Green */
+
+:root {
+  /** Primary Color - Trova Green (Darker/Warmer) **/
+  --ion-color-primary: #2d7a4e;
+  --ion-color-primary-rgb: 45, 122, 78;
+  --ion-color-primary-contrast: #ffffff;
+  --ion-color-primary-contrast-rgb: 255, 255, 255;
+  --ion-color-primary-shade: #1e6b3f;
+  --ion-color-primary-tint: #3a8a5e;
+
+  /** Secondary Color - Complementary Teal/Blue-Green **/
+  --ion-color-secondary: #1DB98A;
+  --ion-color-secondary-rgb: 29, 185, 138;
+  --ion-color-secondary-contrast: #ffffff;
+  --ion-color-secondary-contrast-rgb: 255, 255, 255;
+  --ion-color-secondary-shade: #1aa279;
+  --ion-color-secondary-tint: #34c096;
+
+  /** Tertiary Color - Warm Accent **/
+  --ion-color-tertiary: #FF6B6B;
+  --ion-color-tertiary-rgb: 255, 107, 107;
+  --ion-color-tertiary-contrast: #ffffff;
+  --ion-color-tertiary-contrast-rgb: 255, 255, 255;
+  --ion-color-tertiary-shade: #e05e5e;
+  --ion-color-tertiary-tint: #ff7a7a;
+
+  /** Success - Green variation **/
+  --ion-color-success: #10b981;
+  --ion-color-success-rgb: 16, 185, 129;
+  --ion-color-success-contrast: #ffffff;
+  --ion-color-success-contrast-rgb: 255, 255, 255;
+  --ion-color-success-shade: #0ea370;
+  --ion-color-success-tint: #28c091;
+
+  /** Warning **/
+  --ion-color-warning: #f59e0b;
+  --ion-color-warning-rgb: 245, 158, 11;
+  --ion-color-warning-contrast: #000000;
+  --ion-color-warning-contrast-rgb: 0, 0, 0;
+  --ion-color-warning-shade: #d88b0a;
+  --ion-color-warning-tint: #f6a824;
+
+  /** Danger **/
+  --ion-color-danger: #ef4444;
+  --ion-color-danger-rgb: 239, 68, 68;
+  --ion-color-danger-contrast: #ffffff;
+  --ion-color-danger-contrast-rgb: 255, 255, 255;
+  --ion-color-danger-shade: #d23c3c;
+  --ion-color-danger-tint: #f15757;
+
+  /** Dark **/
+  --ion-color-dark: #1a1a1a;
+  --ion-color-dark-rgb: 26, 26, 26;
+  --ion-color-dark-contrast: #ffffff;
+  --ion-color-dark-contrast-rgb: 255, 255, 255;
+  --ion-color-dark-shade: #171717;
+  --ion-color-dark-tint: #313131;
+
+  /** Medium **/
+  --ion-color-medium: #6b7280;
+  --ion-color-medium-rgb: 107, 114, 128;
+  --ion-color-medium-contrast: #ffffff;
+  --ion-color-medium-contrast-rgb: 255, 255, 255;
+  --ion-color-medium-shade: #5e646e;
+  --ion-color-medium-tint: #7a808d;
+
+  /** Light **/
+  --ion-color-light: #f9fafb;
+  --ion-color-light-rgb: 249, 250, 251;
+  --ion-color-light-contrast: #000000;
+  --ion-color-light-contrast-rgb: 0, 0, 0;
+  --ion-color-light-shade: #dbdcdd;
+  --ion-color-light-tint: #fafbfb;
+
+  /** Background Colors **/
+  --ion-background-color: #ffffff;
+  --ion-background-color-rgb: 255, 255, 255;
+  --ion-text-color: #1a1a1a;
+  --ion-text-color-rgb: 26, 26, 26;
+  --ion-border-color: #e5e7eb;
+  --ion-border-color-rgb: 229, 231, 235;
+
+  /** Card **/
+  --ion-card-background: #ffffff;
+  --ion-card-background-rgb: 255, 255, 255;
+  --ion-card-color: #1a1a1a;
+  --ion-card-color-rgb: 26, 26, 26;
+
+  /** Toolbar **/
+  --ion-toolbar-background: #ffffff;
+  --ion-toolbar-background-rgb: 255, 255, 255;
+  --ion-toolbar-color: #1a1a1a;
+  --ion-toolbar-color-rgb: 26, 26, 26;
+
+  /** Font Family **/
+  --ion-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+  /** Font Sizes **/
+  --ion-font-size-base: 16px;
+  --ion-font-size-small: 14px;
+  --ion-font-size-large: 20px;
+
+  /** Spacing **/
+  --ion-padding: 16px;
+  --ion-margin: 16px;
+
+  /** Border Radius **/
+  --ion-border-radius: 8px;
+  --ion-border-radius-sm: 4px;
+  --ion-border-radius-lg: 12px;
+
+  /** Shadows **/
+  --ion-box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  --ion-box-shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+/** Dark Mode **/
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ion-background-color: #0f172a;
+    --ion-background-color-rgb: 15, 23, 42;
+    --ion-text-color: #f1f5f9;
+    --ion-text-color-rgb: 241, 245, 249;
+    --ion-border-color: #1e293b;
+    --ion-border-color-rgb: 30, 41, 59;
+
+    --ion-card-background: #1e293b;
+    --ion-card-background-rgb: 30, 41, 59;
+    --ion-card-color: #f1f5f9;
+    --ion-card-color-rgb: 241, 245, 249;
+
+    --ion-toolbar-background: #1e293b;
+    --ion-toolbar-background-rgb: 30, 41, 59;
+    --ion-toolbar-color: #f1f5f9;
+    --ion-toolbar-color-rgb: 241, 245, 249;
+  }
+}
