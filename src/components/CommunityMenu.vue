@@ -115,13 +115,11 @@ import {
   IonButton,
 } from '@ionic/vue';
 import { people, gitBranchOutline, addCircleOutline, logOutOutline, globe } from 'ionicons/icons';
+import type { Community as CommunityModel } from '@/services/community.service';
 
-interface Community {
-  id: number;
-  name: string;
-  logo?: string;
+type Community = CommunityModel & {
   hasNotification?: boolean;
-}
+};
 
 const router = useRouter();
 const authStore = useAuthStore();

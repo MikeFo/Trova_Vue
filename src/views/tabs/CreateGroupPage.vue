@@ -71,7 +71,7 @@
                 v-model="formData.bio"
                 placeholder="Group Description"
                 :maxlength="500"
-                rows="4"
+                :rows="4"
                 required
               ></ion-textarea>
             </ion-item>

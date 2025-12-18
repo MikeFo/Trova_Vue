@@ -40,6 +40,7 @@
     "@capacitor/keyboard": "^7.0.3",
     "@capacitor/splash-screen": "^7.0.3",
     "@capacitor/status-bar": "^7.0.3",
+    "@types/google.maps": "^3.58.1",
     "@vitejs/plugin-legacy": "^5.0.0",
     "@vitejs/plugin-vue": "^4.0.0",
     "@vue/eslint-config-typescript": "^12.0.0",

@@ -88,7 +88,7 @@
         <ion-textarea
           v-model="messageText"
           placeholder="Type a message..."
-          rows="1"
+          :rows="1"
           auto-grow
           :maxlength="5000"
           class="message-input"

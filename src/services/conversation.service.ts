@@ -116,10 +116,11 @@ export class ConversationService {
       
       querySnapshot.forEach((docSnap) => {
         const data = docSnap.data() as FirebaseMessages;
+        const { id: _ignoredId, conversationId: dataConversationId, ...rest } = data;
         conversations.push({
           id: docSnap.id,
-          conversationId: data.conversationId || docSnap.id,
-          ...data,
+          conversationId: dataConversationId || docSnap.id,
+          ...rest,
         });
       });
       
@@ -363,6 +364,10 @@ export class ConversationService {
       (error) => {
         // If subcollection fails, try collectionGroup as fallback
         console.warn('Subcollection query failed, trying collectionGroup:', error);
+        if (!this.firestore) {
+          console.error('Firestore not initialized');
+          return;
+        }
         const fallbackQuery = query(
           collectionGroup(this.firestore, 'conv'),
           where('parentMessageId', '==', conversationId),

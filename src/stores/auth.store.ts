@@ -60,7 +60,6 @@ export const useAuthStore = defineStore('auth', () => {
   persist: {
     key: 'auth-store',
     storage: localStorage,
-    paths: ['isAuthenticated'],
     // Only persist auth state flag, not user data
     // User data will be fetched fresh from backend on each session
   }

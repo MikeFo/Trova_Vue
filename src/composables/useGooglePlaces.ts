@@ -1,3 +1,4 @@
+/// <reference types="google.maps" />
 import { ref, onMounted, onUnmounted } from 'vue';
 import { environment } from '@/environments/environment';
 
@@ -94,8 +95,8 @@ export function useGooglePlaces() {
     let state = '';
     let country = '';
 
-    place.address_components?.forEach((component) => {
-      component.types.forEach((type) => {
+    place.address_components?.forEach((component: google.maps.GeocoderAddressComponent) => {
+      component.types.forEach((type: string) => {
         switch (type) {
           case 'country':
             country = component.long_name || component.short_name || '';
@@ -127,8 +128,8 @@ export function useGooglePlaces() {
       throw new Error('Place geometry is missing');
     }
 
-    const lat = typeof location.lat === 'function' ? location.lat() : location.lat;
-    const lng = typeof location.lng === 'function' ? location.lng() : location.lng;
+    const lat = location.lat();
+    const lng = location.lng();
 
     return {
       name,
@@ -166,13 +167,13 @@ export function useGooglePlaces() {
       (results: google.maps.places.PlaceResult[], status: string) => {
         if (status === google.maps.places.PlacesServiceStatus.OK && results) {
           const organizations = results.map((result) => ({
-            name: result.name,
+            name: result.name || query,
           }));
 
           // Remove duplicates by name (case-insensitive)
           const uniqueOrgs = Array.from(
             new Map(
-              organizations.map((org) => [org.name.toLowerCase(), org])
+              organizations.map((org) => [org.name.toLowerCase(), { name: org.name || query }])
             ).values()
           );
 

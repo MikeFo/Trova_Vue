@@ -22,7 +22,7 @@ export const useConversationsStore = defineStore('conversations', () => {
   const isSubscribed = ref(false);
 
   // Computed
-  const conversationsList = computed(() => {
+  const conversationsList = computed<FirebaseMessages[]>(() => {
     return Array.from(conversations.value.values())
       .sort((a, b) => {
         const aTime = a.updatedAt?.toMillis() || a.timestamp?.toMillis() || 0;

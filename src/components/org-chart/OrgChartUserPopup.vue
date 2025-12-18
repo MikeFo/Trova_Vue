@@ -10,7 +10,7 @@
       :style="popupStyle"
     >
       <button class="org-user-popup-close" @click="close">
-        <ion-icon :icon="close"></ion-icon>
+        <ion-icon :icon="closeIcon"></ion-icon>
       </button>
 
       <div class="org-user-popup-header">
@@ -69,8 +69,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
-import { close } from 'ionicons/icons';
+import { ref, computed, watch, type CSSProperties } from 'vue';
+import { close as closeIcon } from 'ionicons/icons';
 import { IonIcon } from '@ionic/vue';
 import type { OrgUser } from '@/models/org-chart';
 
@@ -84,7 +84,7 @@ const emit = defineEmits<{
   (e: 'close'): void;
 }>();
 
-const popupStyle = computed(() => {
+const popupStyle = computed<CSSProperties>(() => {
   if (props.position) {
     return {
       position: 'fixed',
@@ -105,29 +105,31 @@ function handleOverlayClick() {
 }
 
 function viewProfileInSlack() {
-  if (!props.user?.slackId) return;
+  const user = props.user;
+  if (!user?.slackId) return;
   
   // Deep link to Slack profile
-  const slackUrl = `slack://user?team=${getSlackTeamId()}&id=${props.user.slackId}`;
+  const slackUrl = `slack://user?team=${getSlackTeamId()}&id=${user.slackId}`;
   window.location.href = slackUrl;
   
   // Fallback to web if app doesn't open
   setTimeout(() => {
-    const webUrl = `https://app.slack.com/client/${getSlackTeamId()}/user/${props.user.slackId}`;
+    const webUrl = `https://app.slack.com/client/${getSlackTeamId()}/user/${user.slackId}`;
     window.open(webUrl, '_blank');
   }, 1000);
 }
 
 function messageInSlack() {
-  if (!props.user?.slackId) return;
+  const user = props.user;
+  if (!user?.slackId) return;
   
   // Deep link to Slack DM
-  const slackUrl = `slack://channel?team=${getSlackTeamId()}&id=${props.user.slackId}`;
+  const slackUrl = `slack://channel?team=${getSlackTeamId()}&id=${user.slackId}`;
   window.location.href = slackUrl;
   
   // Fallback to web if app doesn't open
   setTimeout(() => {
-    const webUrl = `https://app.slack.com/client/${getSlackTeamId()}/im/${props.user.slackId}`;
+    const webUrl = `https://app.slack.com/client/${getSlackTeamId()}/im/${user.slackId}`;
     window.open(webUrl, '_blank');
   }, 1000);
 }

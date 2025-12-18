@@ -704,10 +704,10 @@ async function loadStats() {
     ]).then(([userActions, skills, matchEngagement, channelPairing, trovaChats, messages, activeUsers]) => {
       // Update stats reactively by creating a new object
       if (!stats.value) {
-        stats.value = {};
+        stats.value = {} as UserStats;
       }
       
-      const updatedStats = { ...stats.value };
+      const updatedStats: UserStats = { ...(stats.value as UserStats) };
       
       // Helper to merge stats safely - preserve existing non-zero values
       const mergeStats = (source: Partial<UserStats>, target: Partial<UserStats>) => {

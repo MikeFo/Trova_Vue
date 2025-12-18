@@ -13,7 +13,7 @@
       <ion-searchbar
         v-model="searchQuery"
         placeholder="Search by name or email..."
-        debounce="300"
+        :debounce="300"
         @ionInput="handleSearch"
       ></ion-searchbar>
       <div class="filter-controls">

@@ -10,6 +10,7 @@
     "isolatedModules": true,
     "esModuleInterop": true,
     "lib": ["ESNext", "DOM"],
+    "types": ["google.maps"],
     "skipLibCheck": true,
     "noEmit": true,
     "paths": {

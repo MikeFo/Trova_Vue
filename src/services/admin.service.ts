@@ -830,18 +830,21 @@ export class AdminService {
         calculatedPromise,
       ]);
 
-      console.error('[AdminService] Backend stats status:', backendStats.status, 'has value:', !!backendStats.value);
-      console.error('[AdminService] Calculated stats status:', calculatedStats.status, 'has value:', !!calculatedStats.value);
+      const backendValue = backendStats.status === 'fulfilled' ? backendStats.value : null;
+      const calculatedValue = calculatedStats.status === 'fulfilled' ? calculatedStats.value : null;
+
+      console.error('[AdminService] Backend stats status:', backendStats.status, 'has value:', !!backendValue);
+      console.error('[AdminService] Calculated stats status:', calculatedStats.status, 'has value:', !!calculatedValue);
       
-      if (backendStats.status === 'fulfilled' && backendStats.value) {
+      if (backendStats.status === 'fulfilled' && backendValue) {
         console.error('[AdminService] ⚠️ Using backend stats, but calculated stats should still run in parallel');
         // Note: calculatedStats should still have run in parallel, so matches fetch should have happened
-        return backendStats.value;
+        return backendValue;
       }
 
-      if (calculatedStats.status === 'fulfilled' && calculatedStats.value) {
+      if (calculatedStats.status === 'fulfilled' && calculatedValue) {
         console.error('[AdminService] ✅ Using calculated stats (matches fetch should have happened)');
-        return calculatedStats.value;
+        return calculatedValue;
       }
 
       return null;
