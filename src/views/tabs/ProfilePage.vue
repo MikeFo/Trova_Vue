@@ -6,31 +6,36 @@
         <div class="profile-header-card">
           <div class="avatar-wrapper">
             <img
-              v-if="user?.profilePicture"
-              :src="user.profilePicture"
-              :alt="user.fullName || 'User'"
+              v-if="displayUser?.profilePicture"
+              :src="displayUser.profilePicture"
+              :alt="displayUser?.fullName || 'User'"
               class="profile-avatar"
             />
             <div v-else class="avatar-placeholder">
               <ion-icon :icon="person"></ion-icon>
             </div>
-            <div class="avatar-edit-overlay" @click="openPhotoUpload">
+            <div 
+              v-if="isViewingOwnProfile" 
+              class="avatar-edit-overlay" 
+              @click="openPhotoUpload"
+            >
               <ion-icon :icon="createOutline"></ion-icon>
             </div>
           </div>
-          <h2 class="profile-name">{{ user?.fullName || user?.fname || 'User' }}</h2>
-          <p class="profile-email">{{ user?.email || '' }}</p>
+          <h2 class="profile-name">{{ displayUser?.fullName || displayUser?.fname || 'User' }}</h2>
+          <p class="profile-email">{{ displayUser?.email || '' }}</p>
         </div>
 
         <!-- Photo Upload Modal -->
         <PhotoUploadModal
+          v-if="isViewingOwnProfile"
           :is-open="isPhotoUploadOpen"
           @update:is-open="isPhotoUploadOpen = $event"
           @photo-updated="handlePhotoUpdated"
         />
 
         <!-- Profile Menu -->
-        <div class="profile-menu-section">
+        <div v-if="isViewingOwnProfile" class="profile-menu-section">
           <div class="menu-card">
             <ion-item 
               button 
@@ -118,10 +123,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { authService } from '@/services/auth.service';
 import { useAuthStore } from '@/stores/auth.store';
+import { apiService } from '@/services/api.service';
+import type { User } from '@/stores/auth.store';
 import PhotoUploadModal from '@/components/PhotoUploadModal.vue';
 import {
   person,
@@ -141,9 +148,16 @@ import {
 } from '@ionic/vue';
 
 const router = useRouter();
+const route = useRoute();
 const authStore = useAuthStore();
 
-const user = computed(() => authStore.user);
+const viewedUser = ref<User | null>(null);
+const isViewingOwnProfile = computed(() => {
+  const paramId = route.params.id ? Number(route.params.id) : null;
+  if (!paramId) return true;
+  return authStore.user?.id === paramId;
+});
+const displayUser = computed(() => (isViewingOwnProfile.value ? authStore.user : viewedUser.value));
 const isPhotoUploadOpen = ref(false);
 
 function navigateTo(path: string) {
@@ -159,6 +173,24 @@ function handlePhotoUpdated(photoUrl: string) {
   // This is just for any additional handling if needed
   console.log('Profile photo updated:', photoUrl);
 }
+
+async function loadViewedUser() {
+  const paramId = route.params.id ? Number(route.params.id) : null;
+  if (!paramId || isViewingOwnProfile.value) {
+    viewedUser.value = null;
+    return;
+  }
+
+  try {
+    const userData = await apiService.get<User>(`/users/${paramId}`);
+    viewedUser.value = userData;
+  } catch (error) {
+    console.error('Failed to load selected user profile', error);
+  }
+}
+
+onMounted(loadViewedUser);
+watch(() => route.params.id, loadViewedUser);
 
 async function handleLogout() {
   try {
