@@ -150,28 +150,83 @@
         <p>No users found</p>
         <p class="no-users-hint">This feature requires backend support or user profile data to be available.</p>
       </div>
-      <div v-else class="users-list">
-        <div
-          v-for="user in modalUsers"
-          :key="user.id"
-          class="user-item"
-          @click="navigateToUser(user.id)"
-        >
-          <div class="user-avatar">
-            <img
-              v-if="user.profilePicture"
-              :src="user.profilePicture"
-              :alt="user.fullName"
+      <div v-else>
+        <div class="user-modal-controls">
+          <input
+            type="search"
+            class="control-input"
+            placeholder="Search name or email"
+            v-model="userSearchTerm"
+            @input="handleUserSearch"
+          />
+          <label class="control-checkbox">
+            <input
+              type="checkbox"
+              v-model="userOnlyActive"
+              @change="handleActiveToggle"
             />
-            <div v-else class="avatar-placeholder">
-              {{ user.fullName.charAt(0).toUpperCase() }}
+            Active only
+          </label>
+          <div class="control-select">
+            <label>Sort</label>
+            <select v-model="userSortBy" @change="handleSortChange">
+              <option value="fullName">Name</option>
+              <option value="email">Email</option>
+            </select>
+            <select v-model="userSortDir" @change="handleSortChange">
+              <option value="asc">Asc</option>
+              <option value="desc">Desc</option>
+            </select>
+          </div>
+          <div class="control-select">
+            <label>Page size</label>
+            <select
+              :value="userPageSize"
+              @change="changePageSize(parseInt(($event.target as HTMLSelectElement).value))"
+            >
+              <option :value="10">10</option>
+              <option :value="25">25</option>
+              <option :value="50">50</option>
+            </select>
+          </div>
+          <div class="control-summary">{{ userRangeLabel }}</div>
+        </div>
+
+        <div class="users-list">
+          <div
+            v-for="user in modalUsers"
+            :key="user.id"
+            class="user-item"
+            @click="navigateToUser(user.id)"
+          >
+            <div class="user-avatar">
+              <img
+                v-if="user.profilePicture"
+                :src="user.profilePicture"
+                :alt="user.fullName"
+              />
+              <div v-else class="avatar-placeholder">
+                {{ user.fullName.charAt(0).toUpperCase() }}
+              </div>
             </div>
+            <div class="user-info">
+              <div class="user-name">{{ user.fullName }}</div>
+              <div class="user-email">{{ user.email }}</div>
+            </div>
+            <ion-icon :icon="chevronForwardOutline" class="chevron-icon"></ion-icon>
           </div>
-          <div class="user-info">
-            <div class="user-name">{{ user.fullName }}</div>
-            <div class="user-email">{{ user.email }}</div>
-          </div>
-          <ion-icon :icon="chevronForwardOutline" class="chevron-icon"></ion-icon>
+        </div>
+
+        <div class="pagination-row">
+          <button class="pager" :disabled="userPage === 1" @click="changePage(-1)">Prev</button>
+          <span class="pager-status">Page {{ userPage }} / {{ Math.max(1, Math.ceil(userTotal / userPageSize)) }}</span>
+          <button
+            class="pager"
+            :disabled="userPage >= Math.max(1, Math.ceil(userTotal / userPageSize))"
+            @click="changePage(1)"
+          >
+            Next
+          </button>
         </div>
       </div>
     </ion-content>
@@ -231,6 +286,19 @@ const modalTitle = ref('');
 const modalUsers = ref<CommunityMember[]>([]);
 const isLoadingUsers = ref(false);
 const currentModalContext = ref<{ dashboard: string; value: string } | null>(null);
+const userSearchTerm = ref('');
+const userSortBy = ref<'fullName' | 'email'>('fullName');
+const userSortDir = ref<'asc' | 'desc'>('asc');
+const userOnlyActive = ref(true);
+const userPage = ref(1);
+const userPageSize = ref(25);
+const userTotal = ref(0);
+const userRangeLabel = computed(() => {
+  if (userTotal.value === 0) return 'Showing 0';
+  const start = (userPage.value - 1) * userPageSize.value + 1;
+  const end = Math.min(userTotal.value, start + userPageSize.value - 1);
+  return `Showing ${start}-${end} of ${userTotal.value}`;
+});
 
 // Consolidated data for charts (consolidateResults=true)
 const dashboardData = ref<Record<string, AttributeModel[]>>({});
@@ -880,62 +948,116 @@ watch(() => visibleDashboards.value, () => {
   ensureCustomFieldDataLoaded();
 }, { deep: true });
 
+function resetUserModalQuery() {
+  userSearchTerm.value = '';
+  userSortBy.value = 'fullName';
+  userSortDir.value = 'asc';
+  userOnlyActive.value = true;
+  userPage.value = 1;
+  userPageSize.value = 25;
+  userTotal.value = 0;
+  modalUsers.value = [];
+}
+
+function getDrilldownQueryForDashboard(dashboard: string, value: string) {
+  if (dashboard === 'interests') return { metric: 'interest', value };
+  if (dashboard === 'activities') return { metric: 'activity', value };
+  if (dashboard === 'businessTopics') return { metric: 'businessTopic', value };
+  if (dashboard === 'skills') return { metric: 'skill', value, skillType: 'general' };
+  if (dashboard === 'mentors') return { metric: 'skill', value, skillType: 'mentor' };
+  if (dashboard === 'mentees') return { metric: 'skill', value, skillType: 'mentee' };
+  if (dashboard === 'intention') return { metric: 'intention', value };
+  if (dashboard === 'movies') return { metric: 'movie', value };
+  if (dashboard === 'music') return { metric: 'music', value };
+  if (dashboard === 'occupation') return { metric: 'occupation', value };
+  if (dashboard === 'organization') return { metric: 'organization', value };
+  if (dashboard === 'university') return { metric: 'university', value };
+  if (dashboard === 'location') return { metric: 'location', value };
+  if (dashboard.startsWith('custom-')) {
+    const customFieldId = parseInt(dashboard.replace('custom-', ''));
+    if (!isNaN(customFieldId)) {
+      return { metric: 'customField', value, customFieldId };
+    }
+  }
+  return null;
+}
+
+async function fetchModalUsers() {
+  if (!props.communityId || !currentModalContext.value) return;
+
+  isLoadingUsers.value = true;
+  try {
+    const baseQuery = getDrilldownQueryForDashboard(
+      currentModalContext.value.dashboard,
+      currentModalContext.value.value
+    );
+    if (!baseQuery) {
+      modalUsers.value = [];
+      userTotal.value = 0;
+      return;
+    }
+
+    const result = await adminService.getDrilldownUsers(props.communityId, {
+      ...baseQuery,
+      page: userPage.value,
+      pageSize: userPageSize.value,
+      search: userSearchTerm.value,
+      sortBy: userSortBy.value,
+      sortDir: userSortDir.value,
+      onlyActive: userOnlyActive.value,
+    });
+
+    modalUsers.value = result.data;
+    userTotal.value = result.total;
+    userPage.value = result.page;
+    userPageSize.value = result.pageSize;
+  } catch (error) {
+    console.error('Error loading users:', error);
+    modalUsers.value = [];
+    userTotal.value = 0;
+  } finally {
+    isLoadingUsers.value = false;
+  }
+}
+
+function handleUserSearch() {
+  userPage.value = 1;
+  fetchModalUsers();
+}
+
+function handleSortChange() {
+  userPage.value = 1;
+  fetchModalUsers();
+}
+
+function handleActiveToggle() {
+  userPage.value = 1;
+  fetchModalUsers();
+}
+
+function changePage(delta: number) {
+  const totalPages = Math.max(1, Math.ceil(userTotal.value / userPageSize.value));
+  const nextPage = userPage.value + delta;
+  if (nextPage < 1 || nextPage > totalPages) return;
+  userPage.value = nextPage;
+  fetchModalUsers();
+}
+
+function changePageSize(size: number) {
+  userPageSize.value = size;
+  userPage.value = 1;
+  fetchModalUsers();
+}
+
 // Open user modal for a specific attribute value
 async function openUserModal(dashboard: string, value: string) {
   if (!props.communityId) return;
 
+  resetUserModalQuery();
   currentModalContext.value = { dashboard, value };
   modalTitle.value = `${getDashboardTitle(dashboard)}: ${value}`;
   isUserModalOpen.value = true;
-  isLoadingUsers.value = true;
-  modalUsers.value = [];
-
-  try {
-    let users: CommunityMember[] = [];
-
-    // Determine the attribute type based on dashboard name
-    if (dashboard === 'interests') {
-      users = await adminService.getUsersByAttribute(props.communityId, 'interest', value, true);
-    } else if (dashboard === 'activities') {
-      users = await adminService.getUsersByAttribute(props.communityId, 'activity', value, true);
-    } else if (dashboard === 'businessTopics') {
-      users = await adminService.getUsersByBusinessTopic(props.communityId, value, true);
-    } else if (dashboard === 'skills') {
-      users = await adminService.getUsersBySkill(props.communityId, 'general', value, true);
-    } else if (dashboard === 'mentors') {
-      users = await adminService.getUsersBySkill(props.communityId, 'mentor', value, true);
-    } else if (dashboard === 'mentees') {
-      users = await adminService.getUsersBySkill(props.communityId, 'mentee', value, true);
-    } else if (dashboard === 'intention') {
-      users = await adminService.getUsersByAttribute(props.communityId, 'intention', value, true);
-    } else if (dashboard === 'movies') {
-      users = await adminService.getUsersByAttribute(props.communityId, 'movie', value, true);
-    } else if (dashboard === 'music') {
-      users = await adminService.getUsersByAttribute(props.communityId, 'music', value, true);
-    } else if (dashboard === 'occupation') {
-      users = await adminService.getUsersByAttribute(props.communityId, 'occupation', value, true);
-    } else if (dashboard === 'organization') {
-      users = await adminService.getUsersByAttribute(props.communityId, 'organization', value, true);
-    } else if (dashboard === 'university') {
-      users = await adminService.getUsersByAttribute(props.communityId, 'university', value, true);
-    } else if (dashboard === 'location') {
-      users = await adminService.getUsersByAttribute(props.communityId, 'location', value, true);
-    } else if (dashboard.startsWith('custom-')) {
-      const customFieldId = parseInt(dashboard.replace('custom-', ''));
-      if (!isNaN(customFieldId)) {
-        users = await adminService.getUsersByCustomField(props.communityId, customFieldId, value, true);
-      }
-    }
-
-    modalUsers.value = users;
-  } catch (error) {
-    console.error('Error loading users:', error);
-    // Don't show toast on 404s - it's expected that endpoints might not exist
-    // Just set empty users array
-    modalUsers.value = [];
-  } finally {
-    isLoadingUsers.value = false;
-  }
+  await fetchModalUsers();
 }
 
 function closeUserModal() {
@@ -1177,6 +1299,53 @@ function navigateToUser(userId: number) {
   --padding-bottom: 0;
 }
 
+.user-modal-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 16px 0 16px;
+  align-items: center;
+}
+
+.control-input {
+  flex: 1;
+  min-width: 160px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.control-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.control-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.control-select select {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff;
+  font-size: 13px;
+}
+
+.control-summary {
+  margin-left: auto;
+  font-size: 13px;
+  color: #475569;
+}
+
 .users-list {
   padding: 16px;
 }
@@ -1271,6 +1440,33 @@ function navigateToUser(userId: number) {
   font-size: 12px;
   color: #94a3b8;
   margin-top: 8px;
+}
+
+.pagination-row {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px 16px 16px;
+}
+
+.pager {
+  padding: 8px 12px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.pager:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.pager-status {
+  font-size: 13px;
+  color: #475569;
 }
 
 /* Responsive */

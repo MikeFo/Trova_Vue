@@ -45,7 +45,7 @@
               </div>
             </div>
           </div>
-          <div class="primary-metric-card">
+          <div class="primary-metric-card primary-metric-clickable" @click="openConnectionsModal">
             <div class="metric-icon">
               <ion-icon :icon="peopleOutline"></ion-icon>
             </div>
@@ -412,12 +412,68 @@
       <p class="no-stats-hint">This feature requires backend support. The stats endpoint is not currently available.</p>
     </div>
   </div>
+
+  <!-- Connections drilldown modal -->
+  <ion-modal
+    :is-open="isConnectionsModalOpen"
+    @willDismiss="closeConnectionsModal"
+    @didDismiss="closeConnectionsModal"
+  >
+    <ion-header>
+      <ion-toolbar>
+        <ion-title>Connections Made</ion-title>
+        <ion-buttons slot="end">
+          <ion-button fill="clear" @click="closeConnectionsModal">
+            <ion-icon :icon="closeOutline"></ion-icon>
+          </ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+    </ion-header>
+    <ion-content class="connections-modal">
+      <div v-if="isLoadingMatches" class="loading-state">
+        <ion-spinner></ion-spinner>
+        <p>Loading connections...</p>
+      </div>
+      <div v-else class="connections-grid">
+        <div class="connections-list">
+          <h4 class="connections-title">Users (unique partners)</h4>
+          <div v-if="matchesUsers.length === 0" class="no-data">No connections</div>
+          <div
+            v-for="user in matchesUsers"
+            :key="user.userId"
+            class="connection-user"
+            @click="loadPartnersForUser(user.userId, user.fullName)"
+          >
+            <div class="connection-user-name">{{ user.fullName }}</div>
+            <div class="connection-user-email">{{ user.email }}</div>
+            <div class="connection-user-count">{{ user.count }}</div>
+          </div>
+        </div>
+        <div class="connections-partners">
+          <h4 class="connections-title">
+            {{ selectedMatchUserName ? `Partners for ${selectedMatchUserName}` : 'Select a user' }}
+          </h4>
+          <div v-if="isLoadingPartners" class="loading-state">
+            <ion-spinner></ion-spinner>
+            <p>Loading partners...</p>
+          </div>
+          <div v-else-if="matchesPartners.length === 0" class="no-data">No partners</div>
+          <div v-else class="partners-list">
+            <div v-for="partner in matchesPartners" :key="partner.id" class="partner-item">
+              <div class="partner-name">{{ partner.fullName }}</div>
+              <div class="partner-email">{{ partner.email }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </ion-content>
+  </ion-modal>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { adminService, type UserStats } from '@/services/admin.service';
+import { adminService, type UserStats, type CommunityMember } from '@/services/admin.service';
 import { toastController } from '@ionic/vue';
 import {
   IonButton,
@@ -427,6 +483,12 @@ import {
   IonSelect,
   IonSelectOption,
   IonSpinner,
+  IonModal,
+  IonHeader,
+  IonToolbar,
+  IonTitle,
+  IonButtons,
+  IonContent,
 } from '@ionic/vue';
 import {
   downloadOutline,
@@ -455,6 +517,7 @@ import {
   schoolOutline,
   bookOutline,
   checkmarkDoneOutline,
+  closeOutline,
 } from 'ionicons/icons';
 
 interface Props {
@@ -469,6 +532,12 @@ const stats = ref<UserStats | null>(null);
 const skillsStats = ref<Array<{ name: string; count: number }>>([]);
 const isSlackCommunity = ref(false); // TODO: Determine from community data
 const selectedPeriod = ref<'all-time' | '12-months' | '6-months' | '3-months' | '1-month'>('12-months'); // Default to past 12 months
+const isConnectionsModalOpen = ref(false);
+const matchesUsers = ref<Array<{ userId: number; fullName: string; email?: string; profilePicture?: string; count: number }>>([]);
+const matchesPartners = ref<CommunityMember[]>([]);
+const isLoadingMatches = ref(false);
+const isLoadingPartners = ref(false);
+const selectedMatchUserName = ref('');
 
 const hasAnyData = computed(() => {
   if (!stats.value) return false;
@@ -570,6 +639,54 @@ function navigateToMagicIntros() {
     path: `/communities/${props.communityId}/console/magic-intros`,
     query
   });
+}
+
+async function openConnectionsModal() {
+  if (!props.communityId) return;
+  const { start, end } = getDateRangeForPeriod(selectedPeriod.value);
+  isConnectionsModalOpen.value = true;
+  isLoadingMatches.value = true;
+  matchesUsers.value = [];
+  matchesPartners.value = [];
+  selectedMatchUserName.value = '';
+
+  try {
+    const summary = await adminService.getMatchSummary(props.communityId, start, end);
+    matchesUsers.value = summary.perUser;
+  } catch (error) {
+    console.error('Failed to load connections summary', error);
+    const toast = await toastController.create({
+      message: 'Failed to load connections',
+      duration: 2000,
+      color: 'danger',
+    });
+    await toast.present();
+  } finally {
+    isLoadingMatches.value = false;
+  }
+}
+
+async function loadPartnersForUser(userId: number, fullName: string) {
+  if (!props.communityId) return;
+  const { start, end } = getDateRangeForPeriod(selectedPeriod.value);
+  isLoadingPartners.value = true;
+  selectedMatchUserName.value = fullName;
+  matchesPartners.value = [];
+  try {
+    const partners = await adminService.getUserMatchPartners(props.communityId, userId, start, end);
+    matchesPartners.value = partners;
+  } catch (error) {
+    console.error('Failed to load partners', error);
+  } finally {
+    isLoadingPartners.value = false;
+  }
+}
+
+function closeConnectionsModal() {
+  isConnectionsModalOpen.value = false;
+  matchesUsers.value = [];
+  matchesPartners.value = [];
+  selectedMatchUserName.value = '';
 }
 
 function navigateToSkillsList() {
@@ -1156,6 +1273,103 @@ async function exportStats() {
   font-size: 12px;
   color: #94a3b8;
   margin-top: 8px;
+}
+
+.primary-metric-clickable {
+  cursor: pointer;
+}
+
+.primary-metric-clickable:hover {
+  box-shadow: 0 6px 16px rgba(45, 122, 78, 0.2);
+}
+
+/* Connections modal */
+.connections-modal {
+  --padding-top: 0;
+  --padding-bottom: 0;
+}
+
+.connections-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 16px;
+}
+
+.connections-list,
+.connections-partners {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+  padding: 12px;
+  min-height: 260px;
+}
+
+.connections-title {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.connection-user {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.connection-user:hover {
+  background: #f8fafc;
+}
+
+.connection-user-name {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.connection-user-email {
+  color: #475569;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.connection-user-count {
+  font-weight: 700;
+  color: #0f172a;
+  justify-self: end;
+}
+
+.partners-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.partner-item {
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.partner-name {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.partner-email {
+  font-size: 13px;
+  color: #475569;
+}
+
+.connections-modal .no-data {
+  padding: 12px;
+  text-align: center;
+  color: #475569;
 }
 
 .engagement-metric-card.clickable {

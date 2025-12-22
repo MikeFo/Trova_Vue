@@ -1,10 +1,63 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { conversationService } from '../services/conversation.service';
+import { conversationBackendService, type BackendConversation, type BackendMessage } from '../services/conversation-backend.service.ts';
+import { slackMpimService } from '../services/slack-mpim.service.ts';
+import { io } from 'socket.io-client';
 import { useAuthStore } from './auth.store';
 import { userService } from '../services/user.service';
 import type { FirebaseMessages, FirebaseMessage, UserFirebaseMessage } from '../models/conversation';
 import type { User } from './auth.store';
+
+
+function mapBackendConversation(conv, currentUserId) {
+  const messages = conv.message ? [mapBackendMessage(conv.message, currentUserId)] : [];
+  return {
+    id: String(conv.id),
+    conversationId: String(conv.id),
+    messages,
+    users: [conv.leftUserId, conv.rightUserId].filter(Boolean),
+    isTyping: [],
+    parentId: 0,
+    parentType: 'user',
+    read: [],
+    timestamp: undefined,
+    createdAtDate: conv.updatedAt ? new Date(conv.updatedAt) : new Date(),
+    updatedAt: undefined,
+    isMultiUser: false,
+    messagesPicture: conv.user?.profilePicture || '',
+    usersInfoForDisplay: [],
+    lastMessage: conv.message?.body || '',
+    lastFromUserId: conv.message?.userId || undefined,
+    messageTitle: conv.user ? `${conv.user.fname || ''} ${conv.user.lname || ''}`.trim() || conv.user.email || 'Unknown' : 'Unknown',
+    lastMessageTime: conv.message?.createdAt || conv.updatedAt,
+    isRead: conv.readAll ?? true,
+    isOnline: false,
+    communityId: conv.communityId || undefined,
+    slackChannelId: conv.slackChannelId || null,
+    isSlackBacked: conv.isSlackBacked || false,
+  };
+}
+
+function mapBackendMessage(msg, currentUserId) {
+  return {
+    id: msg.id,
+    userId: msg.userId || 0,
+    message: msg.body,
+    createdAtDate: msg.createdAt ? new Date(msg.createdAt) : new Date(),
+    source: msg.source || null,
+    slackChannelId: msg.slackChannelId || null,
+    slackTs: msg.slackTs || null,
+    slackUserId: msg.slackUserId || null,
+    authorName: undefined,
+    authorPicture: undefined,
+    isDeleted: false,
+    isActive: true,
+  };
+}
+
+
+const socket = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000', { transports: ['websocket'] });
 
 export const useConversationsStore = defineStore('conversations', () => {
   const authStore = useAuthStore();
@@ -25,14 +78,38 @@ export const useConversationsStore = defineStore('conversations', () => {
   const conversationsList = computed<FirebaseMessages[]>(() => {
     return Array.from(conversations.value.values())
       .sort((a, b) => {
-        const aTime = a.updatedAt?.toMillis() || a.timestamp?.toMillis() || 0;
-        const bTime = b.updatedAt?.toMillis() || b.timestamp?.toMillis() || 0;
+        const aTime = a.updatedAt?.toMillis?.() || a.timestamp?.toMillis?.() || a.createdAtDate?.getTime?.() || 0;
+        const bTime = b.updatedAt?.toMillis?.() || b.timestamp?.toMillis?.() || b.createdAtDate?.getTime?.() || 0;
         return bTime - aTime; // Most recent first
       });
   });
 
   const unreadCount = computed(() => {
     return conversationsList.value.filter(conv => !conv.isRead).length;
+  });
+
+
+  // socket listener for new messages
+  socket.on('new-message', (msg: any) => {
+    const convId = String(msg.conversationId);
+    const conv = conversations.value.get(convId);
+    if (conv) {
+      const mapped = mapBackendMessage({
+        id: msg.id || Date.now(),
+        userId: msg.userId,
+        body: msg.body,
+        createdAt: msg.createdAt || new Date().toISOString(),
+        slackChannelId: msg.slackChannelId,
+        slackTs: msg.slackTs,
+        slackUserId: msg.slackUserId,
+        source: msg.source,
+      }, authStore.user?.id || 0);
+      conv.messages = [...(conv.messages || []), mapped];
+      conversations.value.set(convId, conv);
+      if (activeConversation.value?.conversationId === convId) {
+        activeConversation.value.messages = conv.messages;
+      }
+    }
   });
 
   // Actions
@@ -46,41 +123,14 @@ export const useConversationsStore = defineStore('conversations', () => {
     error.value = null;
 
     try {
-      // Get user conversations map
-      const userConvos = await conversationService.getFirebaseConversationsByUserId(authStore.user.id);
-      userConversations.value = userConvos;
-
-      // Load each conversation
+      const backendConvos = await conversationBackendService.getUserConversations(authStore.user.id);
       const convosMap = new Map<string, FirebaseMessages>();
-      const userIdsToFetch = new Set<number>();
-      
-      for (const [key, userConvo] of userConvos.entries()) {
-        if (userConvo.conversationId) {
-          const conv = await conversationService.getConversationById(userConvo.conversationId);
-          if (conv) {
-            // Collect user IDs to fetch
-            if (conv.users) {
-              conv.users.forEach(id => {
-                if (id !== authStore.user?.id) {
-                  userIdsToFetch.add(id);
-                }
-              });
-            }
-            convosMap.set(userConvo.conversationId, conv);
-          }
-        }
+
+      for (const conv of backendConvos) {
+        const mapped = mapBackendConversation(conv, authStore.user.id);
+        convosMap.set(String(mapped.conversationId), mapped);
       }
 
-      // Fetch user data for conversations
-      if (userIdsToFetch.size > 0) {
-        const fetchedUsers = await userService.getUsersByIds(Array.from(userIdsToFetch));
-        fetchedUsers.forEach((user, id) => {
-          usersMap.value.set(id, user);
-        });
-      }
-
-      // Enrich conversations with user data
-      enrichConversationsWithUserData(convosMap);
       conversations.value = convosMap;
     } catch (err: any) {
       console.error('Error loading conversations:', err);
@@ -90,97 +140,62 @@ export const useConversationsStore = defineStore('conversations', () => {
     }
   }
 
-  function subscribeToConversations() {
+  async function startConversationWithUser(toUserId: number, communityId: number) {
     if (!authStore.user?.id) {
-      return;
+      throw new Error('User not authenticated');
     }
-
-    // Prevent duplicate subscriptions
-    if (isSubscribed.value) {
-      console.warn('[ConversationsStore] Already subscribed to conversations, skipping duplicate subscription');
-      return;
-    }
-
-    // Subscribe to user conversations
-    const unsubscribe = conversationService.subscribeToUserConversations(
-      authStore.user.id,
-      async (userConvos) => {
-        userConversations.value = userConvos;
-
-        // Load/update each conversation
-        const convosMap = new Map<string, FirebaseMessages>();
-        const userIdsToFetch = new Set<number>();
-        
-        for (const [key, userConvo] of userConvos.entries()) {
-          if (userConvo.conversationId) {
-            const conv = await conversationService.getConversationById(userConvo.conversationId);
-            if (conv) {
-              // Collect user IDs to fetch
-              if (conv.users) {
-                conv.users.forEach(id => {
-                  if (id !== authStore.user?.id) {
-                    userIdsToFetch.add(id);
-                  }
-                });
-              }
-              convosMap.set(userConvo.conversationId, conv);
-            }
-          }
-        }
-
-        // Fetch user data for conversations
-        if (userIdsToFetch.size > 0) {
-          const fetchedUsers = await userService.getUsersByIds(Array.from(userIdsToFetch));
-          fetchedUsers.forEach((user, id) => {
-            usersMap.value.set(id, user);
-          });
-        }
-
-        // Enrich conversations with user data
-        enrichConversationsWithUserData(convosMap);
-        conversations.value = convosMap;
+    try {
+      const created = await conversationBackendService.createConversation(toUserId, communityId, true);
+      if (!created) {
+        throw new Error('Failed to create conversation');
       }
-    );
-
-    subscriptions.value.push(unsubscribe);
-    isSubscribed.value = true;
+      const mapped = mapBackendConversation(created, authStore.user.id);
+      conversations.value.set(String(mapped.conversationId), mapped);
+      activeConversation.value = mapped;
+      await loadConversation(String(mapped.conversationId));
+      await setActiveConversation(String(mapped.conversationId));
+    } catch (err: any) {
+      console.error('Error starting conversation:', err);
+      error.value = err.message || 'Failed to start conversation';
+      throw err;
+    }
   }
 
-  function setActiveConversation(conversationId: string | null) {
+  function subscribeToConversations() {
+    // For Slack-backed via REST we are not using realtime subscriptions; keep no-op to avoid duplicate listeners
+    return;
+  }
+
+  async function setActiveConversation(conversationId: string | null) {
     if (!conversationId) {
       activeConversation.value = null;
+      socket.emit('leave', { conversationId: activeConversation.value?.conversationId });
       return;
     }
+
+    // join socket room
+    socket.emit('join', { conversationId });
 
     const conv = conversations.value.get(conversationId);
     if (conv) {
       activeConversation.value = conv;
-      
-      // Subscribe to real-time updates for this conversation
-      subscribeToConversation(conversationId);
-      
-      // Mark as read
+      await loadConversation(conversationId);
       if (authStore.user?.id) {
         conversationService.markAsRead(conversationId, authStore.user.id);
       }
     } else {
-      // Load conversation if not in store
-      loadConversation(conversationId);
+      await loadConversation(conversationId);
     }
   }
 
   async function loadConversation(conversationId: string) {
     try {
-      const conv = await conversationService.getConversationById(conversationId);
+      const backendMessages = await conversationBackendService.getMessages(Number(conversationId));
+      const conv = conversations.value.get(conversationId);
       if (conv) {
+        conv.messages = backendMessages.map((m) => mapBackendMessage(m, authStore.user?.id || 0));
         conversations.value.set(conversationId, conv);
         activeConversation.value = conv;
-        
-        subscribeToConversation(conversationId);
-        
-        if (authStore.user?.id) {
-          conversationService.markAsRead(conversationId, authStore.user.id);
-        }
       }
     } catch (err: any) {
       console.error('Error loading conversation:', err);
@@ -189,41 +204,8 @@ export const useConversationsStore = defineStore('conversations', () => {
   }
 
   function subscribeToConversation(conversationId: string) {
-    // Unsubscribe from previous conversation if exists
-    if (activeConversation.value?.id) {
-      // Cleanup would be handled by the component
-    }
-
-    // Subscribe to conversation updates
-    const unsubscribeConversation = conversationService.subscribeToConversation(
-      conversationId,
-      (conv) => {
-        if (conv) {
-          conversations.value.set(conversationId, conv);
-          if (activeConversation.value?.conversationId === conversationId) {
-            activeConversation.value = conv;
-          }
-        }
-      }
-    );
-
-    // Subscribe to messages updates
-    const unsubscribeMessages = conversationService.subscribeToMessages(
-      conversationId,
-      (messages) => {
-        const conv = conversations.value.get(conversationId);
-        if (conv) {
-          conv.messages = messages;
-          conversations.value.set(conversationId, conv);
-          
-          if (activeConversation.value?.conversationId === conversationId) {
-            activeConversation.value.messages = messages;
-          }
-        }
-      }
-    );
-
-    subscriptions.value.push(unsubscribeConversation, unsubscribeMessages);
+    // REST-only for Slack-backed; no realtime subscription implemented
+    return;
   }
 
   async function sendMessage(conversationId: string, message: string) {
@@ -231,19 +213,54 @@ export const useConversationsStore = defineStore('conversations', () => {
       throw new Error('User not authenticated');
     }
 
-    try {
-      const conv = conversations.value.get(conversationId);
-      if (!conv) {
-        throw new Error('Conversation not found');
-      }
+    const conv = conversations.value.get(conversationId);
+    if (!conv) {
+      throw new Error('Conversation not found');
+    }
 
-      await conversationService.sendMessage(
-        conversationId,
-        authStore.user.id,
-        message,
-        conv.parentId,
-        conv.parentType
-      );
+    const isSlack = conv.isSlackBacked && conv.slackChannelId;
+
+    try {
+      if (isSlack) {
+        await slackMpimService.sendMessage(Number(conversationId), conv.communityId || 0, message);
+        // Optimistic append
+        const msg = {
+          id: Date.now(),
+          userId: authStore.user.id,
+          message,
+          createdAtDate: new Date(),
+          source: 'slack',
+          slackChannelId: conv.slackChannelId,
+        } as FirebaseMessage;
+        conv.messages = [...(conv.messages || []), msg];
+        conversations.value.set(conversationId, conv);
+        if (activeConversation.value?.conversationId === conversationId) {
+          activeConversation.value.messages = conv.messages;
+        }
+      } else {
+        try {
+          await conversationService.sendMessage(
+            conversationId,
+            authStore.user.id,
+            message,
+            conv.parentId,
+            conv.parentType
+          );
+        } catch (err: any) {
+          if ((err as Error)?.message?.toLowerCase().includes('conversation not found')) {
+            await conversationService.ensureConversationExists(conv, authStore.user.id);
+            await conversationService.sendMessage(
+              conversationId,
+              authStore.user.id,
+              message,
+              conv.parentId,
+              conv.parentType
+            );
+          } else {
+            throw err;
+          }
+        }
+      }
     } catch (err: any) {
       console.error('Error sending message:', err);
       error.value = err.message || 'Failed to send message';
@@ -337,6 +354,8 @@ export const useConversationsStore = defineStore('conversations', () => {
     subscriptions.value.forEach(unsubscribe => unsubscribe());
     subscriptions.value = [];
     isSubscribed.value = false;
+    socket.off('new-message');
+    socket.emit('leave', { conversationId: activeConversation.value?.conversationId });
   }
 
   return {
@@ -354,6 +373,7 @@ export const useConversationsStore = defineStore('conversations', () => {
     
     // Actions
     loadConversations,
+    startConversationWithUser,
     subscribeToConversations,
     setActiveConversation,
     loadConversation,

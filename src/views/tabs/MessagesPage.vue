@@ -22,17 +22,44 @@
           <div class="empty-icon">
             <ion-icon :icon="chatbubblesOutline"></ion-icon>
           </div>
-          <h3 class="empty-title">No conversations yet</h3>
+          <h3 class="empty-title">Start a new conversation</h3>
           <p class="empty-description">
-            Start a conversation with someone from Discover!
+            Choose anyone in your community to begin messaging.
           </p>
-          <ion-button 
-            fill="outline" 
-            class="empty-action-button"
-            @click="$router.push('/tabs/discover')"
-          >
-            Discover People
-          </ion-button>
+
+          <div class="member-list">
+            <div class="member-list-header">
+              <span>All members (alphabetical)</span>
+              <span v-if="memberLoading" class="loading-inline">Loading...</span>
+              <span v-else class="member-count">{{ filteredMembers.length }} people</span>
+            </div>
+
+            <div v-if="memberLoading" class="loading-container inline">
+              <ion-spinner></ion-spinner>
+            </div>
+
+            <div v-else-if="filteredMembers.length === 0" class="empty-members">
+              <p>No matching people.</p>
+            </div>
+
+            <ion-list v-else class="members-list">
+              <ion-item
+                v-for="member in filteredMembers"
+                :key="member.id"
+                button
+                @click="handleStartConversation(member)"
+              >
+                <ion-avatar slot="start">
+                  <img :src="member.profilePicture || member.profilePictureThumbnail || defaultAvatar" :alt="member.fullName || member.email" />
+                </ion-avatar>
+                <ion-label>
+                  <h3>{{ member.fullName || member.fname + ' ' + member.lname || member.email }}</h3>
+                  <p class="member-email">{{ member.email }}</p>
+                </ion-label>
+                <ion-button slot="end" size="small" fill="outline">Message</ion-button>
+              </ion-item>
+            </ion-list>
+          </div>
         </div>
 
         <div v-else class="conversations-list">
@@ -70,7 +97,7 @@
 
             <div class="conversation-content">
               <div class="conversation-header">
-                <h3 class="conversation-name">{{ conversation.messageTitle || 'Unknown' }}</h3>
+                <h3 class="conversation-name">{{ conversation.messageTitle || 'Unknown' }}<span v-if="conversation.isSlackBacked" class="slack-badge">Slack</span></h3>
                 <span class="conversation-time">{{ formatTime(conversation.updatedAt || conversation.timestamp) }}</span>
               </div>
               <div class="conversation-preview">
@@ -89,11 +116,12 @@
       </div>
 
       <!-- Active Chat Thread -->
-      <ChatThread
-        v-else
-        :conversation="activeConversation"
-        @back="activeConversation = null"
-      />
+      <div v-else class="active-chat-wrapper">
+        <ChatThread
+          :conversation="activeConversation"
+          @back="activeConversation = null"
+        />
+      </div>
     </ion-content>
   </ion-page>
 </template>
@@ -102,6 +130,7 @@
 // @ts-nocheck
 import { ref, computed, onMounted, onUnmounted, watch, type ComputedRef, type Ref } from 'vue';
 import { useConversationsStore } from '@/stores/conversations.store';
+import { useCommunityStore } from '@/stores/community.store';
 import { createOutline, chatbubblesOutline, people } from 'ionicons/icons';
 import {
   IonPage,
@@ -111,19 +140,31 @@ import {
   IonSpinner,
   IonBadge,
   IonButton,
+  IonList,
+  IonItem,
+  IonAvatar,
+  IonLabel,
 } from '@ionic/vue';
 import ChatThread from './components/ChatThread.vue';
 import type { FirebaseMessages } from '@/models/conversation';
 import { Timestamp } from 'firebase/firestore';
+import { profileService } from '@/services/profile.service';
+import { useRoute } from 'vue-router';
 
 const conversationsStore = useConversationsStore();
+const communityStore = useCommunityStore();
+const route = useRoute();
 const searchQuery = ref('');
 const activeConversation = ref<FirebaseMessages | null>(null);
 const showCreateModal = ref(false);
+const members = ref<any[]>([]);
+const memberLoading = ref(false);
+const defaultAvatar = 'https://placehold.co/64x64?text=User';
 
 const conversationsList = computed<FirebaseMessages[]>(() => conversationsStore.conversationsList as FirebaseMessages[]);
 const isLoading = computed(() => conversationsStore.isLoading);
 const unreadCount = computed(() => conversationsStore.unreadCount);
+const communityId = computed(() => communityStore.currentCommunityId);
 
 const filteredConversations: ComputedRef<FirebaseMessages[]> = computed(() => {
   const list = conversationsStore.conversationsList as FirebaseMessages[];
@@ -141,9 +182,34 @@ const filteredConversations: ComputedRef<FirebaseMessages[]> = computed(() => {
 
 const filteredConversationsRef = filteredConversations as unknown as Ref<FirebaseMessages[]>;
 
+const filteredMembers = computed(() => {
+  const list = [...members.value];
+  list.sort((a, b) => {
+    const nameA = (a.fullName || `${a.fname || ''} ${a.lname || ''}` || a.email || '').toLowerCase();
+    const nameB = (b.fullName || `${b.fname || ''} ${b.lname || ''}` || b.email || '').toLowerCase();
+    return nameA.localeCompare(nameB);
+  });
+  if (!searchQuery.value.trim()) return list;
+  const q = searchQuery.value.toLowerCase();
+  return list.filter((m) => {
+    const name = (m.fullName || `${m.fname || ''} ${m.lname || ''}` || '').toLowerCase();
+    const email = (m.email || '').toLowerCase();
+    return name.includes(q) || email.includes(q);
+  });
+});
+
 function selectConversation(conversation: FirebaseMessages) {
   activeConversation.value = conversation;
   conversationsStore.setActiveConversation(conversation.conversationId);
+}
+
+async function handleStartConversation(member: any) {
+  if (!communityId.value) {
+    console.warn('No community selected');
+    return;
+  }
+  await conversationsStore.startConversationWithUser(Number(member.id), communityId.value);
+  activeConversation.value = conversationsStore.activeConversation;
 }
 
 function getLastMessagePreview(conversation: FirebaseMessages): string {
@@ -190,6 +256,16 @@ function getOtherUsersCount(conversation: FirebaseMessages): number {
 onMounted(async () => {
   await conversationsStore.loadConversations();
   conversationsStore.subscribeToConversations();
+  await loadMembers();
+  const routeUserId = route.query.userId ? Number(route.query.userId) : null;
+  if (routeUserId && communityId.value) {
+    try {
+      await conversationsStore.startConversationWithUser(routeUserId, communityId.value);
+      activeConversation.value = conversationsStore.activeConversation;
+    } catch (err) {
+      console.error('Failed to start conversation from route param', err);
+    }
+  }
 });
 
 onUnmounted(() => {
@@ -199,15 +275,36 @@ onUnmounted(() => {
 watch(() => conversationsStore.activeConversation, (newConv) => {
   activeConversation.value = newConv;
 });
+
+watch(() => communityId.value, async (newId, oldId) => {
+  if (newId && newId !== oldId) {
+    await loadMembers();
+  }
+});
+
+async function loadMembers() {
+  if (!communityId.value) return;
+  memberLoading.value = true;
+  try {
+    members.value = await profileService.getProfilesForUserAndCommunity(communityId.value);
+  } catch (err) {
+    console.error('Failed to load members', err);
+    members.value = [];
+  } finally {
+    memberLoading.value = false;
+  }
+}
 </script>
 
 <style scoped>
 .messages-content {
   --background: #f8fafc;
+  --padding-top: 56px;
 }
 
 .conversations-container {
   padding: 16px;
+  padding-top: 32px;
   max-width: 100%;
   margin: 0 auto;
   height: 100%;
@@ -294,6 +391,41 @@ watch(() => conversationsStore.activeConversation, (newConv) => {
   margin: 0 0 32px 0;
   line-height: 1.6;
   max-width: 400px;
+}
+
+.member-list {
+  margin-top: 24px;
+  text-align: left;
+  width: 100%;
+}
+
+.member-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  color: #334155;
+  font-weight: 600;
+}
+
+.member-count,
+.loading-inline {
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.members-list {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.member-email {
+  color: #94a3b8;
+}
+
+.active-chat-wrapper {
+  padding: 32px 12px 12px;
 }
 
 .empty-action-button {

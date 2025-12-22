@@ -479,6 +479,42 @@ export class ConversationService {
   }
 
   /**
+   * Ensure a conversation document exists in Firestore (create if missing).
+   */
+  async ensureConversationExists(conversation: FirebaseMessages, currentUserId: number): Promise<void> {
+    if (!this.firestore) {
+      throw new Error('Firestore not initialized');
+    }
+    const messagesRef = collection(this.firestore, 'messages');
+    const conversationDoc = doc(messagesRef, conversation.conversationId);
+    const snap = await getDoc(conversationDoc);
+    if (snap.exists()) return;
+
+    const now = Timestamp.now();
+    const users = conversation.users || [];
+    const read = users.includes(currentUserId) ? [currentUserId] : [];
+
+    await setDoc(conversationDoc, {
+      conversationId: conversation.conversationId,
+      users,
+      isMultiUser: conversation.isMultiUser || false,
+      parentId: conversation.parentId || 0,
+      parentType: conversation.parentType || 'user',
+      messageTitle: conversation.messageTitle || '',
+      messagesPicture: conversation.messagesPicture || '',
+      lastMessage: conversation.lastMessage || '',
+      lastFromUserId: conversation.lastFromUserId || null,
+      lastMessageTime: now.toDate().toISOString(),
+      timestamp: now,
+      createdAt: now,
+      updatedAt: now,
+      read,
+      isRead: read.length === users.length,
+      communityId: conversation.communityId || null,
+    });
+  }
+
+  /**
    * Mark conversation as read
    */
   async markAsRead(conversationId: string, userId: number): Promise<void> {

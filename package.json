@@ -29,6 +29,7 @@
     "ionicons": "^7.0.0",
     "pinia": "^3.0.4",
     "pinia-plugin-persistedstate": "^4.7.1",
+    "socket.io-client": "^4.8.1",
     "vue": "^3.3.0",
     "vue-router": "^4.2.0"
   },
