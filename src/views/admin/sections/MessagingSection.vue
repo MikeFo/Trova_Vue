@@ -29,7 +29,7 @@
           <ion-searchbar
             v-model="userSearchQuery"
             placeholder="Search users..."
-            debounce="300"
+            :debounce="300"
             @ionInput="searchUsers"
           ></ion-searchbar>
           <div class="selected-users">
@@ -72,7 +72,7 @@
         <h3 class="subsection-title">Message</h3>
         <ion-textarea
           v-model="messageText"
-          rows="8"
+          :rows="8"
           placeholder="Type your message here..."
           :maxlength="5000"
           class="message-textarea"

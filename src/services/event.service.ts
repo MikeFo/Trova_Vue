@@ -226,8 +226,8 @@ export class EventService {
   async toggleSaveEvent(eventId: number, userId: number): Promise<Event> {
     try {
       // Backend uses authenticated user from token, userId param is kept for API compatibility
-      const result = await apiService.put(`/events/${eventId}/save`, {});
-      return result;
+      const result = await apiService.put<Event>(`/events/${eventId}/save`, {});
+      return result as Event;
     } catch (error) {
       console.error('Failed to toggle save event:', error);
       throw error;

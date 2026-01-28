@@ -131,7 +131,7 @@
         v-model="memberSearchQuery"
         placeholder="Location, interest, etc"
         class="member-search"
-        debounce="300"
+        :debounce="300"
       ></ion-searchbar>
       <div class="search-actions">
         <ion-button fill="clear" class="filter-button">

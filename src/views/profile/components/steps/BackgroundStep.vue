@@ -12,7 +12,7 @@
           type="text"
           class="autocomplete-input"
           placeholder="Search for your current employer"
-          :disabled="profileData.currentEmployer"
+          :disabled="!!profileData.currentEmployer"
           v-model="currentEmployerQuery"
           @input="handleOrganizationSearch($event, 'current')"
           autocomplete="off"

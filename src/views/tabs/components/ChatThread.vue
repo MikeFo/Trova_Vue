@@ -16,14 +16,15 @@
           <ion-icon :icon="people"></ion-icon>
         </div>
         <div class="header-details">
-          <h3 class="header-name">{{ conversation.messageTitle || 'Unknown' }}</h3>
+          <h3 class="header-name">{{ conversation.messageTitle || 'Unknown' }}<span v-if="conversation.isSlackBacked" class="slack-badge">Slack</span></h3>
           <p v-if="typingUsers.length > 0" class="header-status typing">typing...</p>
           <p v-else-if="conversation.isOnline && !conversation.isMultiUser" class="header-status online">Online</p>
           <p v-else-if="conversation.isMultiUser" class="header-status">{{ getParticipantsCount() }} participants</p>
         </div>
       </div>
-      <ion-button fill="clear" class="more-button">
-        <ion-icon :icon="ellipsisVertical"></ion-icon>
+      <ion-button fill="clear" class="close-button" @click="$emit('back')">
+        <ion-icon :icon="close"></ion-icon>
+        <span class="close-label">Close</span>
       </ion-button>
     </div>
 
@@ -58,7 +59,7 @@
               <img :src="message.image" alt="Message image" />
             </div>
             <div class="message-time">
-              {{ formatMessageTime(message.timestamp) }}
+              {{ formatMessageTimeFlexible(message) }}
               <ion-icon
                 v-if="isOwnMessage(message) && isMessageRead(message)"
                 :icon="checkmarkDone"
@@ -88,7 +89,7 @@
         <ion-textarea
           v-model="messageText"
           placeholder="Type a message..."
-          rows="1"
+          :rows="1"
           auto-grow
           :maxlength="5000"
           class="message-input"
@@ -121,7 +122,7 @@ import { useAuthStore } from '@/stores/auth.store';
 import {
   arrowBack,
   people,
-  ellipsisVertical,
+  close,
   attachOutline,
   send,
   sendOutline,
@@ -153,11 +154,13 @@ const isLoadingMessages = ref(false);
 const typingUsers = ref<number[]>([]);
 const typingTimeout = ref<ReturnType<typeof setTimeout> | null>(null);
 
+
+
 const sortedMessages = computed(() => {
   if (!props.conversation || !props.conversation.messages) return [];
   return [...props.conversation.messages].sort((a, b) => {
-    const aTime = a.timestamp?.toMillis() || 0;
-    const bTime = b.timestamp?.toMillis() || 0;
+    const aTime = a.timestamp?.toMillis?.() || a.createdAtDate?.getTime?.() || 0;
+    const bTime = b.timestamp?.toMillis?.() || b.createdAtDate?.getTime?.() || 0;
     return aTime - bTime;
   });
 });
@@ -208,6 +211,26 @@ function formatMessageTime(timestamp: Timestamp | undefined): string {
     minute: '2-digit',
     hour12: true 
   });
+}
+
+function formatMessageTimeFlexible(message: FirebaseMessage): string {
+  if (message.timestamp) {
+    return formatMessageTimeFlexible(message);
+  }
+  if (message.createdAtDate) {
+    const date = message.createdAtDate;
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    return date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+  }
+  return '';
 }
 
 function isMessageRead(message: FirebaseMessage): boolean {
@@ -299,33 +322,26 @@ onMounted(() => {
   
   scrollToBottom();
   
-  // Add conversation to store if not already there
   const existingConvo = conversationsStore.conversations.get(props.conversation.conversationId);
   if (!existingConvo) {
     conversationsStore.conversations.set(props.conversation.conversationId, props.conversation);
   }
   
-  // Use setActiveConversation which handles subscription internally
   try {
     conversationsStore.setActiveConversation(props.conversation.conversationId);
   } catch (err) {
     console.warn('[ChatThread] Error setting active conversation:', err);
-    // Fallback: try direct subscription if available
-    if (typeof conversationsStore.subscribeToConversation === 'function') {
-      conversationsStore.subscribeToConversation(props.conversation.conversationId);
-    }
   }
   
   // Mark as read
   conversationsStore.markAsRead(props.conversation.conversationId);
+
 });
 
 onUnmounted(() => {
-  // Stop typing if user was typing
   if (authStore.user?.id && props.conversation) {
     conversationsStore.setTyping(props.conversation.conversationId, false);
   }
-  
   if (typingDebounceTimer) {
     clearTimeout(typingDebounceTimer);
   }
@@ -336,8 +352,14 @@ onUnmounted(() => {
 .chat-thread-container {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  background: #f8fafc;
+  height: calc(100vh - 200px);
+  max-width: 1100px;
+  margin: 48px auto 16px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
 }
 
 .chat-header {
@@ -423,14 +445,22 @@ onUnmounted(() => {
   color: #10b981;
 }
 
-.more-button {
+.close-button {
   --padding-start: 8px;
   --padding-end: 8px;
   margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.more-button ion-icon {
-  font-size: 20px;
+.close-button ion-icon {
+  font-size: 18px;
+  color: #1a1a1a;
+}
+
+.close-label {
+  font-size: 14px;
   color: #1a1a1a;
 }
 
@@ -441,6 +471,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  background: #f8fafc;
 }
 
 .loading-messages {

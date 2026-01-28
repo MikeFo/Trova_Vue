@@ -42,7 +42,7 @@
                 v-model="formData.description"
                 placeholder="Tell people what your event is about"
                 :maxlength="1000"
-                rows="5"
+                :rows="5"
               ></ion-textarea>
             </ion-item>
             <div v-if="errors.description" class="error-message">{{ errors.description }}</div>
@@ -295,9 +295,9 @@ function triggerFileInput() {
   fileInput.value?.click();
 }
 
-function handlePhotoUpload(event: Event) {
-  const target = event.target as HTMLInputElement;
-  const file = target.files?.[0];
+function handlePhotoUpload(event: any) {
+  const target = event?.target as HTMLInputElement | null;
+  const file = target?.files?.[0];
   if (file) {
     formData.value.photoFile = file;
     const reader = new FileReader();

@@ -8,7 +8,7 @@
             v-model="searchQuery"
             placeholder="Find Groups"
             class="groups-search"
-            debounce="300"
+            :debounce="300"
             @ionInput="handleSearch"
           ></ion-searchbar>
           <ion-button

@@ -116,10 +116,11 @@ export class ConversationService {
       
       querySnapshot.forEach((docSnap) => {
         const data = docSnap.data() as FirebaseMessages;
+        const { id: _ignoredId, conversationId: dataConversationId, ...rest } = data;
         conversations.push({
           id: docSnap.id,
-          conversationId: data.conversationId || docSnap.id,
-          ...data,
+          conversationId: dataConversationId || docSnap.id,
+          ...rest,
         });
       });
       
@@ -363,6 +364,10 @@ export class ConversationService {
       (error) => {
         // If subcollection fails, try collectionGroup as fallback
         console.warn('Subcollection query failed, trying collectionGroup:', error);
+        if (!this.firestore) {
+          console.error('Firestore not initialized');
+          return;
+        }
         const fallbackQuery = query(
           collectionGroup(this.firestore, 'conv'),
           where('parentMessageId', '==', conversationId),
@@ -471,6 +476,42 @@ export class ConversationService {
       console.error('Error sending message:', error);
       throw error;
     }
+  }
+
+  /**
+   * Ensure a conversation document exists in Firestore (create if missing).
+   */
+  async ensureConversationExists(conversation: FirebaseMessages, currentUserId: number): Promise<void> {
+    if (!this.firestore) {
+      throw new Error('Firestore not initialized');
+    }
+    const messagesRef = collection(this.firestore, 'messages');
+    const conversationDoc = doc(messagesRef, conversation.conversationId);
+    const snap = await getDoc(conversationDoc);
+    if (snap.exists()) return;
+
+    const now = Timestamp.now();
+    const users = conversation.users || [];
+    const read = users.includes(currentUserId) ? [currentUserId] : [];
+
+    await setDoc(conversationDoc, {
+      conversationId: conversation.conversationId,
+      users,
+      isMultiUser: conversation.isMultiUser || false,
+      parentId: conversation.parentId || 0,
+      parentType: conversation.parentType || 'user',
+      messageTitle: conversation.messageTitle || '',
+      messagesPicture: conversation.messagesPicture || '',
+      lastMessage: conversation.lastMessage || '',
+      lastFromUserId: conversation.lastFromUserId || null,
+      lastMessageTime: now.toDate().toISOString(),
+      timestamp: now,
+      createdAt: now,
+      updatedAt: now,
+      read,
+      isRead: read.length === users.length,
+      communityId: conversation.communityId || null,
+    });
   }
 
   /**

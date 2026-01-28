@@ -6,7 +6,7 @@
         v-model="searchQuery"
         placeholder="Search events"
         class="events-search"
-        debounce="300"
+        :debounce="300"
         @ionInput="handleSearch"
       ></ion-searchbar>
       <ion-button

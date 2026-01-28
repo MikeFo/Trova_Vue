@@ -14,7 +14,7 @@
             placeholder="Search communities by name..."
             @ionInput="handleSearch"
             @ionClear="handleSearchClear"
-            debounce="500"
+            :debounce="500"
             class="search-bar"
           ></ion-searchbar>
         </div>

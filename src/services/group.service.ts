@@ -49,6 +49,7 @@ export interface Group {
   lastMessageAuthor?: string;
   hasNotification?: boolean;
   isFavorite?: boolean;
+  members?: Array<{ id: number }>;
 }
 
 export interface CreateGroupData {

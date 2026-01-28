@@ -15,7 +15,7 @@
         <ion-textarea
           v-model="communityBio"
           :maxlength="250"
-          rows="4"
+          :rows="4"
           placeholder="Enter community description..."
           class="bio-textarea"
         ></ion-textarea>

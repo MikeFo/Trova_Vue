@@ -149,7 +149,7 @@ export class ProfileService {
       
       // Update auth store with updated user
       if (updatedUser) {
-        authStore.setUser(updatedUser);
+        authStore.setUser(updatedUser as any);
       } else {
         // If backend doesn't return user, update locally so user can proceed
         authStore.updateSetupStep('complete');

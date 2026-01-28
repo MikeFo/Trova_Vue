@@ -5,6 +5,11 @@ export interface FirebaseMessage {
   parentMessageId?: string;
   userId?: number;
   timestamp?: Timestamp;
+  createdAtDate?: Date;
+  source?: string | null;
+  slackChannelId?: string | null;
+  slackTs?: string | null;
+  slackUserId?: string | null;
   message?: string;
   isActive?: boolean;
   createdAt?: Timestamp;
@@ -23,6 +28,7 @@ export interface FirebaseMessage {
   messageForDisplay?: string;
 }
 
+
 export interface FirebaseReaction {
   userId: number;
   emoji: string;
@@ -39,6 +45,11 @@ export interface FirebaseMessages {
   name?: string;
   read: number[];
   timestamp?: Timestamp;
+  createdAtDate?: Date;
+  source?: string | null;
+  slackChannelId?: string | null;
+  slackTs?: string | null;
+  slackUserId?: string | null;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
   isMultiUser?: boolean;
@@ -51,6 +62,7 @@ export interface FirebaseMessages {
   isRead?: boolean;
   isOnline?: boolean;
   communityId?: number;
+  isSlackBacked?: boolean;
 }
 
 export interface UserFirebaseMessage {

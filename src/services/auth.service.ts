@@ -255,7 +255,7 @@ export class AuthService {
       const provider = new GoogleAuthProvider();
       
       // For web, use popup
-      if (typeof window !== 'undefined' && !window.Capacitor) {
+      if (typeof window !== 'undefined' && !(window as any).Capacitor) {
         const result = await signInWithPopup(auth, provider);
         const token = await result.user.getIdToken();
         
