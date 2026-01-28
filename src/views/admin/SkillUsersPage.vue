@@ -31,7 +31,7 @@
 
         <ion-list>
           <ion-item
-            v-for="user in sortedUsers"
+            v-for="user in users"
             :key="user.id"
             class="user-item"
           >
@@ -44,16 +44,6 @@
               <p v-if="user.jobTitle || user.currentEmployer">
                 {{ [user.jobTitle, user.currentEmployer].filter(Boolean).join(' at ') }}
               </p>
-              <div v-if="getUserSkills(user).length" class="skills-row">
-                <ion-chip
-                  outline
-                  v-for="skill in getUserSkills(user)"
-                  :key="skill"
-                  class="skill-chip"
-                >
-                  {{ skill }}
-                </ion-chip>
-              </div>
             </ion-label>
           </ion-item>
         </ion-list>
@@ -88,7 +78,6 @@ import {
   IonLabel,
   IonSpinner,
   IonAvatar,
-  IonChip,
 } from '@ionic/vue';
 import { arrowBack, refresh, personCircleOutline, peopleOutline } from 'ionicons/icons';
 
@@ -97,10 +86,6 @@ const route = useRoute();
 
 const isLoading = ref(true);
 const users = ref<CommunityMember[]>([]);
-
-const sortedUsers = computed(() =>
-  [...users.value].sort((a, b) => getUserName(a).localeCompare(getUserName(b)))
-);
 
 const communityId = computed(() => {
   const id = route.params.communityId;
@@ -121,24 +106,6 @@ function getUserName(user: CommunityMember): string {
   if (user.fname && user.lname) return `${user.fname} ${user.lname}`;
   if (user.fname) return user.fname;
   return `User ${user.id}`;
-}
-
-function getUserSkills(user: CommunityMember): string[] {
-  const skills = (user as any).skills;
-  let list: string[] = [];
-
-  if (Array.isArray(skills)) {
-    list = skills;
-  } else if (typeof skills === 'string') {
-    list = skills.split(',').map(s => s.trim()).filter(Boolean);
-  } else if (skills && typeof skills === 'object') {
-    list = Object.keys(skills);
-  }
-
-  return list
-    .map(s => s.trim())
-    .filter(Boolean)
-    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
 }
 
 function goBack() {
@@ -251,21 +218,6 @@ ion-avatar {
   font-size: 14px;
   color: #64748b;
   margin: 0;
-}
-
-.skills-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.skill-chip {
-  --color: var(--color-primary);
-  --border-color: #d4e4db;
-  --background: #f8fffb;
-  font-size: 12px;
-  font-weight: 600;
 }
 
 .empty-state {

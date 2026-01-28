@@ -30,10 +30,15 @@
       </div>
 
       <div v-else class="admin-console-container">
-        <!-- Community Selector (if multiple communities) -->
-        <div v-if="managedCommunities.length > 1" class="community-selector-section">
+        <!-- Community Selector (if multiple communities OR super admin) -->
+        <div v-if="managedCommunities.length > 1 || isSuperAdminUser" class="community-selector-section">
           <ion-item>
-            <ion-label>Select Community</ion-label>
+            <ion-label>
+              <span v-if="isSuperAdminUser" style="font-weight: bold; color: #3880ff;">
+                Super Admin: Select Community
+              </span>
+              <span v-else>Select Community</span>
+            </ion-label>
             <ion-select v-model="selectedCommunityId" @ionChange="onCommunityChange">
               <ion-select-option
                 v-for="community in managedCommunities"
@@ -60,12 +65,6 @@
           <ion-segment-button value="users">
             <ion-label>Users</ion-label>
           </ion-segment-button>
-          <ion-segment-button value="community">
-            <ion-label>Community</ion-label>
-          </ion-segment-button>
-          <ion-segment-button value="messaging">
-            <ion-label>Messaging</ion-label>
-          </ion-segment-button>
         </ion-segment>
 
         <!-- Tab Content -->
@@ -74,6 +73,12 @@
           <div v-if="activeTab === 'stats'" class="tab-panel">
             <UserStatsSection
               :community-id="selectedCommunityId"
+              @open-magic-intros="openMagicIntrosModal"
+              @open-channel-pairings="openChannelPairingsModal"
+              @open-mentor-mentee-matches="openMentorMenteeMatchesModal"
+              @open-connections="openConnectionsModal"
+              @open-skills="openSkillsModal"
+              @open-mentor-list="openMentorListModal"
             />
           </div>
 
@@ -98,24 +103,61 @@
               @refresh="refreshData"
             />
           </div>
-
-          <!-- Community Configuration Tab -->
-          <div v-if="activeTab === 'community'" class="tab-panel">
-            <CommunityConfigSection
-              :community-id="selectedCommunityId"
-              @refresh="refreshData"
-            />
-          </div>
-
-          <!-- Messaging Tab -->
-          <div v-if="activeTab === 'messaging'" class="tab-panel">
-            <MessagingSection
-              :community-id="selectedCommunityId"
-            />
-          </div>
         </div>
       </div>
     </ion-content>
+
+    <!-- Magic Intros Modal -->
+    <MagicIntrosPage
+      :is-open="isMagicIntrosModalOpen"
+      :community-id="selectedCommunityId"
+      :start-date="magicIntrosStartDate"
+      :end-date="magicIntrosEndDate"
+      @did-dismiss="closeMagicIntrosModal"
+    />
+
+    <!-- Skills Modal -->
+    <SkillsListPage
+      :is-open="isSkillsModalOpen"
+      :community-id="selectedCommunityId"
+      @did-dismiss="closeSkillsModal"
+    />
+
+    <!-- Mentor List Modal -->
+    <MentorListPage
+      v-if="selectedCommunityId"
+      :is-open="isMentorListModalOpen"
+      :community-id="selectedCommunityId"
+      :mentor-type="mentorListType"
+      @did-dismiss="closeMentorListModal"
+    />
+
+    <!-- Channel Pairings Modal -->
+    <ChannelPairingsPage
+      :is-open="isChannelPairingsModalOpen"
+      :community-id="selectedCommunityId"
+      :start-date="channelPairingsStartDate"
+      :end-date="channelPairingsEndDate"
+      @did-dismiss="closeChannelPairingsModal"
+    />
+
+    <!-- Mentor/Mentee Matches Modal -->
+    <MentorMenteeMatchesPage
+      :is-open="isMentorMenteeMatchesModalOpen"
+      :community-id="selectedCommunityId"
+      :start-date="mentorMenteeMatchesStartDate"
+      :end-date="mentorMenteeMatchesEndDate"
+      @did-dismiss="closeMentorMenteeMatchesModal"
+    />
+
+    <!-- Connections Modal -->
+    <ConnectionsPage
+      :is-open="isConnectionsModalOpen"
+      :community-id="selectedCommunityId"
+      :start-date="connectionsStartDate"
+      :end-date="connectionsEndDate"
+      @did-dismiss="closeConnectionsModal"
+    />
   </ion-page>
 </template>
 
@@ -150,11 +192,15 @@ import {
   lockClosedOutline,
 } from 'ionicons/icons';
 import UserManagementSection from './sections/UserManagementSection.vue';
-import CommunityConfigSection from './sections/CommunityConfigSection.vue';
-import MessagingSection from './sections/MessagingSection.vue';
 import DataUploadSection from './sections/DataUploadSection.vue';
 import AnalyticsDashboardSection from './sections/AnalyticsDashboardSection.vue';
 import UserStatsSection from './sections/UserStatsSection.vue';
+import MagicIntrosPage from './MagicIntrosPage.vue';
+import SkillsListPage from './SkillsListPage.vue';
+import MentorListPage from './MentorListPage.vue';
+import ChannelPairingsPage from './ChannelPairingsPage.vue';
+import MentorMenteeMatchesPage from './MentorMenteeMatchesPage.vue';
+import ConnectionsPage from './ConnectionsPage.vue';
 import type { Community } from '@/services/community.service';
 
 const router = useRouter();
@@ -164,9 +210,36 @@ const communityStore = useCommunityStore();
 
 const isLoading = ref(true);
 const isManager = ref(false);
+const isSuperAdminUser = ref(false);
 const activeTab = ref('stats');
 const managedCommunities = ref<Community[]>([]);
 const selectedCommunityId = ref<number | null>(null);
+
+// Magic Intros Modal state
+const isMagicIntrosModalOpen = ref(false);
+const magicIntrosStartDate = ref<string | undefined>(undefined);
+const magicIntrosEndDate = ref<string | undefined>(undefined);
+
+// Skills Modal state
+const isSkillsModalOpen = ref(false);
+
+// Mentor List Modal state
+const isMentorListModalOpen = ref(false);
+const mentorListType = ref<'can' | 'want'>('can');
+
+// Channel Pairings Modal state
+const isChannelPairingsModalOpen = ref(false);
+const channelPairingsStartDate = ref<string | undefined>(undefined);
+const channelPairingsEndDate = ref<string | undefined>(undefined);
+
+// Mentor/Mentee Matches Modal state
+const isMentorMenteeMatchesModalOpen = ref(false);
+const mentorMenteeMatchesStartDate = ref<string | undefined>(undefined);
+const mentorMenteeMatchesEndDate = ref<string | undefined>(undefined);
+
+const isConnectionsModalOpen = ref(false);
+const connectionsStartDate = ref<string | undefined>(undefined);
+const connectionsEndDate = ref<string | undefined>(undefined);
 
 // Use the same community identification pattern as other pages
 // Priority: selectedCommunityId (from admin console) > store > getCommunityId()
@@ -233,7 +306,24 @@ async function checkManagerAccess() {
     return;
   }
 
+  // Check if user is super admin first
+  isSuperAdminUser.value = adminService.isSuperAdmin(authStore.user.id);
+  
   const communityId = getCommunityId();
+
+  // For super admins, allow access even without a specific communityId
+  if (isSuperAdminUser.value) {
+    isManager.value = true;
+    await loadManagedCommunities();
+    // Set initial community if available, otherwise use first from list
+    if (communityId) {
+      selectedCommunityId.value = communityId;
+    } else if (managedCommunities.value.length > 0) {
+      selectedCommunityId.value = managedCommunities.value[0].id;
+    }
+    isLoading.value = false;
+    return;
+  }
 
   if (!communityId) {
     isManager.value = false;
@@ -292,7 +382,35 @@ async function checkManagerAccess() {
 }
 
 async function loadManagedCommunities() {
-  // TODO: Load communities where user is a manager
+  if (!authStore.user?.id) {
+    return;
+  }
+
+  // For super admins, load all communities
+  if (isSuperAdminUser.value) {
+    try {
+      const allCommunities = await adminService.getAllCommunitiesForSuperAdmin(authStore.user.id);
+      managedCommunities.value = allCommunities;
+      console.log('[AdminConsole] Loaded all communities for super admin:', allCommunities.length);
+      
+      // Set initial selected community if not already set
+      if (!selectedCommunityId.value && allCommunities.length > 0) {
+        selectedCommunityId.value = allCommunities[0].id;
+        // Also set in store for backend middleware
+        communityStore.setCurrentCommunity(allCommunities[0]);
+      }
+    } catch (error) {
+      console.error('Failed to load all communities for super admin:', error);
+      // Fallback to current community
+      if (communityStore.currentCommunity) {
+        managedCommunities.value = [communityStore.currentCommunity];
+      }
+    }
+    return;
+  }
+
+  // For regular managers, load communities where user is a manager
+  // TODO: Implement endpoint to get all communities where user is a manager
   // For now, use current community
   if (communityStore.currentCommunity) {
     managedCommunities.value = [communityStore.currentCommunity];
@@ -314,14 +432,88 @@ function onTabChange() {
 }
 
 function onCommunityChange() {
-  // Community changed, refresh data
-  refreshData();
+  // Community changed, update store
+  // The child components (UserStatsSection, AnalyticsDashboardSection, etc.) 
+  // watch the communityId prop and will automatically reload their data
+  if (selectedCommunityId.value) {
+    const selectedCommunity = managedCommunities.value.find(c => c.id === selectedCommunityId.value);
+    if (selectedCommunity) {
+      communityStore.setCurrentCommunity(selectedCommunity);
+      console.log('[AdminConsole] Switched to community:', selectedCommunity.id, selectedCommunity.name);
+      // No need to call refreshData() - the prop change will trigger watchers in child components
+    }
+  }
 }
 
 async function refreshData() {
   isLoading.value = true;
   await checkManagerAccess();
   isLoading.value = false;
+}
+
+function openMagicIntrosModal(startDate?: string, endDate?: string) {
+  magicIntrosStartDate.value = startDate;
+  magicIntrosEndDate.value = endDate;
+  isMagicIntrosModalOpen.value = true;
+}
+
+function closeMagicIntrosModal() {
+  isMagicIntrosModalOpen.value = false;
+  magicIntrosStartDate.value = undefined;
+  magicIntrosEndDate.value = undefined;
+}
+
+function openSkillsModal() {
+  isSkillsModalOpen.value = true;
+}
+
+function closeSkillsModal() {
+  isSkillsModalOpen.value = false;
+}
+
+function openMentorListModal(type: 'can' | 'want') {
+  mentorListType.value = type;
+  isMentorListModalOpen.value = true;
+}
+
+function closeMentorListModal() {
+  isMentorListModalOpen.value = false;
+}
+
+function openChannelPairingsModal(startDate?: string, endDate?: string) {
+  channelPairingsStartDate.value = startDate;
+  channelPairingsEndDate.value = endDate;
+  isChannelPairingsModalOpen.value = true;
+}
+
+function closeChannelPairingsModal() {
+  isChannelPairingsModalOpen.value = false;
+  channelPairingsStartDate.value = undefined;
+  channelPairingsEndDate.value = undefined;
+}
+
+function openMentorMenteeMatchesModal(startDate?: string, endDate?: string) {
+  mentorMenteeMatchesStartDate.value = startDate;
+  mentorMenteeMatchesEndDate.value = endDate;
+  isMentorMenteeMatchesModalOpen.value = true;
+}
+
+function closeMentorMenteeMatchesModal() {
+  isMentorMenteeMatchesModalOpen.value = false;
+  mentorMenteeMatchesStartDate.value = undefined;
+  mentorMenteeMatchesEndDate.value = undefined;
+}
+
+function openConnectionsModal(startDate?: string, endDate?: string) {
+  connectionsStartDate.value = startDate;
+  connectionsEndDate.value = endDate;
+  isConnectionsModalOpen.value = true;
+}
+
+function closeConnectionsModal() {
+  isConnectionsModalOpen.value = false;
+  connectionsStartDate.value = undefined;
+  connectionsEndDate.value = undefined;
 }
 
 onMounted(() => {

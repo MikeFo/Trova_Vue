@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { conversationService } from '../services/conversation.service';
-import { conversationBackendService, type BackendConversation, type BackendMessage } from '../services/conversation-backend.service.ts';
-import { slackMpimService } from '../services/slack-mpim.service.ts';
+import { conversationBackendService, type BackendConversation, type BackendMessage } from '../services/conversation-backend.service';
+import { slackMpimService } from '../services/slack-mpim.service';
 import { io } from 'socket.io-client';
 import { useAuthStore } from './auth.store';
 import { userService } from '../services/user.service';
@@ -10,13 +10,13 @@ import type { FirebaseMessages, FirebaseMessage, UserFirebaseMessage } from '../
 import type { User } from './auth.store';
 
 
-function mapBackendConversation(conv, currentUserId) {
+function mapBackendConversation(conv: BackendConversation, currentUserId: number): FirebaseMessages {
   const messages = conv.message ? [mapBackendMessage(conv.message, currentUserId)] : [];
   return {
     id: String(conv.id),
     conversationId: String(conv.id),
     messages,
-    users: [conv.leftUserId, conv.rightUserId].filter(Boolean),
+    users: [conv.leftUserId, conv.rightUserId].filter((id): id is number => typeof id === 'number' && id > 0),
     isTyping: [],
     parentId: 0,
     parentType: 'user',
@@ -39,9 +39,9 @@ function mapBackendConversation(conv, currentUserId) {
   };
 }
 
-function mapBackendMessage(msg, currentUserId) {
+function mapBackendMessage(msg: BackendMessage, currentUserId: number): FirebaseMessage {
   return {
-    id: msg.id,
+    id: String(msg.id),
     userId: msg.userId || 0,
     message: msg.body,
     createdAtDate: msg.createdAt ? new Date(msg.createdAt) : new Date(),
@@ -168,8 +168,11 @@ export const useConversationsStore = defineStore('conversations', () => {
 
   async function setActiveConversation(conversationId: string | null) {
     if (!conversationId) {
+      const currentConvId = activeConversation.value?.conversationId;
       activeConversation.value = null;
-      socket.emit('leave', { conversationId: activeConversation.value?.conversationId });
+      if (currentConvId) {
+        socket.emit('leave', { conversationId: currentConvId });
+      }
       return;
     }
 
@@ -224,14 +227,14 @@ export const useConversationsStore = defineStore('conversations', () => {
       if (isSlack) {
         await slackMpimService.sendMessage(Number(conversationId), conv.communityId || 0, message);
         // Optimistic append
-        const msg = {
-          id: Date.now(),
+        const msg: FirebaseMessage = {
+          id: String(Date.now()),
           userId: authStore.user.id,
           message,
           createdAtDate: new Date(),
           source: 'slack',
           slackChannelId: conv.slackChannelId,
-        } as FirebaseMessage;
+        };
         conv.messages = [...(conv.messages || []), msg];
         conversations.value.set(conversationId, conv);
         if (activeConversation.value?.conversationId === conversationId) {

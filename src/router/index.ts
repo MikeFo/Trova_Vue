@@ -146,31 +146,61 @@ const routes: Array<RouteRecordRaw> = [
   },
   {
     path: '/communities/:communityId/console/magic-intros',
-    component: () => import('@/views/admin/MagicIntrosPage.vue'),
+    redirect: (to) => {
+      // Redirect to admin console - magic intros is now a modal
+      return {
+        path: `/communities/${to.params.communityId}/console`,
+        query: to.query
+      };
+    },
     meta: { requiresAuth: true },
     beforeEnter: requireAuth
   },
   {
     path: '/communities/:communityId/console/magic-intros/:date',
-    component: () => import('@/views/admin/MagicIntroDetailPage.vue'),
+    redirect: (to) => {
+      // Redirect to admin console - magic intros is now a modal
+      return {
+        path: `/communities/${to.params.communityId}/console`,
+        query: to.query
+      };
+    },
     meta: { requiresAuth: true },
     beforeEnter: requireAuth
   },
   {
     path: '/communities/:communityId/console/skills',
-    component: () => import('@/views/admin/SkillsListPage.vue'),
+    redirect: (to) => {
+      // Redirect to admin console - skills is now a modal
+      return {
+        path: `/communities/${to.params.communityId}/console`,
+        query: to.query
+      };
+    },
     meta: { requiresAuth: true },
     beforeEnter: requireAuth
   },
   {
     path: '/communities/:communityId/console/skills/:skillName',
-    component: () => import('@/views/admin/SkillUsersPage.vue'),
+    redirect: (to) => {
+      // Redirect to admin console - skills is now a modal
+      return {
+        path: `/communities/${to.params.communityId}/console`,
+        query: to.query
+      };
+    },
     meta: { requiresAuth: true },
     beforeEnter: requireAuth
   },
   {
     path: '/communities/:communityId/console/mentors/:type',
-    component: () => import('@/views/admin/MentorListPage.vue'),
+    redirect: (to) => {
+      // Redirect to admin console - mentors is now a modal
+      return {
+        path: `/communities/${to.params.communityId}/console`,
+        query: to.query
+      };
+    },
     meta: { requiresAuth: true },
     beforeEnter: requireAuth
   }

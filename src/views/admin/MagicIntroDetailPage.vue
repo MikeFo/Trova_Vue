@@ -42,7 +42,7 @@
           </div>
         </div>
 
-        <ion-list>
+        <ion-list class="pairings-list">
           <ion-item
             v-for="(pairing, index) in pairings"
             :key="pairing.id || index"
@@ -236,14 +236,29 @@ function formatPercentage(value: number): string {
 }
 
 .pairings-container {
-  background: white;
+  background: transparent;
+  padding-bottom: 16px;
+}
+
+.pairings-list {
+  background: transparent;
+  padding: 0 16px;
+}
+
+.pairings-list ion-item {
+  margin-bottom: 8px;
+  border-radius: 8px;
+  overflow: hidden;
 }
 
 .header-section {
   padding: 20px 16px;
-  border-bottom: 2px solid #e5e7eb;
-  background: linear-gradient(135deg, #34A853 0%, #1DB98A 100%);
+  margin: 16px;
+  border-radius: 12px;
+  border-bottom: none;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
   color: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .header-section h2 {
@@ -283,11 +298,16 @@ function formatPercentage(value: number): string {
   color: #10b981;
 }
 
+.header-section .stat-value.engaged {
+  color: white;
+}
+
 .pairing-item {
   --padding-start: 16px;
   --padding-end: 16px;
   --min-height: 88px;
   border-bottom: 1px solid #f3f4f6;
+  background: white;
 }
 
 .pairing-item:last-child {

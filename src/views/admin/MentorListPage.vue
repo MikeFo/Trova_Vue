@@ -1,67 +1,80 @@
 <template>
-  <ion-page>
+  <ion-modal 
+    :is-open="isOpen" 
+    @didDismiss="handleDismiss"
+    @willDismiss="handleDismiss"
+    :backdrop-dismiss="true"
+    id="mentor-list-modal"
+  >
     <ion-header>
       <ion-toolbar>
-        <ion-buttons slot="start">
-          <ion-button @click="goBack">
-            <ion-icon :icon="arrowBack"></ion-icon>
-          </ion-button>
-        </ion-buttons>
         <ion-title>{{ pageTitle }}</ion-title>
         <ion-buttons slot="end">
-          <ion-button @click="loadUsers">
+          <ion-button fill="clear" @click="handleDismiss">
+            <ion-icon :icon="close"></ion-icon>
+          </ion-button>
+        </ion-buttons>
+        <ion-buttons slot="end">
+          <ion-button fill="clear" @click="loadUsers">
             <ion-icon :icon="refresh"></ion-icon>
           </ion-button>
         </ion-buttons>
       </ion-toolbar>
     </ion-header>
     <ion-content :fullscreen="true" class="mentor-list-content">
-      <div class="page-container">
       <!-- Loading State -->
       <div v-if="isLoading" class="loading-state">
         <ion-spinner></ion-spinner>
-        <p>Loading {{ mentorType === 'can' ? 'mentors' : 'mentees' }}...</p>
+        <p>Loading {{ props.mentorType === 'can' ? 'mentors' : 'mentees' }}...</p>
       </div>
 
       <!-- Users List -->
-      <div v-else-if="users.length > 0" class="users-list">
+      <div v-else-if="users.length > 0 || expectedCount > 0" class="users-list">
         <div class="list-header">
           <h2>{{ pageTitle }}</h2>
-          <p class="subtitle">{{ formatNumber(users.length) }} user{{ users.length !== 1 ? 's' : '' }}</p>
-          <div class="list-controls">
-            <ion-select
-              interface="popover"
-              label="Sort by"
-              label-placement="stacked"
-              :value="sortBy"
-              @ionChange="sortBy = $event.detail.value"
-            >
-              <ion-select-option value="name">Name (A–Z)</ion-select-option>
-              <ion-select-option value="popular-skill">Most common skill</ion-select-option>
-            </ion-select>
-          </div>
+          <p class="subtitle">
+            <span v-if="expectedCount > 0">{{ formatNumber(expectedCount) }} user{{ expectedCount !== 1 ? 's' : '' }}</span>
+            <span v-else>{{ formatNumber(filteredUsers.length) }} user{{ filteredUsers.length !== 1 ? 's' : '' }}</span>
+            <span v-if="searchQuery && filteredUsers.length !== expectedCount"> ({{ formatNumber(filteredUsers.length) }} shown)</span>
+            <span v-else-if="expectedCount > 0 && filteredUsers.length < expectedCount" class="count-warning"> ({{ formatNumber(filteredUsers.length) }} with profile data)</span>
+          </p>
         </div>
 
-        <ion-list>
+        <!-- Search Bar -->
+        <div class="search-container">
+          <ion-searchbar
+            v-model="searchQuery"
+            placeholder="Search by name, job title, or skills..."
+            :debounce="300"
+            class="user-searchbar"
+          ></ion-searchbar>
+        </div>
+
+        <!-- No Results Message -->
+        <div v-if="searchQuery && filteredUsers.length === 0" class="no-results">
+          <p>No users found matching "{{ searchQuery }}"</p>
+        </div>
+
+        <ion-list v-else>
           <ion-item
-            v-for="user in sortedUsers"
+            v-for="user in filteredUsers"
             :key="user.id"
             class="user-item"
           >
             <ion-avatar slot="start" v-if="user.profilePicture">
               <img :src="user.profilePicture" :alt="getUserName(user)" />
             </ion-avatar>
-            <ion-icon :icon="mentorType === 'can' ? schoolOutline : bookOutline" slot="start" v-else class="avatar-icon"></ion-icon>
+            <ion-icon :icon="props.mentorType === 'can' ? schoolOutline : bookOutline" slot="start" v-else class="avatar-icon"></ion-icon>
             <ion-label>
               <h2>{{ getUserName(user) }}</h2>
               <p v-if="user.jobTitle || user.currentEmployer">
                 {{ [user.jobTitle, user.currentEmployer].filter(Boolean).join(' at ') }}
               </p>
-              <div v-if="getUserSkills(user).length" class="skills-row">
+              <div v-if="getUserSkills(user).length > 0" class="user-skills">
                 <ion-chip
-                  outline
                   v-for="skill in getUserSkills(user)"
                   :key="skill"
+                  size="small"
                   class="skill-chip"
                 >
                   {{ skill }}
@@ -74,22 +87,26 @@
 
       <!-- Empty State -->
       <div v-else class="empty-state">
-        <ion-icon :icon="mentorType === 'can' ? schoolOutline : bookOutline" class="empty-icon"></ion-icon>
-        <h2>No {{ mentorType === 'can' ? 'Mentors' : 'Mentees' }} Found</h2>
-        <p>No users {{ mentorType === 'can' ? 'who can mentor' : 'who want to be mentored' }} were found.</p>
-      </div>
+        <ion-icon :icon="props.mentorType === 'can' ? schoolOutline : bookOutline" class="empty-icon"></ion-icon>
+        <h2>No {{ props.mentorType === 'can' ? 'Mentors' : 'Mentees' }} Found</h2>
+        <p v-if="expectedCount > 0">
+          The backend reports {{ expectedCount }} {{ props.mentorType === 'can' ? 'mentor' : 'mentee' }}{{ expectedCount !== 1 ? 's' : '' }}, 
+          but no profile data is available to display them.
+        </p>
+        <p v-else>
+          No users {{ props.mentorType === 'can' ? 'who can mentor' : 'who want to be mentored' }} were found.
+        </p>
       </div>
     </ion-content>
-  </ion-page>
+  </ion-modal>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
-import { useRouter, useRoute } from 'vue-router';
+import { ref, computed, watch, onMounted } from 'vue';
 import { adminService } from '@/services/admin.service';
 import type { CommunityMember } from '@/services/admin.service';
 import {
-  IonPage,
+  IonModal,
   IonHeader,
   IonToolbar,
   IonTitle,
@@ -103,57 +120,50 @@ import {
   IonSpinner,
   IonAvatar,
   IonChip,
-  IonSelect,
-  IonSelectOption,
+  IonSearchbar,
 } from '@ionic/vue';
-import { arrowBack, refresh, schoolOutline, bookOutline } from 'ionicons/icons';
+import { close, refresh, schoolOutline, bookOutline } from 'ionicons/icons';
 
-const router = useRouter();
-const route = useRoute();
+interface Props {
+  isOpen: boolean;
+  communityId: number;
+  mentorType: 'can' | 'want';
+}
+
+const props = defineProps<Props>();
+
+const emit = defineEmits<{
+  didDismiss: [];
+}>();
 
 const isLoading = ref(true);
 const users = ref<CommunityMember[]>([]);
-const sortBy = ref<'name' | 'popular-skill'>('name');
-
-const communityId = computed(() => {
-  const id = route.params.communityId;
-  return typeof id === 'string' ? parseInt(id, 10) : Number(id);
-});
-
-const mentorType = computed(() => {
-  const type = route.params.type;
-  return (type === 'can' || type === 'want') ? type : 'can';
-});
+const searchQuery = ref('');
+const expectedCount = ref(0);
 
 const pageTitle = computed(() => {
-  return mentorType.value === 'can' ? 'Can Mentor' : 'Want Mentor';
+  return props.mentorType === 'can' ? 'Can Mentor' : 'Want Mentor';
 });
 
-const sortedUsers = computed(() => {
-  const list = [...users.value];
-
-  if (sortBy.value === 'name') {
-    return list.sort((a, b) => getUserName(a).localeCompare(getUserName(b)));
+const filteredUsers = computed(() => {
+  if (!searchQuery.value.trim()) {
+    return users.value;
   }
-
-  // popular-skill: sort by highest frequency skill among the user's skills, then by name
-  const freq = new Map<string, number>();
-  list.forEach(user => {
-    getUserSkills(user).forEach(skill => {
-      freq.set(skill, (freq.get(skill) || 0) + 1);
-    });
-  });
-
-  const score = (user: CommunityMember) => {
+  
+  const query = searchQuery.value.toLowerCase().trim();
+  
+  return users.value.filter(user => {
+    const name = getUserName(user).toLowerCase();
+    const jobTitle = (user.jobTitle || '').toLowerCase();
+    const employer = (user.currentEmployer || '').toLowerCase();
     const skills = getUserSkills(user);
-    if (skills.length === 0) return 0;
-    return Math.max(...skills.map(s => freq.get(s) || 0));
-  };
-
-  return list
-    .map(u => ({ user: u, s: score(u) }))
-    .sort((a, b) => b.s - a.s || getUserName(a.user).localeCompare(getUserName(b.user)))
-    .map(x => x.user);
+    const skillsText = skills.join(' ').toLowerCase();
+    
+    return name.includes(query) ||
+           jobTitle.includes(query) ||
+           employer.includes(query) ||
+           skillsText.includes(query);
+  });
 });
 
 function formatNumber(value: number): string {
@@ -167,57 +177,87 @@ function getUserName(user: CommunityMember): string {
   return `User ${user.id}`;
 }
 
-function goBack() {
-  router.back();
+function getUserSkills(user: CommunityMember): string[] {
+  // Get skills from mentorSkills or menteeSkills based on the type
+  const skills = props.mentorType === 'can' 
+    ? (user as any).mentorSkills 
+    : (user as any).menteeSkills;
+  
+  return Array.isArray(skills) ? skills : [];
 }
 
-function getUserSkills(user: CommunityMember): string[] {
-  const skills = (user as any).skills;
-  let list: string[] = [];
-
-  if (Array.isArray(skills)) {
-    list = skills;
-  } else if (typeof skills === 'string') {
-    list = skills.split(',').map(s => s.trim()).filter(Boolean);
-  } else if (skills && typeof skills === 'object') {
-    list = Object.keys(skills);
-  }
-
-  return list
-    .map(s => s.trim())
-    .filter(Boolean)
-    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+function handleDismiss() {
+  emit('didDismiss');
 }
 
 async function loadUsers() {
-  if (!communityId.value) return;
+  if (!props.communityId) return;
   
   isLoading.value = true;
   try {
-    users.value = await adminService.getMentorMenteeUsers(communityId.value, mentorType.value);
+    // Fetch both the users list and the expected count from backend stats
+    const [usersList, stats] = await Promise.all([
+      adminService.getMentorMenteeUsers(props.communityId, props.mentorType),
+      adminService.getMentorMenteeStats(props.communityId).catch(() => null)
+    ]);
+    
+    users.value = usersList;
+    
+    // Get the expected count from backend stats
+    if (stats) {
+      expectedCount.value = props.mentorType === 'can' 
+        ? (stats.usersCanMentor || 0)
+        : (stats.usersWantMentor || 0);
+    } else {
+      // If stats fetch failed, use the users list length as fallback
+      expectedCount.value = usersList.length;
+    }
   } catch (error) {
     console.error('Error loading users:', error);
     users.value = [];
+    expectedCount.value = 0;
   } finally {
     isLoading.value = false;
   }
 }
 
+// Watch for modal opening, mentorType, and communityId changes
+watch(() => props.isOpen, (newValue) => {
+  if (newValue) {
+    searchQuery.value = ''; // Clear search when modal opens
+    loadUsers();
+  }
+});
+
+watch(() => props.mentorType, () => {
+  if (props.isOpen) {
+    loadUsers();
+  }
+});
+
+watch(() => props.communityId, () => {
+  if (props.isOpen) {
+    loadUsers();
+  }
+});
+
 onMounted(() => {
-  loadUsers();
+  if (props.isOpen) {
+    loadUsers();
+  }
 });
 </script>
 
 <style scoped>
-.mentor-list-content {
-  --background: #f5f5f5;
+:deep(#mentor-list-modal) {
+  --width: 90%;
+  --max-width: 600px;
+  --height: 80%;
+  --border-radius: 16px;
 }
 
-.page-container {
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 16px 16px 32px;
-  box-sizing: border-box;
+.mentor-list-content {
+  --background: #f5f5f5;
 }
 
 .loading-state {
@@ -250,6 +290,11 @@ onMounted(() => {
   margin: 0;
   font-size: 14px;
   color: #64748b;
+}
+
+.count-warning {
+  color: #f59e0b;
+  font-weight: 500;
 }
 
 .users-list {
@@ -292,17 +337,39 @@ ion-avatar {
   margin: 0;
 }
 
-.skills-row {
-  margin-top: 6px;
+.user-skills {
+  margin-top: 8px;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
 }
 
 .skill-chip {
-  --padding-start: 10px;
-  --padding-end: 10px;
-  --background: #f8fafc;
+  --background: #e0f2fe;
+  --color: #0369a1;
+  font-size: 12px;
+  height: 24px;
+  margin: 0;
+}
+
+.search-container {
+  padding: 12px 16px;
+  background: white;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.user-searchbar {
+  --box-shadow: none;
+  --border-radius: 8px;
+  --background: #f5f5f5;
+  padding: 0;
+}
+
+.no-results {
+  padding: 32px 16px;
+  text-align: center;
+  color: #64748b;
+  font-size: 14px;
 }
 
 .empty-state {

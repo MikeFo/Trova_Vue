@@ -12,6 +12,7 @@ import {
   getDoc
 } from 'firebase/firestore';
 import { useFirebase } from '../composables/useFirebase';
+import { environment } from '../environments/environment';
 
 export interface CommunityMember {
   id: number;
@@ -23,34 +24,12 @@ export interface CommunityMember {
   isManager?: boolean;
   enabled?: boolean;
   joinDate?: string;
-  skills?: string[];
   [key: string]: any;
 }
 
 export interface AttributeModel {
   name: string;
   value: number;
-}
-
-export interface PaginatedUsersResult {
-  data: CommunityMember[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
-
-export interface DrilldownQuery {
-  metric: string; // e.g., interest, activity, businessTopic, skill, customField
-  value: string;
-  page?: number;
-  pageSize?: number;
-  search?: string;
-  sortBy?: string;
-  sortDir?: 'asc' | 'desc';
-  onlyActive?: boolean;
-  skillType?: string; // general | mentor | mentee
-  customFieldId?: number;
-  useCache?: boolean;
 }
 
 export interface DashboardData {
@@ -75,6 +54,7 @@ export interface UserStats {
   groupsJoined?: number;
   dailyActiveUsers?: number;
   weeklyActiveUsers?: number;
+  userOnboardingIntros?: number; // Users introduced via Weekly Introductions (Onboarding)
   profileCompletionRate?: number; // Percentage
   profileCompletionCompleted?: number; // Number of completed profiles
   profileCompletionTotal?: number; // Total number of profiles
@@ -88,10 +68,14 @@ export interface UserStats {
   spotlightsCreated?: number; // Total spotlights created
   recWallsGiven?: number; // Recommendation walls given
   recWallsReceived?: number; // Recommendation walls received
+  selfIntroduced?: number; // Users who self-introduced (profile spotlights/introductions)
   cityStateCountry?: string; // Location distribution (could be a summary)
   
   // Engagement Attribution
   trovaMagicEngagements?: number; // Engagements from Trova Magic
+  channelPairingEngagements?: number; // Engagements from Channel Pairing
+  mentorMenteeEngagements?: number; // Engagements from Mentor/Mentee matches
+  mentorMenteeUniquePairs?: number; // Unique pairs from Mentor/Mentee matches (deduplicated)
   channelPairingOnDemand?: number; // Channel pairing on-demand engagements
   channelPairingCadence?: number; // Channel pairing cadence engagements
   
@@ -102,11 +86,13 @@ export interface UserStats {
   usersWantMentor?: number; // Users who want to be mentored
   
   // Match Metrics (from Matches report)
-  trovaMagicMatches?: number; // Trova Magic matches
-  channelPairingMatches?: number; // Channel Pairing matches
+  trovaMagicMatches?: number; // Trova Magic unique pairs
+  trovaMagicSessions?: number; // Trova Magic total sessions (match records)
+  channelPairingMatches?: number; // Channel Pairing unique groups
+  channelPairingSessions?: number; // Channel Pairing total sessions (match records)
+  mentorMenteeMatches?: number; // Mentor/Mentee sessions (match records)
   allMatchesEngaged?: number; // Matches where all users engaged
   matchEngagementRate?: number; // Percentage of matches that led to engagement
-  connectionsPerUser?: Array<{ userId: number; fullName: string; email?: string; count: number; profilePicture?: string }>;
   
   // Channel Pairing Metrics
   channelPairingGroups?: number; // Channel pairing groups created
@@ -115,14 +101,45 @@ export interface UserStats {
   [key: string]: any;
 }
 
+export interface WeeklyIntroductionsUserRow {
+  id: number;
+  name: string;
+  email?: string;
+  profilePicture?: string;
+  introMessageSentAt?: string; // ISO date string
+}
+
+export interface SelfIntroducedUserRow {
+  id: number;
+  name: string;
+  email?: string;
+  profilePicture?: string;
+  introducedAt?: string; // ISO date string
+  channelName?: string;
+  channelId?: string;
+}
+
+export interface ConversationStarted {
+  conversationType: 'magic_intro' | 'channel_pairing' | 'mentor_match';
+  channelId: string;
+  createdAt: string;
+  messageCount: number;
+  participants: string;
+}
+
+export interface ConversationsStartedResponse {
+  totalConversations: number;
+  totalMessages: number;
+  conversations: ConversationStarted[];
+}
+
 export class AdminService {
   // Cache for expensive operations
   private matchesCache = new Map<string, { data: any[]; timestamp: number }>();
   private conversationsCache = new Map<string, { data: any; timestamp: number }>();
-  private drilldownCache = new Map<string, { value: PaginatedUsersResult; timestamp: number }>();
+  private profilesCache = new Map<number, { data: any[]; timestamp: number }>();
   private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
   private readonly FIREBASE_CACHE_TTL = 10 * 60 * 1000; // 10 minutes for Firebase queries
-  private readonly DRILLDOWN_CACHE_TTL = 2 * 60 * 1000; // 2 minutes for drilldown lists
   
   // Request deduplication - prevent parallel duplicate requests
   private pendingRequests = new Map<string, Promise<any>>();
@@ -139,39 +156,6 @@ export class AdminService {
    */
   private getConversationsCacheKey(communityId: number): string {
     return `conversations_${communityId}`;
-  }
-
-  /**
-   * Cache key for drilldown queries
-   */
-  private getDrilldownCacheKey(communityId: number, query: DrilldownQuery): string {
-    const {
-      metric,
-      value,
-      page = 1,
-      pageSize = 25,
-      search = '',
-      sortBy = 'fullName',
-      sortDir = 'asc',
-      onlyActive = true,
-      skillType = '',
-      customFieldId = '',
-    } = query;
-
-    return [
-      'drilldown',
-      communityId,
-      metric,
-      value,
-      page,
-      pageSize,
-      search,
-      sortBy,
-      sortDir,
-      onlyActive ? '1' : '0',
-      skillType,
-      customFieldId,
-    ].join('|');
   }
 
   /**
@@ -196,11 +180,31 @@ export class AdminService {
         this.conversationsCache.delete(key);
       }
     }
-    for (const [key, value] of this.drilldownCache.entries()) {
-      if (!this.isCacheValid(value.timestamp, this.DRILLDOWN_CACHE_TTL)) {
-        this.drilldownCache.delete(key);
+    for (const [key, value] of this.profilesCache.entries()) {
+      if (!this.isCacheValid(value.timestamp)) {
+        this.profilesCache.delete(key);
       }
     }
+  }
+
+  /**
+   * Get cached or fetch profiles for a community
+   */
+  private async getCachedProfiles(communityId: number): Promise<any[]> {
+    const cached = this.profilesCache.get(communityId);
+    
+    if (cached && this.isCacheValid(cached.timestamp)) {
+      console.log(`[AdminService] ✅ Using cached profiles for community ${communityId}`);
+      return cached.data;
+    }
+
+    // Fetch profiles
+    const { profileService } = await import('./profile.service');
+    const profiles = await profileService.getProfilesForUserAndCommunity(communityId);
+    
+    // Cache the result
+    this.profilesCache.set(communityId, { data: profiles, timestamp: Date.now() });
+    return profiles;
   }
 
   /**
@@ -232,6 +236,38 @@ export class AdminService {
   }
 
   /**
+   * Check if user is a super admin
+   * Super admin IDs:
+   * Production: [4147, 3113, 4136, 14453]
+   * Non-production: [3434, 3296, 3422, 2920, 2583, 2935]
+   */
+  isSuperAdmin(userId: number): boolean {
+    const isProduction = environment.production;
+    const productionSuperAdmins = [4147, 3113, 4136, 14453];
+    const nonProductionSuperAdmins = [3434, 3296, 3422, 2920, 2583, 2935];
+    
+    const superAdminIds = isProduction ? productionSuperAdmins : nonProductionSuperAdmins;
+    return superAdminIds.includes(userId);
+  }
+
+  /**
+   * Get all communities for super admins
+   * Uses /users/:user_id/all-communities-manager-of endpoint
+   * For super admins, this returns all communities ordered by name
+   */
+  async getAllCommunitiesForSuperAdmin(userId: number): Promise<Community[]> {
+    try {
+      const communities = await apiService.get<Community[]>(
+        `/users/${userId}/all-communities-manager-of`
+      );
+      return communities || [];
+    } catch (error) {
+      console.error('Failed to fetch all communities for super admin:', error);
+      return [];
+    }
+  }
+
+  /**
    * Get all community members
    * Tries multiple endpoint patterns to find the correct one
    */
@@ -247,21 +283,41 @@ export class AdminService {
       if (error?.status === 404 || error?.response?.status === 404) {
         // Try alternative endpoint patterns
         try {
-          // Try POST endpoint that might exist
-          const { profileService } = await import('./profile.service');
-          const profiles = await profileService.getProfilesForUserAndCommunity(communityId);
-          // Convert ProfilesInit to CommunityMember format
-          return profiles.map(profile => ({
-            id: profile.userId || profile.id,
-            fname: profile.fname,
-            lname: profile.lname,
-            fullName: profile.fullName || `${profile.fname} ${profile.lname}`,
-            email: '', // Profiles don't include email
-            profilePicture: profile.profilePicture,
-            isManager: false,
-            enabled: true,
-            joinDate: undefined,
-          }));
+          // Try POST endpoint that might exist (use cached if available)
+          const profiles = await this.getCachedProfiles(communityId);
+          
+          // Fetch user emails by batch fetching user data
+          const userIds = profiles
+            .map(profile => profile.userId || profile.id)
+            .filter((id): id is number => typeof id === 'number' && id > 0);
+          
+          let usersMap = new Map<number, any>();
+          if (userIds.length > 0) {
+            try {
+              const { userService } = await import('./user.service');
+              usersMap = await userService.getUsersByIds(userIds);
+            } catch (userError) {
+              console.warn('[AdminService] Failed to fetch user emails:', userError);
+              // Continue without emails if user service fails
+            }
+          }
+          
+          // Convert ProfilesInit to CommunityMember format with email data
+          return profiles.map(profile => {
+            const userId = profile.userId || profile.id;
+            const user = usersMap.get(userId);
+            return {
+              id: userId,
+              fname: profile.fname,
+              lname: profile.lname,
+              fullName: profile.fullName || `${profile.fname} ${profile.lname}`,
+              email: user?.email || '', // Get email from user data if available
+              profilePicture: profile.profilePicture,
+              isManager: false,
+              enabled: true,
+              joinDate: undefined,
+            };
+          });
         } catch (fallbackError) {
           // Both endpoints failed, return empty array
           console.log(`[AdminService] Members endpoint not found for community ${communityId}, using empty array`);
@@ -408,7 +464,6 @@ export class AdminService {
   ): Promise<AttributeModel[]> {
     try {
       const url = `/communities/${communityId}/attribute?type=${type}&consolidateResults=${consolidateResults}&onlyActive=${onlyActive}`;
-      console.log(`[AdminService] Calling: ${url}`);
       const data = await apiService.get<AttributeModel[]>(url);
       return data || [];
     } catch (error) {
@@ -428,7 +483,6 @@ export class AdminService {
   ): Promise<AttributeModel[]> {
     try {
       const url = `/communities/${communityId}/skills?type=${type}&consolidateResults=${consolidateResults}&onlyActive=${onlyActive}`;
-      console.log(`[AdminService] Calling: ${url}`);
       const data = await apiService.get<AttributeModel[]>(url);
       return data || [];
     } catch (error) {
@@ -447,7 +501,6 @@ export class AdminService {
   ): Promise<AttributeModel[]> {
     try {
       const url = `/communities/${communityId}/businessTopics?consolidateResults=${consolidateResults}&onlyActive=${onlyActive}`;
-      console.log(`[AdminService] Calling: ${url}`);
       const data = await apiService.get<AttributeModel[]>(url);
       return data || [];
     } catch (error) {
@@ -462,7 +515,6 @@ export class AdminService {
   async getCustomFieldsForCharts(communityId: number): Promise<any[]> {
     try {
       const url = `/communities/${communityId}/custom-fields-for-charts`;
-      console.log(`[AdminService] Calling: ${url}`);
       const data = await apiService.get<any[]>(url);
       return data || [];
     } catch (error) {
@@ -479,12 +531,33 @@ export class AdminService {
     customFieldId: number,
     consolidateResults: boolean = true,
     onlyActive: boolean = true
-  ): Promise<AttributeModel[]> {
+  ): Promise<AttributeModel[] | { results: AttributeModel[]; fieldName?: string; customFieldName?: string; fieldId?: number; data?: AttributeModel[] }> {
     try {
       const url = `/communities/${communityId}/custom-field-chart/${customFieldId}?consolidateResults=${consolidateResults}&onlyActive=${onlyActive}`;
-      console.log(`[AdminService] Calling: ${url}`);
-      const data = await apiService.get<AttributeModel[]>(url);
-      return data || [];
+      const response = await apiService.get<any>(url);
+      
+      // Backend may return either:
+      // 1. Direct array: AttributeModel[]
+      // 2. Old wrapped object: { data: AttributeModel[], fieldName?: string, customFieldName?: string, fieldId?: number }
+      // 3. New wrapped object: { results: AttributeModel[], fieldName?: string, customFieldName?: string, fieldId?: number }
+      if (Array.isArray(response)) {
+        return response;
+      } else if (response && Array.isArray(response.results)) {
+        // New format: { results: [...], fieldName, customFieldName, fieldId }
+        return response;
+      } else if (response && Array.isArray(response.data)) {
+        // Old format: { data: [...], fieldName, customFieldName, fieldId }
+        // Convert to new format for consistency
+        return {
+          results: response.data,
+          fieldName: response.fieldName,
+          customFieldName: response.customFieldName,
+          fieldId: response.fieldId
+        };
+      } else {
+        console.warn(`[AdminService] Unexpected response format for custom field ${customFieldId}:`, response);
+        return [];
+      }
     } catch (error) {
       console.error(`Failed to fetch custom field ${customFieldId} data:`, error);
       return [];
@@ -496,197 +569,131 @@ export class AdminService {
    * e.g., get users who have "Affiliate Marketing" as an interest
    * Falls back to filtering members client-side if endpoint doesn't exist
    */
-  async getDrilldownUsers(
-    communityId: number,
-    query: DrilldownQuery
-  ): Promise<PaginatedUsersResult> {
-    const page = query.page ?? 1;
-    const pageSize = query.pageSize ?? 25;
-    const onlyActive = query.onlyActive ?? true;
-    const sortBy = query.sortBy || 'fullName';
-    const sortDir = query.sortDir || 'asc';
-    const search = query.search || '';
-    const useCache = query.useCache !== false;
-
-    const cacheKey = this.getDrilldownCacheKey(communityId, {
-      ...query,
-      page,
-      pageSize,
-      onlyActive,
-      sortBy,
-      sortDir,
-      search,
-    });
-
-    // Serve from cache if present
-    if (useCache) {
-      const cached = this.drilldownCache.get(cacheKey);
-      if (cached && this.isCacheValid(cached.timestamp, this.DRILLDOWN_CACHE_TTL)) {
-        return cached.value;
-      }
-    }
-
-    const metricParam = query.metric;
-    const params: Record<string, string | number | boolean> = {
-      metric: metricParam,
-      value: query.value,
-      page,
-      pageSize,
-      onlyActive,
-      search,
-      sortBy,
-      sortDir,
-    };
-
-    if (query.skillType) {
-      params.skillType = query.skillType;
-    }
-    if (query.customFieldId) {
-      params.customFieldId = query.customFieldId;
-    }
-
-    const queryString = Object.entries(params)
-      .filter(([, v]) => v !== undefined && v !== null)
-      .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
-      .join('&');
-
-    const url = `/communities/${communityId}/analytics/drilldown?${queryString}`;
-
-    try {
-      console.log(`[AdminService] Drilldown -> ${url}`);
-      const result = await apiService.get<PaginatedUsersResult>(url);
-      const normalized: PaginatedUsersResult = {
-        data: result?.data || [],
-        total: result?.total ?? (result?.data?.length || 0),
-        page: result?.page ?? page,
-        pageSize: result?.pageSize ?? pageSize,
-      };
-
-      if (useCache) {
-        this.drilldownCache.set(cacheKey, { value: normalized, timestamp: Date.now() });
-      }
-      return normalized;
-    } catch (error: any) {
-      const status = error?.status || error?.response?.status;
-      if (status !== 404) {
-        console.warn('[AdminService] Drilldown endpoint failed, using fallback:', error);
-      } else {
-        console.log('[AdminService] Drilldown endpoint missing, using fallback');
-      }
-      const fallbackResult = await this.getDrilldownUsersFallback(communityId, {
-        ...query,
-        page,
-        pageSize,
-        onlyActive,
-        sortBy,
-        sortDir,
-        search,
-      });
-      if (useCache) {
-        this.drilldownCache.set(cacheKey, { value: fallbackResult, timestamp: Date.now() });
-      }
-      return fallbackResult;
-    }
-  }
-
-  /**
-   * Fallback drilldown when backend endpoint is absent
-   */
-  private async getDrilldownUsersFallback(
-    communityId: number,
-    query: DrilldownQuery
-  ): Promise<PaginatedUsersResult> {
-    const {
-      metric,
-      value,
-      page = 1,
-      pageSize = 25,
-      search = '',
-      sortBy = 'fullName',
-      sortDir = 'asc',
-      onlyActive = true,
-      skillType,
-      customFieldId,
-    } = query;
-
-    let users: CommunityMember[] = [];
-
-    const attributeMetrics = [
-      'interest',
-      'activity',
-      'intention',
-      'movie',
-      'music',
-      'occupation',
-      'organization',
-      'university',
-      'location',
-    ];
-
-    if (attributeMetrics.includes(metric)) {
-      users = await this.getUsersByAttribute(communityId, metric, value, onlyActive);
-    } else if (metric === 'businessTopic') {
-      users = await this.getUsersByBusinessTopic(communityId, value, onlyActive);
-    } else if (metric === 'skill') {
-      const type = skillType || 'general';
-      users = await this.getUsersBySkill(communityId, type, value, onlyActive);
-    } else if (metric === 'customField' && customFieldId) {
-      users = await this.getUsersByCustomField(communityId, customFieldId, value, onlyActive);
-    }
-
-    // Client-side search
-    const searchLower = search.trim().toLowerCase();
-    if (searchLower) {
-      users = users.filter((u) => {
-        const fields = [
-          u.fullName,
-          u.fname,
-          u.lname,
-          u.email,
-          u.jobTitle,
-          u.currentEmployer,
-        ]
-          .filter(Boolean)
-          .map((f) => String(f).toLowerCase());
-        return fields.some((f) => f.includes(searchLower));
-      });
-    }
-
-    // Client-side sort
-    const sortKey = sortBy || 'fullName';
-    users = users.slice().sort((a, b) => {
-      const dir = sortDir === 'desc' ? -1 : 1;
-      const aVal = (a as any)[sortKey] || '';
-      const bVal = (b as any)[sortKey] || '';
-      return String(aVal).localeCompare(String(bVal)) * dir;
-    });
-
-    const total = users.length;
-    const start = (page - 1) * pageSize;
-    const data = users.slice(start, start + pageSize);
-
-    return { data, total, page, pageSize };
-  }
-
   async getUsersByAttribute(
     communityId: number,
     attributeType: string,
     attributeValue: string,
-    onlyActive: boolean = true
+    onlyActive: boolean = true,
+    skillType?: string // For skills: 'mentor', 'mentee', or 'general'
   ): Promise<CommunityMember[]> {
     try {
-      const url = `/communities/${communityId}/attribute/users?type=${attributeType}&value=${encodeURIComponent(attributeValue)}&onlyActive=${onlyActive}`;
-      console.log(`[AdminService] Calling: ${url}`);
-      const data = await apiService.get<CommunityMember[]>(url);
-      return data || [];
+      let url = `/communities/${communityId}/attribute/users?type=${attributeType}&value=${encodeURIComponent(attributeValue)}&onlyActive=${onlyActive}`;
+      // Add skillType parameter for skills
+      if (attributeType === 'skill' && skillType) {
+        url += `&skillType=${skillType}`;
+      }
+      // Add full=true parameter for business_topic
+      if (attributeType === 'business_topic') {
+        url += `&full=true`;
+      }
+      // Add pagination support - start with first page, can be extended for waterfall loading
+      // Default limit of 200 should cover most cases, but can be increased if needed
+      url += `&limit=200`;
+      const response = await apiService.get<any>(url);
+      
+      // Handle paginated response (if endpoint returns { data: [...], pagination: {...} })
+      // or direct array response
+      let data: any[];
+      let pagination: any = null;
+      
+      if (Array.isArray(response)) {
+        // Direct array response
+        data = response;
+      } else if (response && Array.isArray(response.data)) {
+        // Paginated response
+        data = response.data;
+        pagination = response.pagination;
+      } else {
+        // Unexpected format
+        console.warn(`[AdminService] Unexpected response format for ${attributeType}:${attributeValue}`);
+        data = [];
+      }
+      
+      if (!data || data.length === 0) {
+        return [];
+      }
+      
+      // If pagination exists and there are more pages, load them all before returning
+      if (pagination && pagination.totalPages > 1) {
+        const allUsers = [...data];
+        const totalPages = pagination.totalPages || 1;
+        const currentPage = pagination.currentPage || 1;
+        
+        // Load all remaining pages sequentially (await all before returning)
+        for (let page = currentPage + 1; page <= totalPages; page++) {
+          try {
+            let pageUrl = `/communities/${communityId}/attribute/users?type=${attributeType}&value=${encodeURIComponent(attributeValue)}&onlyActive=${onlyActive}&limit=200&page=${page}`;
+            if (attributeType === 'skill' && skillType) {
+              pageUrl += `&skillType=${skillType}`;
+            }
+            if (attributeType === 'business_topic') {
+              pageUrl += `&full=true`;
+            }
+            
+            const pageResponse = await apiService.get<any>(pageUrl);
+            const pageData = Array.isArray(pageResponse) ? pageResponse : (pageResponse?.data || []);
+            allUsers.push(...pageData);
+          } catch (error) {
+            console.warn(`[AdminService] Failed to load page ${page} for ${attributeType}:${attributeValue}:`, error);
+            // Continue loading other pages even if one fails
+          }
+        }
+        
+        // Update data to include all pages
+        data = allUsers;
+      }
+      
+      // Map response to CommunityMember format, ensuring id is set (use userId if id is missing)
+      const users: CommunityMember[] = data.map((user: any) => ({
+        id: user.id || user.userId,
+        userId: user.userId || user.id,
+        fname: user.fname || '',
+        lname: user.lname || '',
+        fullName: user.fullName || `${user.fname || ''} ${user.lname || ''}`.trim(),
+        email: user.email || '',
+        profilePicture: user.profilePicture,
+        bio: user.bio,
+        pronouns: user.pronouns,
+        isManager: user.isManager,
+        enabled: user.enabled,
+        joinDate: user.joinDate,
+        ...user, // Include any additional fields
+      }));
+      
+      return users;
     } catch (error: any) {
+      const status = error?.status || error?.response?.status;
+      const statusText = error?.statusText || error?.response?.statusText;
+      
+      console.error(`[AdminService] ❌ Error fetching users for ${attributeType}:${attributeValue}:`, {
+        status,
+        statusText,
+        message: error?.message,
+        response: error?.response?.data,
+        fullError: error,
+      });
+      
       // If 404, endpoint doesn't exist - fall back to client-side filtering
-      if (error?.status === 404 || error?.response?.status === 404) {
-        console.log(`[AdminService] Endpoint not found, falling back to client-side filtering for ${attributeType}:${attributeValue}`);
+      if (status === 404) {
         return this.getUsersByAttributeFallback(communityId, attributeType, attributeValue, onlyActive);
       }
-      console.error(`Failed to fetch users for attribute ${attributeType}:${attributeValue}:`, error);
-      return [];
+      
+      // For 400 errors, it might be an unsupported type - try fallback
+      if (status === 400) {
+        console.warn(`[AdminService] 400 Bad Request for ${attributeType}:${attributeValue}, attempting fallback`);
+        return this.getUsersByAttributeFallback(communityId, attributeType, attributeValue, onlyActive);
+      }
+      
+      // For 500 errors, it's a backend SQL issue - log it clearly and try fallback
+      if (status === 500) {
+        console.error(`[AdminService] 500 Internal Server Error - Backend SQL query failed for ${attributeType}:${attributeValue}`, error?.response?.data);
+        // Still try fallback in case it can recover some data
+        return this.getUsersByAttributeFallback(communityId, attributeType, attributeValue, onlyActive);
+      }
+      
+      // For other errors, still try fallback but log the error
+      console.warn(`[AdminService] Error ${status} for ${attributeType}:${attributeValue}, attempting fallback`);
+      return this.getUsersByAttributeFallback(communityId, attributeType, attributeValue, onlyActive);
     }
   }
 
@@ -700,56 +707,429 @@ export class AdminService {
     onlyActive: boolean = true
   ): Promise<CommunityMember[]> {
     try {
-      const { profileService } = await import('./profile.service');
-      const profiles = await profileService.getProfilesForUserAndCommunity(communityId);
+      // Use profiles for fallback filtering. Community member endpoints often do not
+      // include rich profile attributes (interests, intentions, etc.), which would
+      // cause the modal to incorrectly show "No users found".
+      const profiles = await this.getCachedProfiles(communityId);
 
-      const filtered = profiles
-        .map(profile => ({
-          id: profile.userId || profile.id,
-          fname: profile.fname,
-          lname: profile.lname,
-          fullName: profile.fullName || `${profile.fname} ${profile.lname}`,
-          email: (profile as any).email || (profile as any).emailAddress || (profile as any).email_address || '',
-          profilePicture: profile.profilePicture,
-          isManager: false,
-          enabled: (profile as any).enabled !== false,
-          joinDate: undefined,
-          _profile: profile, // keep original for attribute inspection
-        }))
-        .filter(member => {
-          if (onlyActive && member.enabled === false) {
-            return false;
+      const needle = (attributeValue || '').trim().toLowerCase();
+      const matchesNeedle = (value: string) => (value || '').trim().toLowerCase() === needle;
+      const includesNeedle = (value: string) => (value || '').trim().toLowerCase().includes(needle);
+
+      const toStringValues = (input: any): string[] => {
+        if (!input) return [];
+        const arr = Array.isArray(input) ? input : [input];
+        return arr
+          .map((v: any) => {
+            if (!v) return '';
+            if (typeof v === 'string') return v;
+            if (typeof v === 'number') return String(v);
+            // Common shapes: { name }, { label }, { primaryName }, { value }
+            if (typeof v?.name === 'string') return v.name;
+            if (typeof v?.label === 'string') return v.label;
+            if (typeof v?.primaryName === 'string') return v.primaryName;
+            if (typeof v?.secondaryName === 'string') return v.secondaryName;
+            if (typeof v?.value === 'string') return v.value;
+            return '';
+          })
+          .map((s) => s.trim())
+          .filter(Boolean);
+      };
+
+      const extractValues = (profile: any): string[] => {
+        const p = profile || {};
+        const d = p.data || p.profileData || p.profile || {};
+
+        // Prefer explicit fields, but be defensive: data shape differs between envs.
+        switch (attributeType) {
+          case 'interest':
+            // Check all possible locations for interests
+            // Also check userThings which is an array of arrays like [["interest", ["Technology"]]]
+            const interests: string[] = [
+              ...toStringValues(p.interests),
+              ...toStringValues(d.interests),
+              ...toStringValues(p.dataInterests),
+              ...toStringValues(d.dataInterests),
+              // Some environments store interests under passions
+              ...toStringValues(p.passions),
+              ...toStringValues(d.passions),
+              // Check if interests are nested in other objects
+              ...toStringValues(p.profile?.interests),
+              ...toStringValues(p.profileData?.interests),
+              ...toStringValues(p.userProfile?.interests),
+            ];
+            
+            // Check userThings for interests (format: [["interest", ["Technology", "Cooking"]]])
+            if (p.userThings && Array.isArray(p.userThings)) {
+              for (const thing of p.userThings) {
+                if (Array.isArray(thing) && thing.length >= 2) {
+                  const thingType = thing[0];
+                  if (thingType === 'interest' || thingType === 'interests') {
+                    const thingValues = thing[1];
+                    if (Array.isArray(thingValues)) {
+                      interests.push(...toStringValues(thingValues));
+                    } else if (typeof thingValues === 'string') {
+                      interests.push(thingValues.trim());
+                    }
+                  }
+                }
+              }
+            }
+            
+            // Also check data.userThings
+            if (d.userThings && Array.isArray(d.userThings)) {
+              for (const thing of d.userThings) {
+                if (Array.isArray(thing) && thing.length >= 2) {
+                  const thingType = thing[0];
+                  if (thingType === 'interest' || thingType === 'interests') {
+                    const thingValues = thing[1];
+                    if (Array.isArray(thingValues)) {
+                      interests.push(...toStringValues(thingValues));
+                    } else if (typeof thingValues === 'string') {
+                      interests.push(thingValues.trim());
+                    }
+                  }
+                }
+              }
+            }
+            
+            return interests;
+          case 'activity':
+            // "Activities" varies by backend; often corresponds to passions.
+            // Also check userThings which is an array of arrays like [["activity", ["Basketball"]]]
+            const activities: string[] = [
+              ...toStringValues(p.activities),
+              ...toStringValues(d.activities),
+              ...toStringValues(p.dataActivities),
+              ...toStringValues(d.dataActivities),
+              ...toStringValues(p.passions),
+              ...toStringValues(d.passions),
+              // Check nested locations
+              ...toStringValues(p.profile?.activities),
+              ...toStringValues(p.profileData?.activities),
+              ...toStringValues(p.userProfile?.activities),
+            ];
+            
+            // Check userThings for activities (format: [["activity", ["Basketball", "Running"]]])
+            if (p.userThings && Array.isArray(p.userThings)) {
+              for (const thing of p.userThings) {
+                if (Array.isArray(thing) && thing.length >= 2) {
+                  const thingType = thing[0];
+                  if (thingType === 'activity' || thingType === 'activities') {
+                    const thingValues = thing[1];
+                    if (Array.isArray(thingValues)) {
+                      activities.push(...toStringValues(thingValues));
+                    } else if (typeof thingValues === 'string') {
+                      activities.push(thingValues.trim());
+                    }
+                  }
+                }
+              }
+            }
+            
+            // Also check data.userThings
+            if (d.userThings && Array.isArray(d.userThings)) {
+              for (const thing of d.userThings) {
+                if (Array.isArray(thing) && thing.length >= 2) {
+                  const thingType = thing[0];
+                  if (thingType === 'activity' || thingType === 'activities') {
+                    const thingValues = thing[1];
+                    if (Array.isArray(thingValues)) {
+                      activities.push(...toStringValues(thingValues));
+                    } else if (typeof thingValues === 'string') {
+                      activities.push(thingValues.trim());
+                    }
+                  }
+                }
+              }
+            }
+            
+            return activities;
+          case 'intention':
+            // Profile uses plural `intentions`
+            return [
+              ...toStringValues(p.intentions),
+              ...toStringValues(d.intentions),
+              ...toStringValues(p.intention),
+              ...toStringValues(d.intention),
+            ];
+          case 'movie':
+            return [...toStringValues(p.movies), ...toStringValues(d.movies)];
+          case 'music':
+            return [...toStringValues(p.music), ...toStringValues(d.music)];
+          case 'occupation':
+            // Try explicit occupation first, then job title.
+            return [
+              ...toStringValues(p.occupation),
+              ...toStringValues(d.occupation),
+              ...toStringValues(p.jobTitle),
+              ...toStringValues(d.jobTitle),
+            ];
+          case 'organization': {
+            const out: string[] = [];
+            out.push(...toStringValues(p.organizations));
+            out.push(...toStringValues(d.organizations));
+            out.push(...toStringValues(p.currentEmployer));
+            out.push(...toStringValues(d.currentEmployer));
+            out.push(...toStringValues(p.pastEmployers));
+            out.push(...toStringValues(d.pastEmployers));
+            return out;
           }
-
-          const profile = (member as any)._profile;
-          const attributeValues = this.getAttributeValuesFromProfile(profile, attributeType);
-
-          return attributeValues.some(
-            (attr) => attr.toLowerCase() === attributeValue.toLowerCase()
-          );
-        })
-        .map(member => {
-          delete (member as any)._profile;
-          return member;
-        });
-
-      if (filtered.length > 0) {
-        return filtered;
-      }
-
-      // Secondary fallback: use community members payload if profiles lack the attribute
-      const members = await this.getCommunityMembers(communityId);
-      const memberFiltered = members.filter(member => {
-        if (onlyActive && member.enabled === false) {
-          return false;
+          case 'university': {
+            const out: string[] = [];
+            out.push(...toStringValues(p.university));
+            out.push(...toStringValues(d.university));
+            out.push(...toStringValues(p.school));
+            out.push(...toStringValues(d.school));
+            out.push(...toStringValues(p.education));
+            out.push(...toStringValues(d.education));
+            return out;
+          }
+          case 'location': {
+            const out: string[] = [];
+            out.push(...toStringValues(p.currentLocationName));
+            out.push(...toStringValues(d.currentLocationName));
+            out.push(...toStringValues(p.locations));
+            out.push(...toStringValues(d.locations));
+            return out;
+          }
+          case 'businessTopic':
+          case 'business_topic':
+          case 'businessTopics': {
+            // Business topics might be stored in various locations
+            const topics: string[] = [
+              ...toStringValues(p.businessTopics),
+              ...toStringValues(d.businessTopics),
+              ...toStringValues(p.business_topics),
+              ...toStringValues(d.business_topics),
+              ...toStringValues(p.topics),
+              ...toStringValues(d.topics),
+              ...toStringValues(p.businessTopicsList),
+              ...toStringValues(d.businessTopicsList),
+              ...toStringValues(p.businessTopic),
+              ...toStringValues(d.businessTopic),
+            ];
+            
+            // Check userThings for business topics (format: [["businessTopic", ["5g Technology"]]])
+            if (p.userThings && Array.isArray(p.userThings)) {
+              for (const thing of p.userThings) {
+                if (Array.isArray(thing) && thing.length >= 2) {
+                  const thingType = thing[0];
+                  if (thingType === 'businessTopic' || thingType === 'business_topic' || thingType === 'businessTopics' || thingType === 'topic') {
+                    const thingValues = thing[1];
+                    if (Array.isArray(thingValues)) {
+                      topics.push(...toStringValues(thingValues));
+                    } else if (typeof thingValues === 'string') {
+                      topics.push(thingValues.trim());
+                    }
+                  }
+                }
+              }
+            }
+            
+            // Also check data.userThings
+            if (d.userThings && Array.isArray(d.userThings)) {
+              for (const thing of d.userThings) {
+                if (Array.isArray(thing) && thing.length >= 2) {
+                  const thingType = thing[0];
+                  if (thingType === 'businessTopic' || thingType === 'business_topic' || thingType === 'businessTopics' || thingType === 'topic') {
+                    const thingValues = thing[1];
+                    if (Array.isArray(thingValues)) {
+                      topics.push(...toStringValues(thingValues));
+                    } else if (typeof thingValues === 'string') {
+                      topics.push(thingValues.trim());
+                    }
+                  }
+                }
+              }
+            }
+            
+            return topics;
+          }
+          default:
+            // Unknown attribute type - can't reliably fall back
+            return [];
         }
-        const attributeValues = this.getAttributeValuesFromMember(member, attributeType);
-        return attributeValues.some(
-          (attr) => attr.toLowerCase() === attributeValue.toLowerCase()
-        );
+      };
+
+      
+      const normalize = (s: any) => (s == null ? '' : String(s)).trim().toLowerCase();
+
+      const filteredProfiles = profiles.filter((profile: any) => {
+        // We don't have reliable "enabled" on profiles; if the caller requests onlyActive,
+        // we still keep everything (better than showing empty results) unless the profile
+        // explicitly provides an enabled/disabled signal.
+        if (onlyActive) {
+          const enabled = (profile as any)?.enabled;
+          const disabled = (profile as any)?.disabled;
+          if (enabled === false || disabled === true) return false;
+        }
+
+        const values = extractValues(profile);
+        if (!values || values.length === 0) return false;
+
+        // Most attributes are exact matches; location tends to be verbose so allow contains.
+        const isLocation = attributeType === 'location';
+        return values.some((v: string) => (isLocation ? includesNeedle(v) : matchesNeedle(v)));
       });
 
-      return memberFiltered;
+
+      // If profiles don't contain this attribute (common when charts are backed by a separate table),
+      // try to recover user ids from the unconsolidated attribute endpoint and map those ids back
+      // to the cached profiles we already have.
+      if (filteredProfiles.length === 0) {
+        try {
+          const raw = await this.getAttributeChartData(communityId, attributeType, false, onlyActive);
+
+          const normalize = (s: any) => (s == null ? '' : String(s)).trim().toLowerCase();
+          const target = normalize(attributeValue);
+          const isLocation = attributeType === 'location';
+
+          const getAttrLabel = (row: any): string => {
+            // Prefer explicit attribute label fields, but fall back to "name".
+            return (
+              row?.attribute ||
+              row?.attributeName ||
+              row?.attribute_name ||
+              row?.label ||
+              row?.valueName ||
+              row?.value_name ||
+              row?.skill ||
+              row?.topic ||
+              row?.name ||
+              ''
+            );
+          };
+
+          const extractUserId = (row: any): number | null => {
+            const candidates = [
+              row?.userId,
+              row?.user_id,
+              row?.memberId,
+              row?.member_id,
+              row?.profileId,
+              row?.profile_id,
+              row?.slackUserId,
+              row?.slack_user_id,
+              row?.id, // sometimes row id is user id in unconsolidated endpoints
+              row?.user?.id,
+              row?.user?.userId,
+              row?.user?.user_id,
+            ];
+            for (const c of candidates) {
+              const n = typeof c === 'string' ? parseInt(c, 10) : c;
+              if (typeof n === 'number' && Number.isFinite(n) && n > 0) return n;
+            }
+            return null;
+          };
+          
+
+          const matchingUserIds = new Set<number>();
+          let matchedRows = 0;
+          let rowsWithUserIds = 0;
+          let noLabelRows = 0;
+          let noMatchRows = 0;
+          
+          
+          for (const row of raw as any[]) {
+            const label = normalize(getAttrLabel(row));
+            if (!label) {
+              noLabelRows++;
+              continue;
+            }
+            const match = isLocation ? label.includes(target) : label === target;
+            if (!match) {
+              noMatchRows++;
+              continue;
+            }
+            matchedRows++;
+            const uid = extractUserId(row);
+            if (uid) {
+              matchingUserIds.add(uid);
+              rowsWithUserIds++;
+            } else {
+              // Log ALL rows that matched but had no user ID for debugging
+              console.log(`[AdminService] ⚠️ Matched row for "${attributeValue}" but no user ID found:`, {
+                label: getAttrLabel(row),
+                normalizedLabel: label,
+                keys: Object.keys(row),
+                fullRow: row,
+                stringified: JSON.stringify(row),
+              });
+            }
+          }
+
+
+          if (matchingUserIds.size > 0) {
+            const byId = new Map<number, any>();
+            for (const p of profiles as any[]) {
+              const id = typeof p?.userId === 'string' ? parseInt(p.userId, 10) : (p?.userId ?? p?.id);
+              if (typeof id === 'number' && Number.isFinite(id)) byId.set(id, p);
+            }
+
+            const recovered = Array.from(matchingUserIds)
+              .map((id) => byId.get(id))
+              .filter(Boolean);
+
+            console.log(`[AdminService] Recovered ${recovered.length} profiles from ${matchingUserIds.size} user IDs`);
+
+            if (recovered.length > 0) {
+              // Double-check: filter recovered users to ensure they actually have this attribute
+              // (in case the unconsolidated endpoint had stale or incorrect data)
+              const verified = recovered.filter((profile: any) => {
+                const values = extractValues(profile);
+                return values.some((v: string) => (isLocation ? includesNeedle(v) : matchesNeedle(v)));
+              });
+
+              if (verified.length > 0) {
+                return verified.map((profile: any) => ({
+                  id: profile.userId || profile.id,
+                  fname: profile.fname,
+                  lname: profile.lname,
+                  fullName: profile.fullName || `${profile.fname || ''} ${profile.lname || ''}`.trim(),
+                  email: profile.email || '',
+                  profilePicture: profile.profilePicture,
+                  isManager: false,
+                  enabled: profile.enabled ?? true,
+                  joinDate: undefined,
+                }));
+              } else {
+                // If verification filtered everyone out, return unverified (better than empty)
+                console.warn(`[AdminService] ⚠️ Verification filtered all users, returning unverified list`);
+                return recovered.map((profile: any) => ({
+                  id: profile.userId || profile.id,
+                  fname: profile.fname,
+                  lname: profile.lname,
+                  fullName: profile.fullName || `${profile.fname || ''} ${profile.lname || ''}`.trim(),
+                  email: profile.email || '',
+                  profilePicture: profile.profilePicture,
+                  isManager: false,
+                  enabled: profile.enabled ?? true,
+                  joinDate: undefined,
+                }));
+              }
+            }
+          } else {
+            console.warn(`[AdminService] ⚠️ No user IDs found in unconsolidated data for ${attributeType}:${attributeValue} (matched ${matchedRows} rows but none had user IDs)`);
+          }
+        } catch (e) {
+          // If this recovery path fails, continue to return the profile-filter result (empty)
+          console.warn(`[AdminService] Attribute fallback recovery via unconsolidated endpoint failed for ${attributeType}:${attributeValue}`, e);
+        }
+      }
+
+      // Map profiles to CommunityMember shape used by the modal
+      return filteredProfiles.map((profile: any) => ({
+        id: profile.userId || profile.id,
+        fname: profile.fname,
+        lname: profile.lname,
+        fullName: profile.fullName || `${profile.fname || ''} ${profile.lname || ''}`.trim(),
+        email: profile.email || '', // Some envs include email on profile payload
+        profilePicture: profile.profilePicture,
+        isManager: false,
+        enabled: true,
+        joinDate: undefined,
+      }));
     } catch (error) {
       console.error('Error in fallback user filtering:', error);
       return [];
@@ -775,127 +1155,6 @@ export class AdminService {
   }
 
   /**
-   * Normalize raw attribute values from profiles to comparable strings
-   */
-  private normalizeAttributeValues(attribute: any): string[] {
-    if (!attribute) return [];
-
-    if (Array.isArray(attribute)) {
-      return attribute.flatMap(value => this.normalizeAttributeValues(value));
-    }
-
-    if (typeof attribute === 'string') {
-      return [attribute];
-    }
-
-    if (typeof attribute === 'object') {
-      const candidates = [
-        (attribute as any).name,
-        (attribute as any).primaryName,
-        (attribute as any).secondaryName,
-        (attribute as any).title,
-      ].filter(Boolean);
-
-      if (candidates.length > 0) {
-        return candidates as string[];
-      }
-    }
-
-    return [];
-  }
-
-  /**
-   * Extract attribute values from a profile for fallback filtering
-   */
-  private getAttributeValuesFromProfile(profile: any, attributeType: string): string[] {
-    const primaryField = this.getAttributeFieldName(attributeType);
-
-    const attributeSources: Record<string, any[]> = {
-      interest: [...(profile?.interests || []), ...(profile?.passions || [])],
-      activity: profile?.activities || [],
-      intention: profile?.intentions || [],
-      movie: profile?.movies || [],
-      music: profile?.music || [],
-      occupation: [profile?.occupation, profile?.jobTitle].filter(Boolean),
-      organization: [
-        ...(profile?.organizations || []),
-        profile?.currentEmployer,
-        ...(profile?.pastEmployers || []),
-      ].filter(Boolean),
-      university: [
-        ...(profile?.education || []),
-        profile?.school,
-        profile?.degree,
-        profile?.university,
-      ].filter(Boolean),
-      location: [
-        ...(Array.isArray(profile?.locations)
-          ? profile.locations.map((loc: any) => loc?.primaryName || loc?.secondaryName)
-          : []),
-        ...(profile?.hometowns || []),
-        profile?.currentLocationName,
-      ].filter(Boolean),
-    };
-
-    if (primaryField && !(attributeSources as any)[attributeType]) {
-      (attributeSources as any)[attributeType] = [profile?.[primaryField]];
-    }
-
-    const rawValues = attributeSources[attributeType] || [];
-    const normalized = this.normalizeAttributeValues(rawValues)
-      .map(value => value.toString().trim())
-      .filter(Boolean);
-
-    // Deduplicate while preserving original casing
-    const seen = new Set<string>();
-    const unique: string[] = [];
-    normalized.forEach(value => {
-      const lower = value.toLowerCase();
-      if (!seen.has(lower)) {
-        seen.add(lower);
-        unique.push(value);
-      }
-    });
-
-    return unique;
-  }
-
-  /**
-   * Extract attribute values from a community member payload
-   */
-  private getAttributeValuesFromMember(member: any, attributeType: string): string[] {
-    const fieldMap: Record<string, any> = {
-      interest: member?.interests || member?.passions,
-      activity: member?.activities,
-      intention: member?.intention || member?.intentions,
-      movie: member?.movies,
-      music: member?.music,
-      occupation: member?.occupation || member?.jobTitle,
-      organization: member?.organizations || member?.organization || member?.currentEmployer,
-      university: member?.university || member?.school || member?.degree,
-      location: member?.locations,
-    };
-
-    const raw = fieldMap[attributeType];
-    const normalized = this.normalizeAttributeValues(raw)
-      .map(value => value.toString().trim())
-      .filter(Boolean);
-
-    // Deduplicate
-    const seen = new Set<string>();
-    const unique: string[] = [];
-    normalized.forEach(value => {
-      const lower = value.toLowerCase();
-      if (!seen.has(lower)) {
-        seen.add(lower);
-        unique.push(value);
-      }
-    });
-
-    return unique;
-  }
-
-  /**
    * Get users by skill value
    */
   async getUsersBySkill(
@@ -908,36 +1167,16 @@ export class AdminService {
       `/communities/${communityId}/skills/users?type=${skillType}&value=${encodeURIComponent(skillValue)}&onlyActive=${onlyActive}`,
       `/communities/${communityId}/skills/${encodeURIComponent(skillValue)}/users?onlyActive=${onlyActive}`,
       `/communities/${communityId}/users/skills?skill=${encodeURIComponent(skillValue)}&onlyActive=${onlyActive}`,
+      // Try attribute endpoint as skills might be treated as attributes
+      `/communities/${communityId}/attribute/users?type=skill&value=${encodeURIComponent(skillValue)}&onlyActive=${onlyActive}`,
+      `/communities/${communityId}/attribute/users?type=general&value=${encodeURIComponent(skillValue)}&onlyActive=${onlyActive}`,
     ];
 
     for (const url of endpoints) {
       try {
-        console.log(`[AdminService] 🎓 Calling: ${url}`);
         const data = await apiService.get<CommunityMember[]>(url);
         if (data && Array.isArray(data) && data.length > 0) {
-          console.log(`[AdminService] ✅ Found ${data.length} users with skill "${skillValue}"`);
-
-          const enriched = data.map((user: any) => {
-            const skillSources = [
-              user.skills,
-              user.skillList,
-              user.skillsList,
-              user.skillNames,
-              user.skill_names,
-              user.skillsString,
-              user.skills_string,
-            ];
-
-            const normalizedSkills = Array.from(
-              new Set(
-                skillSources.flatMap((src: any) => this.normalizeSkills(src))
-              )
-            );
-
-            return normalizedSkills.length > 0 ? { ...user, skills: normalizedSkills } : user;
-          });
-
-          return enriched;
+          return data;
         }
         // If empty array, continue to next endpoint
       } catch (error: any) {
@@ -951,14 +1190,116 @@ export class AdminService {
       }
     }
 
-    // If all endpoints fail, try fallback
-    console.log(`[AdminService] ⚠️ All endpoints failed, trying fallback for skill ${skillType}:${skillValue}`);
+    // If all endpoints fail, try attribute endpoint (backend now supports skill type with skillType parameter)
+    console.log(`[AdminService] ⚠️ All skill endpoints failed, trying attribute endpoint for skill ${skillType}:${skillValue}`);
+    try {
+      // Backend supports type=skill with skillType parameter (mentor/mentee/general)
+      // Pass skillType to the attribute endpoint so it can filter correctly
+      const attributeUsers = await this.getUsersByAttribute(communityId, 'skill', skillValue, onlyActive, skillType || 'general');
+      if (attributeUsers && attributeUsers.length > 0) {
+        console.log(`[AdminService] ✅ Attribute endpoint found ${attributeUsers.length} users with skill "${skillValue}" (type: ${skillType || 'general'})`);
+        return attributeUsers;
+      }
+    } catch (error: any) {
+      const status = error?.status || error?.response?.status;
+      if (status === 400) {
+        console.log(`[AdminService] Attribute endpoint returned 400 - skill type might not be fully supported yet`);
+      } else {
+        console.log(`[AdminService] Attribute endpoint also failed (${status}), trying profile fallback`);
+      }
+    }
+
+    // Last resort: try profile-based fallback
     return this.getUsersBySkillFallback(communityId, skillType, skillValue, onlyActive);
   }
 
   /**
+   * Get all individual skills from profiles (expands "Other" category)
+   */
+  async getAllIndividualSkills(communityId: number, onlyActive: boolean = true): Promise<AttributeModel[]> {
+    const profiles = await this.getCachedProfiles(communityId);
+    const skillCounts = new Map<string, number>();
+    
+    profiles.forEach(profile => {
+      // Extract skills from profile
+      const skills = (profile as any).dataSkills || profile.skills || (profile as any).userSkills;
+      let skillsArray: string[] = [];
+      
+      if (Array.isArray(skills)) {
+        skillsArray = skills.map((s: any) => typeof s === 'string' ? s : s?.name || s?.skill || s?.value || '').filter(Boolean);
+      } else if (typeof skills === 'string') {
+        skillsArray = skills.split(',').map(s => s.trim()).filter(Boolean);
+      }
+      
+      // Count each skill
+      skillsArray.forEach(skill => {
+        if (skill) {
+          skillCounts.set(skill, (skillCounts.get(skill) || 0) + 1);
+        }
+      });
+    });
+    
+    // Convert to AttributeModel format
+    const allSkills: AttributeModel[] = Array.from(skillCounts.entries())
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+    
+    console.log(`[AdminService] ✅ Extracted ${allSkills.length} individual skills from profiles`);
+    return allSkills;
+  }
+
+  /**
+   * Get all users with their skills displayed (for "Other" category)
+   */
+  private async getAllUsersWithSkills(communityId: number, onlyActive: boolean = true): Promise<CommunityMember[]> {
+    const profiles = await this.getCachedProfiles(communityId);
+    
+    const users = profiles
+      .map(profile => {
+        // Extract skills from profile
+        const skills = (profile as any).dataSkills || profile.skills || (profile as any).userSkills;
+        let skillsArray: string[] = [];
+        
+        if (Array.isArray(skills)) {
+          skillsArray = skills.map((s: any) => typeof s === 'string' ? s : s?.name || s?.skill || s?.value || '');
+        } else if (typeof skills === 'string') {
+          skillsArray = skills.split(',').map(s => s.trim()).filter(Boolean);
+        }
+        
+        return {
+          id: profile.userId || profile.id,
+          fname: profile.fname,
+          lname: profile.lname,
+          fullName: profile.fullName || `${profile.fname} ${profile.lname}`,
+          email: '',
+          profilePicture: profile.profilePicture,
+          isManager: false,
+          enabled: true,
+          joinDate: undefined,
+          jobTitle: profile.jobTitle,
+          currentEmployer: profile.currentEmployer,
+          // Include skills for display
+          skills: skillsArray,
+          skillsDisplay: skillsArray.length > 0 ? skillsArray.join(', ') : 'No skills listed'
+        };
+      })
+      .filter(member => {
+        if (onlyActive && member.enabled === false) {
+          return false;
+        }
+        return true;
+      });
+
+    console.log(`[AdminService] ✅ Found ${users.length} users with skills for "Other" category`);
+    return users;
+  }
+
+  /**
    * Fallback: Get all members and filter by skill client-side
-   * Uses profiles endpoint which contains skills data
+   * Tries multiple approaches:
+   * 1. Try skills endpoint with consolidateResults=false to get per-user data
+   * 2. Use profiles endpoint which might contain skills data
+   * 3. Use community members and try to match with skills from other sources
    */
   private async getUsersBySkillFallback(
     communityId: number,
@@ -967,66 +1308,179 @@ export class AdminService {
     onlyActive: boolean = true
   ): Promise<CommunityMember[]> {
     try {
-      // First, try mentor/mentee users (they often include skills data)
+      // First, try getting unconsolidated skills data which might include user info
       try {
-        const mentorUsers = await this.getMentorMenteeUsers(communityId, 'can');
-        const menteeUsers = await this.getMentorMenteeUsers(communityId, 'want');
-        const combined = [...mentorUsers, ...menteeUsers];
-
-        const filteredMentorMentee = combined
-          .map(user => {
-            const normalizedSkills = this.normalizeSkills((user as any).skills);
-            return normalizedSkills.length > 0 ? { ...user, skills: normalizedSkills } : user;
-          })
-          .filter(user => {
-            const skills = (user as any).skills;
-            if (!skills || skills.length === 0) return false;
-            return skills.some((s: string) => s.toLowerCase() === skillValue.toLowerCase());
+        const unconsolidatedSkills = await this.getSkillsChartData(communityId, skillType || 'all', false, onlyActive);
+        console.log(`[AdminService] Fallback: Got ${unconsolidatedSkills.length} unconsolidated skill entries`);
+        
+        
+        // Check if unconsolidated data has user information
+        // The unconsolidated data might have different structures:
+        // 1. { name: "Asana", userId: 123, ... }
+        // 2. { name: "Asana|userId:123", value: 1, ... }
+        // 3. { skill: "Asana", user_id: 123, ... }
+        // 4. { name: "userId:123|Asana", ... }
+        const skillEntries = unconsolidatedSkills.filter((skill: any) => {
+          const skillName = skill.name || skill.skill || skill.value;
+          // Check if name contains the skill (might be in format "skill|userId" or "userId|skill")
+          if (typeof skillName === 'string') {
+            return skillName.toLowerCase().includes(skillValue.toLowerCase());
+          }
+          return skillName?.toLowerCase() === skillValue.toLowerCase();
+        });
+        
+        console.log(`[AdminService] Found ${skillEntries.length} entries matching skill "${skillValue}"`);
+        
+        if (skillEntries.length > 0) {
+          // Try to extract user IDs from various possible fields
+          const userIds: number[] = [];
+          
+          skillEntries.forEach((entry: any) => {
+            // Try different possible field names for user ID
+            const candidates = [
+              entry.userId,
+              entry.user_id,
+              entry.memberId,
+              entry.member_id,
+              entry.profileId,
+              entry.profile_id,
+              entry.slackUserId,
+              entry.slack_user_id,
+              entry.id,
+            ];
+            for (const c of candidates) {
+              const n = typeof c === 'string' ? parseInt(c, 10) : c;
+              if (typeof n === 'number' && Number.isFinite(n) && n > 0) {
+                userIds.push(n);
+                break;
+              }
+            }
+            
+            // Check if name contains user ID (format: "skill|userId" or "userId|skill" or "userId:123")
+            if (entry.name && typeof entry.name === 'string') {
+              // Try to extract from pipe-separated format
+              const parts = entry.name.split('|');
+              parts.forEach((part: string) => {
+                // Check for "userId:123" format
+                const userIdMatch = part.match(/userId[:\s]*(\d+)/i) || part.match(/user[:\s]*(\d+)/i);
+                if (userIdMatch && userIdMatch[1]) {
+                  const id = parseInt(userIdMatch[1], 10);
+                  if (!isNaN(id)) userIds.push(id);
+                }
+                // Check if part is just a number (might be user ID)
+                const numPart = parseInt(part.trim(), 10);
+                if (!isNaN(numPart) && numPart > 0 && numPart < 1000000) {
+                  userIds.push(numPart);
+                }
+              });
+            }
           });
-
-        if (filteredMentorMentee.length > 0) {
-          console.log(`[AdminService] ✅ Fallback (mentor/mentee): Found ${filteredMentorMentee.length} users with skill "${skillValue}"`);
-          return filteredMentorMentee;
+          
+          // Remove duplicates
+          const uniqueUserIds = [...new Set(userIds)];
+          console.log(`[AdminService] Extracted ${uniqueUserIds.length} unique user IDs from unconsolidated data:`, uniqueUserIds);
+          
+          if (uniqueUserIds.length > 0) {
+            try {
+              const allMembers = await this.getCommunityMembers(communityId);
+              const filtered = allMembers.filter(member => uniqueUserIds.includes(member.id));
+              if (onlyActive) {
+                const activeFiltered = filtered.filter(m => m.enabled !== false);
+                console.log(`[AdminService] ✅ Found ${activeFiltered.length} active members with skill "${skillValue}"`);
+                return activeFiltered;
+              }
+              console.log(`[AdminService] ✅ Found ${filtered.length} members with skill "${skillValue}"`);
+              return filtered;
+            } catch (memberError) {
+              console.warn(`[AdminService] Failed to fetch community members:`, memberError);
+            }
+          }
         }
-      } catch (mmError) {
-        console.warn('[AdminService] Mentor/mentee fallback failed, continuing to profiles:', mmError);
+      } catch (error) {
+        console.log(`[AdminService] Unconsolidated skills approach failed:`, error);
       }
 
-      // Use profiles endpoint which contains skills data
-      const { profileService } = await import('./profile.service');
-      const profiles = await profileService.getProfilesForUserAndCommunity(communityId);
+      // Try getting community members and check if they have skills data
+      try {
+        const allMembers = await this.getCommunityMembers(communityId);
+        console.log(`[AdminService] Fallback: Checking ${allMembers.length} community members for skill "${skillValue}"`);
+        
+        // Check if members have skills in any field
+        const membersWithSkill = allMembers.filter((member: any) => {
+          // Check various possible fields for skills
+          const skills = member.skills || member.skill || member.userSkills || member.dataSkills || member.attributes?.skills;
+          if (!skills) return false;
+          
+          // Handle different skill formats
+          if (Array.isArray(skills)) {
+            return skills.some((skill: any) => {
+              const skillName = typeof skill === 'string' ? skill : skill?.name || skill?.skill || skill?.value;
+              return skillName?.toLowerCase() === skillValue.toLowerCase();
+            });
+          }
+          if (typeof skills === 'string') {
+            return skills.toLowerCase().includes(skillValue.toLowerCase());
+          }
+          return false;
+        });
+        
+        if (membersWithSkill.length > 0) {
+          console.log(`[AdminService] ✅ Found ${membersWithSkill.length} members with skill "${skillValue}" from community members`);
+          if (onlyActive) {
+            return membersWithSkill.filter(m => m.enabled !== false);
+          }
+          return membersWithSkill;
+        }
+      } catch (memberError) {
+        console.log(`[AdminService] Community members approach failed:`, memberError);
+      }
+
+      // Fallback to profiles endpoint (use cached if available)
+      const profiles = await this.getCachedProfiles(communityId);
+      const normalize = (s: any) => (s == null ? '' : String(s)).trim().toLowerCase();
+      const normalizedSkillValue = normalize(skillValue);
       
-      console.log(`[AdminService] Fallback: Filtering ${profiles.length} profiles for skill "${skillValue}"`);
+      console.log(`[AdminService] Fallback: Filtering ${profiles.length} profiles for skill "${skillValue}" (type: ${skillType})`);
+      
       
       const filtered = profiles
-        .map(profile => {
-          const normalizedSkills = this.normalizeSkills((profile as any).skills);
-
-          return {
-            id: profile.userId || profile.id,
-            fname: profile.fname,
-            lname: profile.lname,
-            fullName: profile.fullName || `${profile.fname} ${profile.lname}`,
-            email: (profile as any).email || (profile as any).emailAddress || (profile as any).email_address || '',
-            profilePicture: profile.profilePicture,
-            isManager: false,
-            enabled: (profile as any).enabled !== false,
-            joinDate: undefined,
-            jobTitle: profile.jobTitle,
-            currentEmployer: profile.currentEmployer,
-            skills: normalizedSkills.length > 0 ? normalizedSkills : undefined,
-            // Include original profile data for skill checking
-            _profile: profile,
-          };
-        })
+        .map(profile => ({
+          id: profile.userId || profile.id,
+          fname: profile.fname,
+          lname: profile.lname,
+          fullName: profile.fullName || `${profile.fname} ${profile.lname}`,
+          email: '', // Profiles don't include email
+          profilePicture: profile.profilePicture,
+          isManager: false,
+          enabled: true,
+          joinDate: undefined,
+          jobTitle: profile.jobTitle,
+          currentEmployer: profile.currentEmployer,
+          // Include original profile data for skill checking
+          _profile: profile,
+        }))
         .filter(member => {
           const profile = (member as any)._profile;
-          if (onlyActive && member.enabled === false) {
-            return false;
+          
+          // Check skills field - profiles might have skills in different fields
+          // Try: skills, dataSkills, userSkills, or any field containing "skill"
+          // Also check all fields in case skills are stored elsewhere
+          let skills = profile.skills || (profile as any).dataSkills || (profile as any).userSkills;
+          
+          // If not found, check all fields that might contain skills
+          if (!skills) {
+            // Check all fields for skill-related data
+            for (const key of Object.keys(profile)) {
+              if (key.toLowerCase().includes('skill')) {
+                const value = (profile as any)[key];
+                if (value) {
+                  skills = value;
+                  break;
+                }
+              }
+            }
           }
           
-          // Check skills field - profiles have skills data
-          const skills = profile.skills;
           if (!skills) {
             return false;
           }
@@ -1036,10 +1490,25 @@ export class AdminService {
             return skills.some((skill: any) => {
               const skillName = typeof skill === 'string' 
                 ? skill 
-                : skill?.name || skill?.skill || skill?.value;
-              const skillTypeMatch = !skillType || skillType === 'general' || 
-                (typeof skill === 'object' && (skill?.type === skillType || skill?.skillType === skillType));
-              return skillName?.toLowerCase() === skillValue.toLowerCase() && skillTypeMatch;
+                : skill?.name || skill?.skill || skill?.value || skill?.skillName;
+              const normalizedSkillName = normalize(skillName);
+              
+              // For mentor/mentee types, we need to check if the skill matches AND the type matches
+              // But if skillType is 'general' or empty, just match the name
+              if (skillType && skillType !== 'general') {
+                // Check if this skill has the right type (for mentor/mentee filtering)
+                // The profile might have mentor/mentee info in separate fields
+                // For now, if skillType is specified, we'll match the skill name
+                // The type filtering might need to be done at a different level
+                const skillTypeMatch = typeof skill === 'object' 
+                  ? (skill?.type === skillType || skill?.skillType === skillType || skill?.can_be_mentor || skill?.wants_to_be_mentee)
+                  : true; // If it's a string, we can't check type, so match anyway
+                
+                return normalizedSkillName === normalizedSkillValue && (skillTypeMatch || skillType === 'general');
+              }
+              
+              // For general skills or when no type specified, just match the name
+              return normalizedSkillName === normalizedSkillValue;
             });
           }
 
@@ -1049,15 +1518,17 @@ export class AdminService {
               const skill = skills[key];
               const skillName = typeof skill === 'string' 
                 ? skill 
-                : skill?.name || skill?.skill || key;
+                : skill?.name || skill?.skill || skill?.value || skill?.skillName || key;
               return skillName?.toLowerCase() === skillValue.toLowerCase();
             });
           }
 
-          // Handle string format (comma-separated)
+          // Handle string format (comma-separated) - this is how skills appear on profile pages
           if (typeof skills === 'string') {
-            return skills.split(',').some(s => 
-              s.trim().toLowerCase() === skillValue.toLowerCase()
+            // Split by comma and check each skill
+            const skillList = skills.split(',').map(s => s.trim());
+            return skillList.some(s => 
+              s.toLowerCase() === skillValue.toLowerCase()
             );
           }
 
@@ -1085,20 +1556,58 @@ export class AdminService {
     topicValue: string,
     onlyActive: boolean = true
   ): Promise<CommunityMember[]> {
+    // Try the attribute endpoint first (backend now fixed to handle JSON fields properly)
+    // This is the preferred method since it queries the join table directly and returns individual user rows
     try {
-      const url = `/communities/${communityId}/businessTopics/users?value=${encodeURIComponent(topicValue)}&onlyActive=${onlyActive}`;
-      console.log(`[AdminService] Calling: ${url}`);
-      const data = await apiService.get<CommunityMember[]>(url);
-      return data || [];
-    } catch (error: any) {
-      // If 404, endpoint doesn't exist - fall back to client-side filtering
-      if (error?.status === 404 || error?.response?.status === 404) {
-        console.log(`[AdminService] Endpoint not found, falling back to client-side filtering for business topic ${topicValue}`);
-        return this.getUsersByBusinessTopicFallback(communityId, topicValue, onlyActive);
+      const attributeUsers = await this.getUsersByAttribute(communityId, 'business_topic', topicValue, onlyActive);
+      if (attributeUsers && attributeUsers.length > 0) {
+        console.log(`[AdminService] ✅ Attribute endpoint found ${attributeUsers.length} users for business topic "${topicValue}"`);
+        return attributeUsers;
+      } else {
+        console.log(`[AdminService] ⚠️ Attribute endpoint returned 0 users for business topic "${topicValue}"`);
       }
-      console.error(`Failed to fetch users for business topic ${topicValue}:`, error);
-      return [];
+    } catch (attrError: any) {
+      const attrStatus = attrError?.status || attrError?.response?.status;
+      // If it's still a 500 error, the backend fix might not be deployed yet
+      if (attrStatus === 500) {
+        console.error(`[AdminService] ❌ Attribute endpoint still returning 500 for business_topic "${topicValue}"`);
+        console.error(`[AdminService] Backend fix may not be deployed yet, or there may be another issue.`);
+      } else {
+        console.error(`[AdminService] ❌ Attribute endpoint failed for business_topic "${topicValue}":`, {
+          status: attrStatus,
+          message: attrError?.message,
+          response: attrError?.response?.data,
+        });
+      }
     }
+
+    // Fallback: Try alternative business topics endpoints
+    const endpoints = [
+      `/communities/${communityId}/businessTopics/users?value=${encodeURIComponent(topicValue)}&onlyActive=${onlyActive}`,
+      `/communities/${communityId}/businessTopics/${encodeURIComponent(topicValue)}/users?onlyActive=${onlyActive}`,
+      `/communities/${communityId}/users/businessTopics?topic=${encodeURIComponent(topicValue)}&onlyActive=${onlyActive}`,
+    ];
+
+    for (const url of endpoints) {
+      try {
+        const data = await apiService.get<CommunityMember[]>(url);
+        if (data && Array.isArray(data) && data.length > 0) {
+          console.log(`[AdminService] ✅ Found ${data.length} users with business topic "${topicValue}" from alternative endpoint`);
+          return data;
+        }
+      } catch (error: any) {
+        const status = error?.status || error?.response?.status;
+        if (status === 404) {
+          // Try next endpoint
+          continue;
+        } else {
+          console.warn(`[AdminService] Error fetching users for business topic ${topicValue} from ${url}:`, error);
+        }
+      }
+    }
+    
+    // Last resort: try client-side filtering from profiles
+    return this.getUsersByBusinessTopicFallback(communityId, topicValue, onlyActive);
   }
 
   /**
@@ -1110,62 +1619,181 @@ export class AdminService {
     onlyActive: boolean = true
   ): Promise<CommunityMember[]> {
     try {
-      // Try profiles first (often richer than members)
-      try {
-        const { profileService } = await import('./profile.service');
-        const profiles = await profileService.getProfilesForUserAndCommunity(communityId);
-        const fromProfiles = profiles
-          .map(profile => ({
-            id: profile.userId || profile.id,
-            fname: profile.fname,
-            lname: profile.lname,
-            fullName: profile.fullName || `${profile.fname} ${profile.lname}`,
-            email: (profile as any).email || (profile as any).emailAddress || (profile as any).email_address || '',
-            profilePicture: profile.profilePicture,
-            isManager: false,
-            enabled: (profile as any).enabled !== false,
-            joinDate: undefined,
-            _profile: profile,
-          }))
-          .filter(member => {
-            if (onlyActive && member.enabled === false) return false;
-            const profile = (member as any)._profile;
-            const topicsRaw = (profile as any).businessTopics || (profile as any).businessTopic;
-            const topics = this.normalizeAttributeValues(topicsRaw).map(v => v.toLowerCase());
-            return topics.includes(topicValue.toLowerCase());
-          })
-          .map(member => {
-            delete (member as any)._profile;
-            return member;
-          });
+      // Use profiles instead of community members for better data access
+      const profiles = await this.getCachedProfiles(communityId);
+      const normalize = (s: any) => (s == null ? '' : String(s)).trim().toLowerCase();
+      const target = normalize(topicValue);
+      
+      console.log(`[AdminService] 🔍 Business topic fallback: Checking ${profiles.length} profiles for "${topicValue}"`);
+      
+      // Debug: Log sample profile structure to understand data format
+      
+      const filtered = profiles
+        .map(profile => ({
+          id: profile.userId || profile.id,
+          fname: profile.fname,
+          lname: profile.lname,
+          fullName: profile.fullName || `${profile.fname || ''} ${profile.lname || ''}`.trim(),
+          email: profile.email || '',
+          profilePicture: profile.profilePicture,
+          isManager: false,
+          enabled: profile.enabled ?? true,
+          joinDate: undefined,
+          _profile: profile, // Keep original for filtering
+        }))
+        .filter(member => {
+          if (onlyActive && member.enabled === false) {
+            return false;
+          }
 
-        if (fromProfiles.length > 0) {
-          return fromProfiles;
-        }
-      } catch (profileErr) {
-        console.warn('[AdminService] Profiles-based business topic fallback failed:', profileErr);
-      }
+          const profile = (member as any)._profile;
+          const p = profile || {};
+          const d = p.data || p.profileData || p.profile || {};
 
-      const allMembers = await this.getCommunityMembers(communityId);
-      const filtered = allMembers.filter(member => {
-        if (onlyActive && member.enabled === false) {
+          // Check all possible locations for business topics
+          const businessTopics = 
+            p.businessTopics ||
+            d.businessTopics ||
+            p.business_topics ||
+            d.business_topics ||
+            p.topics ||
+            d.topics ||
+            p.businessTopicsList ||
+            d.businessTopicsList ||
+            p.businessTopic ||
+            d.businessTopic ||
+            p.business_topic ||
+            d.business_topic;
+
+          // Also check userThings array for business topics
+          // Format: [["businessTopic", ["Angel Investing", "AI"]]] or [["topic", ["Angel Investing"]]]
+          const userThings = p.userThings || d.userThings;
+          if (userThings && Array.isArray(userThings)) {
+            for (const thing of userThings) {
+              if (Array.isArray(thing) && thing.length >= 2) {
+                const thingType = thing[0];
+                if (thingType === 'businessTopic' || thingType === 'business_topic' || thingType === 'businessTopics' || thingType === 'topic') {
+                  const thingValues = thing[1];
+                  if (Array.isArray(thingValues)) {
+                    const found = thingValues.some((val: any) => {
+                      const valStr = typeof val === 'string' ? val : val?.name || val?.topic || val?.value || val?.label || '';
+                      return normalize(valStr) === target;
+                    });
+                    if (found) return true;
+                  } else if (typeof thingValues === 'string') {
+                    if (normalize(thingValues) === target) return true;
+                  }
+                }
+              }
+            }
+          }
+
+          if (!businessTopics) {
+            return false;
+          }
+
+          // Handle array format
+          if (Array.isArray(businessTopics)) {
+            return businessTopics.some((topic: any) => {
+              const topicName = typeof topic === 'string' 
+                ? topic 
+                : topic?.name || topic?.topic || topic?.value || topic?.label;
+              return normalize(topicName) === target;
+            });
+          }
+          
+          // Handle string format (comma-separated)
+          if (typeof businessTopics === 'string') {
+            const topics = businessTopics.split(',').map(t => normalize(t));
+            return topics.includes(target);
+          }
+
           return false;
-        }
+        });
 
-        const businessTopics = (member as any).businessTopics || (member as any).businessTopic;
-        if (!businessTopics) return false;
-
-        if (Array.isArray(businessTopics)) {
-          return businessTopics.some((topic: string) =>
-            topic?.toLowerCase() === topicValue.toLowerCase()
-          );
-        } else if (typeof businessTopics === 'string') {
-          return businessTopics.toLowerCase() === topicValue.toLowerCase();
-        }
-
-        return false;
+      // Remove temporary _profile field
+      filtered.forEach(member => {
+        delete (member as any)._profile;
       });
 
+      console.log(`[AdminService] ✅ Business topic fallback: Found ${filtered.length} users with topic "${topicValue}"`);
+      
+      // If profile-based filtering found 0 users, try multiple recovery approaches
+      if (filtered.length === 0) {
+        // First, try using the attribute endpoint (backend now supports business_topic type)
+        try {
+          console.log(`[AdminService] Trying attribute endpoint for business topic "${topicValue}"...`);
+          // Use business_topic (with underscore) as that's what the backend expects
+          const attributeUsers = await this.getUsersByAttribute(communityId, 'business_topic', topicValue, onlyActive);
+          if (attributeUsers && attributeUsers.length > 0) {
+            console.log(`[AdminService] ✅ Attribute endpoint found ${attributeUsers.length} users for business topic "${topicValue}"`);
+            return attributeUsers;
+          } else {
+            console.log(`[AdminService] ⚠️ Attribute endpoint returned 0 users for business topic "${topicValue}"`);
+          }
+        } catch (error: any) {
+          const status = error?.status || error?.response?.status;
+          console.error(`[AdminService] ❌ Attribute endpoint failed for business_topic "${topicValue}":`, {
+            status,
+            message: error?.message,
+            response: error?.response?.data,
+          });
+        }
+        
+        // Second, try querying all community members and checking their business topics via a different endpoint
+        // Since business topics are in a join table, we need to query them differently
+        try {
+          console.log(`[AdminService] Trying to get business topic users via community members endpoint...`);
+          // Try to get all members and then filter - but this won't work if business topics aren't in profiles
+          // Instead, let's try a direct query endpoint if it exists
+          const memberUrl = `/communities/${communityId}/members?onlyActive=${onlyActive}`;
+          try {
+            const allMembers = await apiService.get<any[]>(memberUrl);
+            console.log(`[AdminService] Got ${allMembers?.length || 0} members, but business topics aren't in member data`);
+          } catch (e) {
+            console.log(`[AdminService] Members endpoint not available or failed`);
+          }
+        } catch (e) {
+          console.warn(`[AdminService] Member query approach failed:`, e);
+        }
+
+        // Third, try unconsolidated endpoint recovery (but this returns aggregated data, not user rows)
+        try {
+          console.log(`[AdminService] Profile-based filtering found 0 users for business topic "${topicValue}", trying unconsolidated endpoint recovery...`);
+          const raw = await this.getBusinessTopicsChartData(communityId, false, onlyActive);
+          console.log(`[AdminService] Got ${raw.length} rows from unconsolidated business topics endpoint`);
+          
+          // The unconsolidated endpoint returns aggregated data like {label: "Angel Investing", value: 2}
+          // This doesn't have user IDs, so we can't extract users from it
+          // But we can log it for debugging
+          if (raw.length > 0) {
+            console.log(`[AdminService] 🔍 First 3 rows from unconsolidated business topics:`, raw.slice(0, 3).map((r: any, i: number) => ({
+              index: i,
+              fullRow: r,
+              keys: Object.keys(r),
+              name: r?.name,
+              label: r?.label,
+              value: r?.value,
+              count: r?.count,
+              // Note: unconsolidated data is aggregated and doesn't contain user IDs
+            })));
+          }
+          
+          // Since unconsolidated data is aggregated, we can't extract user IDs from it
+          // We need a backend endpoint that returns the actual join table data
+          console.log(`[AdminService] ⚠️ Unconsolidated endpoint returns aggregated data without user IDs. Need backend endpoint fix.`);
+        } catch (e) {
+          console.warn(`[AdminService] Business topic unconsolidated endpoint recovery failed:`, e);
+        }
+
+        // Fourth: Since we can't get user IDs from aggregated data, we need to inform the user
+        // that the backend endpoint needs to be fixed, OR we need to query profiles differently
+        // For now, return empty array - the backend SQL query needs to be fixed
+        console.error(`[AdminService] ❌ Cannot retrieve users for business topic "${topicValue}" - backend endpoint returns 500 error and unconsolidated data is aggregated without user IDs.`);
+        console.error(`[AdminService] The backend SQL query is failing: "could not identify an equality operator for type json"`);
+        console.error(`[AdminService] This indicates data_business_topic.name is a JSON field and needs proper JSON query syntax.`);
+      }
+      
       return filtered;
     } catch (error) {
       console.error('Error in fallback business topic filtering:', error);
@@ -1183,67 +1811,80 @@ export class AdminService {
     onlyActive: boolean = true
   ): Promise<CommunityMember[]> {
     try {
-      const url = `/communities/${communityId}/custom-field/${customFieldId}/users?value=${encodeURIComponent(fieldValue)}&onlyActive=${onlyActive}`;
-      console.log(`[AdminService] Calling: ${url}`);
-      const data = await apiService.get<CommunityMember[]>(url);
-      return data || [];
-    } catch (error: any) {
-      if (error?.status === 404 || error?.response?.status === 404) {
-        console.log(`[AdminService] Endpoint not found for custom field ${customFieldId}:${fieldValue}, using fallback`);
-        return this.getUsersByCustomFieldFallback(communityId, customFieldId, fieldValue, onlyActive);
+      // Use the standard attribute/users endpoint with type=custom
+      const url = `/communities/${communityId}/attribute/users?type=custom&customFieldId=${customFieldId}&value=${encodeURIComponent(fieldValue)}&onlyActive=${onlyActive}&limit=200`;
+      const response = await apiService.get<any>(url);
+      
+      // Handle paginated response (if endpoint returns { data: [...], pagination: {...} })
+      // or direct array response
+      let data: any[];
+      let pagination: any = null;
+      
+      if (Array.isArray(response)) {
+        data = response;
+      } else if (response && Array.isArray(response.data)) {
+        data = response.data;
+        pagination = response.pagination;
+      } else {
+        console.warn(`[AdminService] Unexpected response format for custom field ${customFieldId}:${fieldValue}`);
+        data = [];
       }
-      console.error(`Failed to fetch users for custom field ${customFieldId}:${fieldValue}:`, error);
-      return [];
-    }
-  }
-
-  /**
-   * Fallback: filter custom fields client-side when possible
-   */
-  private async getUsersByCustomFieldFallback(
-    communityId: number,
-    customFieldId: number,
-    fieldValue: string,
-    onlyActive: boolean = true
-  ): Promise<CommunityMember[]> {
-    try {
-      const { profileService } = await import('./profile.service');
-      const profiles = await profileService.getProfilesForUserAndCommunity(communityId);
-
-      const filtered = profiles
-        .map(profile => ({
-          id: profile.userId || profile.id,
-          fname: profile.fname,
-          lname: profile.lname,
-          fullName: profile.fullName || `${profile.fname} ${profile.lname}`,
-          email: (profile as any).email || (profile as any).emailAddress || (profile as any).email_address || '',
-          profilePicture: profile.profilePicture,
-          isManager: false,
-          enabled: (profile as any).enabled !== false,
-          joinDate: undefined,
-          _profile: profile,
-        }))
-        .filter(member => {
-          if (onlyActive && member.enabled === false) return false;
-          const profile = (member as any)._profile;
-          const customFields = (profile as any).customFields || (profile as any).custom_fields || [];
-          if (!Array.isArray(customFields)) return false;
-          return customFields.some((field: any) => {
-            const fieldId = field?.id || field?.customFieldId || field?.custom_field_id;
-            if (Number(fieldId) !== Number(customFieldId)) return false;
-            const value = field?.value || field?.displayValue || field?.name || field?.label;
-            if (!value) return false;
-            return String(value).toLowerCase() === fieldValue.toLowerCase();
-          });
-        })
-        .map(member => {
-          delete (member as any)._profile;
-          return member;
-        });
-
-      return filtered;
-    } catch (error) {
-      console.warn('[AdminService] Custom field fallback failed:', error);
+      
+      if (!data || data.length === 0) {
+        return [];
+      }
+      
+      // If pagination exists and there are more pages, load them all before returning
+      if (pagination && pagination.totalPages > 1) {
+        const allUsers = [...data];
+        const totalPages = pagination.totalPages || 1;
+        const currentPage = pagination.currentPage || 1;
+        
+        for (let page = currentPage + 1; page <= totalPages; page++) {
+          try {
+            const pageUrl = `/communities/${communityId}/attribute/users?type=custom&customFieldId=${customFieldId}&value=${encodeURIComponent(fieldValue)}&onlyActive=${onlyActive}&limit=200&page=${page}`;
+            const pageResponse = await apiService.get<any>(pageUrl);
+            const pageData = Array.isArray(pageResponse) ? pageResponse : (pageResponse?.data || []);
+            allUsers.push(...pageData);
+          } catch (error) {
+            console.warn(`[AdminService] Failed to load page ${page} for custom field ${customFieldId}:${fieldValue}:`, error);
+          }
+        }
+        
+        data = allUsers;
+      }
+      
+      // Map response to CommunityMember format
+      const users: CommunityMember[] = data.map((user: any) => ({
+        id: user.id || user.userId,
+        userId: user.userId || user.id,
+        fname: user.fname || '',
+        lname: user.lname || '',
+        fullName: user.fullName || `${user.fname || ''} ${user.lname || ''}`.trim(),
+        email: user.email || '',
+        profilePicture: user.profilePicture,
+        bio: user.bio,
+        pronouns: user.pronouns,
+        isManager: user.isManager,
+        enabled: user.enabled,
+        joinDate: user.joinDate,
+        ...user,
+      }));
+      
+      return users;
+    } catch (error: any) {
+      const status = error?.status || error?.response?.status;
+      
+      // If 404, endpoint doesn't exist - return empty
+      if (status === 404) {
+        return [];
+      }
+      
+      console.error(`[AdminService] Error fetching users for custom field ${customFieldId}:${fieldValue}:`, {
+        status,
+        message: error?.message,
+        response: error?.response?.data,
+      });
       return [];
     }
   }
@@ -1324,21 +1965,17 @@ export class AdminService {
    * Tries backend endpoint first, then calculates from existing data sources
    */
   async getEngagementStats(communityId: number, startDate?: string, endDate?: string): Promise<UserStats | null> {
-    console.error(`[AdminService] 🚀🚀🚀 getEngagementStats CALLED for community ${communityId}, dates: ${startDate || 'none'} to ${endDate || 'none'}`);
-    
     // Try backend endpoint with timeout to avoid long waits
     const backendPromise = apiService.get<UserStats>(
       `/communities/${communityId}/stats/engagement${startDate && endDate ? `?startDate=${startDate}&endDate=${endDate}` : ''}`
     ).catch((error: any) => {
       if (error?.status === 404 || error?.response?.status === 404) {
-        console.error(`[AdminService] Backend endpoint 404, will use calculated stats`);
         return null; // Endpoint doesn't exist
       }
       throw error;
     });
 
     // Calculate from existing data in parallel (don't wait for backend)
-    console.error(`[AdminService] 🚀 About to call calculateEngagementStatsFromData (which will call getMatchesForCommunity)`);
     const calculatedPromise = this.calculateEngagementStatsFromData(communityId, startDate, endDate);
 
     // Use whichever completes first, prefer backend if available
@@ -1347,34 +1984,14 @@ export class AdminService {
         backendPromise,
         calculatedPromise,
       ]);
-
-      const backendValue = backendStats.status === 'fulfilled' ? backendStats.value : null;
-      const calculatedValue = calculatedStats.status === 'fulfilled' ? calculatedStats.value : null;
-
-      console.error('[AdminService] Backend stats status:', backendStats.status, 'has value:', !!backendValue);
-      console.error('[AdminService] Calculated stats status:', calculatedStats.status, 'has value:', !!calculatedValue);
       
-      // Prefer calculated stats when backend returns zeroed connections but client can calculate real data
-      const backendConnections = backendValue?.connectionsMade ?? 0;
-      const calculatedConnections = calculatedValue?.connectionsMade ?? 0;
-
-      if (backendValue && calculatedValue) {
-        if (backendConnections === 0 && calculatedConnections > 0) {
-          console.error('[AdminService] ✅ Using calculated stats because backend connectionsMade is 0 but calculated has data');
-          return calculatedValue;
-        }
-        console.error('[AdminService] ⚠️ Using backend stats (calculated also available)');
-        return backendValue;
+      if (backendStats.status === 'fulfilled' && backendStats.value) {
+        // Note: calculatedStats should still have run in parallel, so matches fetch should have happened
+        return backendStats.value;
       }
 
-      if (backendValue) {
-        console.error('[AdminService] ⚠️ Using backend stats (calculated not available)');
-        return backendValue;
-      }
-
-      if (calculatedValue) {
-        console.error('[AdminService] ✅ Using calculated stats (backend unavailable)');
-        return calculatedValue;
+      if (calculatedStats.status === 'fulfilled' && calculatedStats.value) {
+        return calculatedStats.value;
       }
 
       return null;
@@ -1399,21 +2016,11 @@ export class AdminService {
     startDate?: string,
     endDate?: string
   ): Promise<UserStats | null> {
-    console.error(`[AdminService] 🎯🎯🎯 calculateEngagementStatsFromData CALLED for community ${communityId}`);
     try {
       const start = startDate ? new Date(startDate) : null;
       const end = endDate ? new Date(endDate) : null;
 
-      // Log date range for debugging
-      if (start && end) {
-        console.error(`[AdminService] 📅 Date filter: ${start.toISOString()} to ${end.toISOString()}`);
-      } else {
-        console.error(`[AdminService] 📅 No date filter (all-time)`);
-      }
-
       // Fetch data from existing endpoints in parallel
-      console.error(`[AdminService] 🔵 Starting data fetch for community ${communityId}, date range: ${startDate || 'all-time'} to ${endDate || 'all-time'}`);
-      console.error(`[AdminService] 🔵 About to call getMatchesForCommunity(${communityId})...`);
       const [
         profiles,
         events,
@@ -1423,36 +2030,12 @@ export class AdminService {
         this.getProfilesForCommunity(communityId),
         this.getEventsForCommunity(communityId),
         this.getGroupsForCommunity(communityId),
-        (async () => {
-          console.error(`[AdminService] 🔵🔵🔵 CALLING getMatchesForCommunity NOW for community ${communityId}`);
-          return await this.getMatchesForCommunity(communityId, startDate, endDate);
-        })(),
+        this.getMatchesForCommunity(communityId, startDate, endDate),
       ]);
       
-      console.error('[AdminService] 🔵 Data fetch results:', {
-        profiles: profiles.status,
-        events: events.status,
-        groups: groups.status,
-        matches: matches.status,
-      });
-      
-      // Explicit logging for matches to debug - using console.error so it shows even if filtered
-      if (matches.status === 'fulfilled') {
-        const matchCount = matches.value?.length || 0;
-        console.error(`[AdminService] ✅✅✅ Matches fetch SUCCESS: ${matchCount} matches returned`);
-        if (matchCount > 0) {
-          console.error('[AdminService] First match structure:', JSON.stringify(matches.value[0], null, 2));
-        } else {
-          console.error('[AdminService] ⚠️⚠️⚠️ Matches array is EMPTY - this is why Connections Made is 0');
-        }
-      } else {
-        console.error('[AdminService] ❌❌❌ Matches fetch FAILED - this is why Connections Made is 0');
-        console.error('[AdminService] Matches error reason:', matches.reason);
-        console.error('[AdminService] Matches error details:', {
-          message: matches.reason?.message,
-          status: matches.reason?.status,
-          response: matches.reason?.response?.data,
-        });
+      // Log matches fetch errors only
+      if (matches.status === 'rejected') {
+        console.error('[AdminService] Matches fetch failed:', matches.reason);
       }
 
       // Calculate metrics
@@ -1516,18 +2099,6 @@ export class AdminService {
       // Events Created/Attended
       if (events.status === 'fulfilled') {
         const eventList = events.value || [];
-        console.error(`[AdminService] 📅 Fetched ${eventList.length} events for community ${communityId}`);
-        if (eventList.length > 0) {
-          console.error('[AdminService] 📅 Sample event data:', {
-            id: eventList[0].id,
-            name: eventList[0].name,
-            startDate: eventList[0].startDate,
-            startDateTimeUTC: eventList[0].startDateTimeUTC,
-            attendeeCount: eventList[0].attendeeCount,
-            hasAttendees: !!eventList[0].attendees,
-            attendeesLength: eventList[0].attendees?.length,
-          });
-        }
         let createdCount = 0;
         let attendedCount = 0;
         let excludedByDate = 0;
@@ -1586,29 +2157,11 @@ export class AdminService {
 
         stats.eventsCreated = createdCount;
         stats.eventsAttended = attendedCount;
-        console.error(`[AdminService] 📅 Events: ${createdCount} created, ${attendedCount} attendances, ${excludedByDate} excluded by date, ${noDateField} with no date field`);
-      } else {
-        const errorReason = events.status === 'rejected' ? events.reason : 'unknown';
-        console.warn('[AdminService] Events fetch failed:', errorReason);
-        if (events.status === 'rejected') {
-          console.error('[AdminService] Events error details:', errorReason);
-        }
       }
 
       // Groups Created/Joined
       if (groups.status === 'fulfilled') {
         const groupList = groups.value || [];
-        console.error(`[AdminService] 👥 Fetched ${groupList.length} groups for community ${communityId}`);
-        if (groupList.length > 0) {
-          console.error('[AdminService] 👥 Sample group data:', {
-            id: groupList[0].id,
-            name: groupList[0].name,
-            createdAt: groupList[0].createdAt,
-            memberCount: groupList[0].memberCount,
-            hasUsers: !!groupList[0].users,
-            usersLength: groupList[0].users?.length,
-          });
-        }
         let createdCount = 0;
         let totalMembers = 0;
         let excludedByDate = 0;
@@ -1679,56 +2232,224 @@ export class AdminService {
         stats.groupsCreated = createdCount;
         // Use unique members count if available, otherwise use total memberships
         stats.groupsJoined = uniqueMembers.size > 0 ? uniqueMembers.size : totalMembers;
-        console.error(`[AdminService] 👥 Groups: ${createdCount} created, ${totalMembers} total memberships, ${uniqueMembers.size} unique members, ${excludedByDate} excluded by date, ${noDateField} with no date field`);
-      } else {
-        const errorReason = groups.status === 'rejected' ? groups.reason : 'unknown';
-        console.warn('[AdminService] Groups fetch failed:', errorReason);
-        if (groups.status === 'rejected') {
-          console.error('[AdminService] Groups error details:', errorReason);
-        }
+      } else if (groups.status === 'rejected') {
+        console.warn('[AdminService] Groups fetch failed:', groups.reason);
       }
 
       // Connections Made (Matches)
       if (matches.status === 'fulfilled') {
-        // Use the original string params passed into calculateEngagementStatsFromData
-        const summary = await this.getMatchSummary(communityId, startDate, endDate);
-        stats.connectionsMade = summary.totalPairs;
-        (stats as any).connectionsPerUser = summary.perUser;
-        console.log(`[AdminService] 🔗 Connections made (community ${communityId}): ${summary.totalPairs}`);
-        // Calculate response rate (matches that led to conversations)
+        const matchList = matches.value || [];
+        if (matchList.length === 0) {
+          console.warn('[AdminService] No matches returned from endpoint');
+        }
+        
+        // Filter matches by community if needed
+        // The /matches endpoint should already filter by community, but verify if communityId field exists
+        let communityMatches = matchList;
+        
+        if (matchList.length > 0) {
+          const firstMatch = matchList[0];
+          
+          // If matches have communityId field, filter by it to be safe
+          if (firstMatch.communityId !== undefined || firstMatch.community_id !== undefined) {
+            const communityIdField = firstMatch.communityId !== undefined ? 'communityId' : 'community_id';
+            communityMatches = matchList.filter((match: any) => {
+              const matchCommunityId = match.communityId || match.community_id;
+              return matchCommunityId === communityId;
+            });
+            console.log(`[AdminService] Filtered by ${communityIdField}: ${communityMatches.length} matches for community ${communityId}`);
+          } else {
+            // No communityId field - matches are already filtered by endpoint middleware
+            console.log('[AdminService] Matches already filtered by endpoint middleware, using all matches');
+            communityMatches = matchList;
+          }
+        }
+        
+        // Connections Made: Try backend endpoint first, then fall back to client-side calculation
+        let connectionsMade = 0;
+        let useBackendResult = false;
         try {
-          const responseRate = await this.calculateMatchResponseRate(communityId, matches.value || [], startDate, endDate);
+          console.log(`[AdminService] 🔗 Fetching connections count from backend endpoint...`);
+          const params: string[] = [];
+          if (startDate) params.push(`startDate=${encodeURIComponent(startDate)}`);
+          if (endDate) params.push(`endDate=${encodeURIComponent(endDate)}`);
+          const query = params.length ? `?${params.join('&')}` : '';
+          const url = `/communities/${communityId}/connections-count${query}`;
+          
+          const backendResult = await apiService.get<{ connectionsMade: number }>(url);
+          if (backendResult && typeof backendResult.connectionsMade === 'number') {
+            // If backend returns 0 but we have matches, it's likely incorrect - use client-side fallback
+            if (backendResult.connectionsMade === 0 && communityMatches && communityMatches.length > 0) {
+              console.warn(`[AdminService] ⚠️ Backend returned 0 connections but we have ${communityMatches.length} matches - using client-side calculation`);
+            } else {
+              connectionsMade = backendResult.connectionsMade;
+              useBackendResult = true;
+              console.log(`[AdminService] ✅ Connections count from backend: ${connectionsMade}`);
+            }
+          }
+        } catch (error: any) {
+          // If backend endpoint fails, fall back to client-side calculation
+          if (error?.status === 404 || error?.response?.status === 404) {
+            console.log(`[AdminService] Connections count endpoint not found, using client-side calculation`);
+          } else {
+            console.warn(`[AdminService] Failed to fetch connections count from backend, using client-side calculation:`, error);
+          }
+        }
+        
+        // If backend didn't return a valid result (or returned 0 when we have matches), use client-side calculation
+        if (!useBackendResult) {
+          // Client-side fallback: Count unique connections by unique sets of people (Option 2)
+        // IMPORTANT: Same people matched multiple times = 1 connection
+        // We group matches by group_id, collect all unique users, then count unique sets
+        // This prevents counting the same 4 people matched 3 times as 3 connections
+        
+        // Step 1: Group matches by group_id and collect all unique users in each group
+        const groupsByUsers = new Map<string, Set<number>>(); // Map of group_id -> Set of user IDs
+        
+        communityMatches.forEach((match: any) => {
+          // Get the group identifier
+          const groupId = match.groupId || match.group_id || 
+                         (match.matchIndicesId && match.matchIndicesId !== 0 ? match.matchIndicesId : null);
+          
+          if (groupId !== null && groupId !== undefined) {
+            const groupKey = String(groupId);
+            
+            // Initialize the set if it doesn't exist
+            if (!groupsByUsers.has(groupKey)) {
+              groupsByUsers.set(groupKey, new Set<number>());
+            }
+            
+            // Add both userId and matchedUserId to the set for this group
+            const userSet = groupsByUsers.get(groupKey)!;
+            if (match.userId !== undefined && match.userId !== null) {
+              userSet.add(match.userId);
+            }
+            if (match.matchedUserId !== undefined && match.matchedUserId !== null) {
+              userSet.add(match.matchedUserId);
+            }
+          }
+        });
+        
+        // Step 2: Create a sorted array representation of each user set and count unique sets
+        const uniqueUserSets = new Set<string>();
+        
+        groupsByUsers.forEach((userSet, groupKey) => {
+          // Convert Set to sorted array and create a string key
+          const sortedUsers = Array.from(userSet).sort((a, b) => a - b);
+          const setKey = sortedUsers.join(',');
+          uniqueUserSets.add(setKey);
+        });
+        
+        // Step 3: If we couldn't use group_id, fall back to unique pairs
+        let connectionCount = uniqueUserSets.size;
+        if (connectionCount === 0) {
+          // Fallback: Count unique pairs of users (userId, matchedUserId)
+          const uniquePairs = new Set<string>();
+          communityMatches.forEach((match: any) => {
+            if (match.userId !== undefined && match.matchedUserId !== undefined) {
+              const pairKey = [match.userId, match.matchedUserId].sort().join('-');
+              uniquePairs.add(pairKey);
+            }
+          });
+          connectionCount = uniquePairs.size;
+        }
+        
+        console.log(`[AdminService] Found ${connectionCount} unique connections (unique sets of people) from ${communityMatches.length} match records`);
+        console.log(`[AdminService] Note: ${communityMatches.length} total match records = ${communityMatches.length} intros, but only ${connectionCount} unique connections (unique sets of people)`);
+        
+        // Filter by date if provided
+        let finalConnectionCount = connectionCount;
+        let excludedByDate = 0;
+        let noDateField = 0;
+        
+        if (start || end) {
+          // Filter matches by date, then get unique connections
+          const dateFilteredMatches = communityMatches.filter((match: any) => {
+            // Handle both createdAt and created_at field names
+            const createdAt = match.createdAt || match.created_at;
+            if (createdAt) {
+              const matchDate = new Date(createdAt);
+              if (!isNaN(matchDate.getTime())) {
+                const isInRange = (!start || matchDate >= start) && (!end || matchDate <= end);
+                if (!isInRange) {
+                  excludedByDate++;
+                }
+                return isInRange;
+              } else {
+                noDateField++;
+                return false; // Exclude matches with invalid dates when filtering
+              }
+            } else {
+              noDateField++;
+              return false; // Exclude matches without valid dates when filtering
+            }
+          });
+          
+          console.error(`[AdminService] 🔗 After date filter: ${dateFilteredMatches.length} matches in range, ${excludedByDate} excluded, ${noDateField} with no/invalid date`);
+          
+          // Recalculate unique connections from date-filtered matches using Option 2 (unique sets of people)
+          const dateFilteredGroupsByUsers = new Map<string, Set<number>>();
+          
+          dateFilteredMatches.forEach((match: any) => {
+            const groupId = match.groupId || match.group_id || 
+                           (match.matchIndicesId && match.matchIndicesId !== 0 ? match.matchIndicesId : null);
+            
+            if (groupId !== null && groupId !== undefined) {
+              const groupKey = String(groupId);
+              
+              if (!dateFilteredGroupsByUsers.has(groupKey)) {
+                dateFilteredGroupsByUsers.set(groupKey, new Set<number>());
+              }
+              
+              const userSet = dateFilteredGroupsByUsers.get(groupKey)!;
+              if (match.userId !== undefined && match.userId !== null) {
+                userSet.add(match.userId);
+              }
+              if (match.matchedUserId !== undefined && match.matchedUserId !== null) {
+                userSet.add(match.matchedUserId);
+              }
+            }
+          });
+          
+          const dateFilteredUniqueSets = new Set<string>();
+          dateFilteredGroupsByUsers.forEach((userSet) => {
+            const sortedUsers = Array.from(userSet).sort((a, b) => a - b);
+            const setKey = sortedUsers.join(',');
+            dateFilteredUniqueSets.add(setKey);
+          });
+          
+          finalConnectionCount = dateFilteredUniqueSets.size > 0 ? dateFilteredUniqueSets.size : 0;
+          console.error(`[AdminService] 🔗 After date filter: ${finalConnectionCount} unique connections`);
+        } else {
+          console.error(`[AdminService] 🔗 No date filter applied - using all ${communityMatches.length} matches`);
+        }
+        
+          connectionsMade = finalConnectionCount;
+          console.error(`[AdminService] 🔗 Final (client-side): ${connectionsMade} unique connections (from ${communityMatches.length} match records, ${excludedByDate} excluded by date, ${noDateField} with no date)`);
+        }
+        
+        stats.connectionsMade = connectionsMade;
+        
+        // Calculate response rate (matches that led to conversations)
+        // This requires checking if conversations exist for matches
+        try {
+          const responseRate = await this.calculateMatchResponseRate(communityId, communityMatches, startDate, endDate);
           stats.matchResponseRate = responseRate;
         } catch (error) {
           console.warn('[AdminService] Could not calculate match response rate:', error);
           stats.matchResponseRate = 0;
         }
-      } else {
-        const errorReason = matches.status === 'rejected' ? matches.reason : 'unknown';
-        console.error('[AdminService] Matches fetch FAILED - this is why Connections Made is 0');
-        console.error('[AdminService] Matches error status:', matches.status);
-        console.error('[AdminService] Matches error reason:', errorReason);
-        if (matches.status === 'rejected') {
-          console.error('[AdminService] Matches error details:', {
-            message: errorReason?.message,
-            status: errorReason?.status,
-            response: errorReason?.response,
-            stack: errorReason?.stack,
-          });
-        }
+      } else if (matches.status === 'rejected') {
+        console.error('[AdminService] Matches fetch failed:', matches.reason);
         // Set to 0 explicitly since fetch failed
         stats.connectionsMade = 0;
       }
 
       // Messages Sent
       try {
-        console.log(`[AdminService] 📨 Fetching message stats for community ${communityId}...`);
         const messageStats = await this.getMessageStats(communityId, startDate, endDate);
         if (messageStats) {
           stats.totalMessagesSent = messageStats.totalMessagesSent;
-          console.log(`[AdminService] 📨 Message stats: ${messageStats.totalMessagesSent} messages`);
-        } else {
-          console.warn('[AdminService] 📨 Message stats returned null');
         }
       } catch (error) {
         console.error('[AdminService] Error calculating message stats:', error);
@@ -1736,33 +2457,42 @@ export class AdminService {
 
       // Daily/Weekly Active Users
       try {
-        console.log(`[AdminService] 👥 Fetching active user stats for community ${communityId}...`);
         const activeUserStats = await this.getActiveUserStats(communityId, startDate, endDate);
         if (activeUserStats) {
           stats.dailyActiveUsers = activeUserStats.dailyActiveUsers;
           stats.weeklyActiveUsers = activeUserStats.weeklyActiveUsers;
-          console.log(`[AdminService] 👥 Active user stats: ${activeUserStats.dailyActiveUsers} daily, ${activeUserStats.weeklyActiveUsers} weekly`);
-        } else {
-          console.warn('[AdminService] 👥 Active user stats returned null');
         }
       } catch (error) {
         console.error('[AdminService] Error calculating active user stats:', error);
       }
 
-      console.error('[AdminService] 📊📊📊 FINAL CALCULATED STATS:', {
-        profilesCreated: stats.profilesCreated,
-        connectionsMade: stats.connectionsMade,
-        eventsCreated: stats.eventsCreated,
-        eventsAttended: stats.eventsAttended,
-        groupsCreated: stats.groupsCreated,
-        groupsJoined: stats.groupsJoined,
-        profileCompletionRate: stats.profileCompletionRate,
-        totalMessagesSent: stats.totalMessagesSent,
-        dailyActiveUsers: stats.dailyActiveUsers,
-        weeklyActiveUsers: stats.weeklyActiveUsers,
-        matchResponseRate: stats.matchResponseRate,
-        dateRange: start && end ? `${start.toISOString()} to ${end.toISOString()}` : 'all-time',
-      });
+      // Also calculate match engagement stats (Trova Magic, Channel Pairing, Mentor/Mentee)
+      // This ensures channelPairingMatches, channelPairingEngagements, mentorMenteeMatches, etc. are set
+      try {
+        const matchEngagementStats = await this.calculateMatchEngagementStats(communityId, startDate, endDate);
+        if (matchEngagementStats) {
+          // Merge match engagement stats into the main stats object
+          Object.assign(stats, matchEngagementStats);
+        } else {
+          console.error('[AdminService] ⚠️⚠️⚠️ calculateMatchEngagementStats returned null/undefined - initializing to 0');
+          // Initialize to 0 so UI can still display the cards (even if empty)
+          stats.channelPairingMatches = stats.channelPairingMatches ?? 0;
+          stats.channelPairingEngagements = stats.channelPairingEngagements ?? 0;
+          stats.mentorMenteeMatches = stats.mentorMenteeMatches ?? 0;
+          stats.mentorMenteeUniquePairs = stats.mentorMenteeUniquePairs ?? 0;
+          stats.trovaMagicMatches = stats.trovaMagicMatches ?? 0;
+          stats.trovaMagicEngagements = stats.trovaMagicEngagements ?? 0;
+        }
+      } catch (error) {
+        console.error('[AdminService] Could not calculate match engagement stats:', error);
+        // Initialize to 0 so UI can still display the cards (even if empty)
+        stats.channelPairingMatches = stats.channelPairingMatches ?? 0;
+        stats.channelPairingEngagements = stats.channelPairingEngagements ?? 0;
+        stats.mentorMenteeMatches = stats.mentorMenteeMatches ?? 0;
+        stats.mentorMenteeUniquePairs = stats.mentorMenteeUniquePairs ?? 0;
+        stats.trovaMagicMatches = stats.trovaMagicMatches ?? 0;
+        stats.trovaMagicEngagements = stats.trovaMagicEngagements ?? 0;
+      }
 
       // Note: Trova chats will be fetched separately in the component to avoid blocking
 
@@ -1914,27 +2644,23 @@ export class AdminService {
         console.log(`[AdminService] ✅ Fetched ${matches?.length || 0} matches from ${endpoint.name}`);
         
         if (matches && matches.length > 0) {
-          // If matches have communityId field, verify they're for the right community
+          // Filter by communityId first if available
+          let filteredMatches = matches;
           if (matches[0].communityId !== undefined || matches[0].community_id !== undefined) {
-            const filtered = matches.filter((match: any) => {
+            filteredMatches = filteredMatches.filter((match: any) => {
               const matchCommunityId = match.communityId || match.community_id;
               return matchCommunityId === communityId;
             });
-            if (filtered.length !== matches.length) {
-              console.log(`[AdminService] ⚠️ Endpoint returned ${matches.length} matches, but only ${filtered.length} are for community ${communityId}`);
-              const result = filtered;
-              if (cacheKey) {
-                this.matchesCache.set(cacheKey, { data: result, timestamp: Date.now() });
-              }
-              return result;
+            if (filteredMatches.length !== matches.length) {
+              console.log(`[AdminService] ⚠️ Endpoint returned ${matches.length} matches, but only ${filteredMatches.length} are for community ${communityId}`);
             }
           }
           
           // Cache the result
           if (cacheKey) {
-            this.matchesCache.set(cacheKey, { data: matches, timestamp: Date.now() });
+            this.matchesCache.set(cacheKey, { data: filteredMatches, timestamp: Date.now() });
           }
-          return matches;
+          return filteredMatches;
         } else if (matches && matches.length === 0) {
           // Empty array - endpoint worked but no data
           console.log(`[AdminService] ⚠️ ${endpoint.name} returned empty array (0 matches)`);
@@ -1976,106 +2702,6 @@ export class AdminService {
   }
 
   /**
-   * Calculate match summary scoped to a community using memberships
-   * - Counts unique unordered pairs where both users are active members
-   * - Filters matches: is_active = true, removed IS NULL, snoozed_on IS NULL
-   */
-  async getMatchSummary(
-    communityId: number,
-    startDate?: string,
-    endDate?: string
-  ): Promise<{ totalPairs: number; perUser: Array<{ userId: number; fullName: string; email?: string; profilePicture?: string; count: number }> }> {
-    const [matches, members] = await Promise.all([
-      this.getMatchesForCommunity(communityId, startDate, endDate),
-      this.getCommunityMembers(communityId),
-    ]);
-
-    const memberMap = new Map<number, CommunityMember>();
-    members.forEach(m => {
-      if (m.id) {
-        memberMap.set(m.id, m);
-      }
-    });
-
-    // Filter matches by active flags and membership
-    const filtered = matches.filter((m: any) => {
-      if (m.is_active === false) return false;
-      if (m.removed) return false;
-      if (m.snoozed_on) return false;
-      const u1 = m.userId ?? m.left_user_id ?? m.user_id;
-      const u2 = m.matchedUserId ?? m.right_user_id ?? m.matched_user_id;
-      if (!u1 || !u2) return false;
-      return memberMap.has(u1) && memberMap.has(u2);
-    });
-
-    const pairSet = new Set<string>();
-    const perUserPartners = new Map<number, Set<number>>();
-
-    filtered.forEach((m: any) => {
-      const u1 = m.userId ?? m.left_user_id ?? m.user_id;
-      const u2 = m.matchedUserId ?? m.right_user_id ?? m.matched_user_id;
-      const key = [u1, u2].sort((a: number, b: number) => a - b).join('-');
-      pairSet.add(key);
-
-      if (!perUserPartners.has(u1)) perUserPartners.set(u1, new Set());
-      if (!perUserPartners.has(u2)) perUserPartners.set(u2, new Set());
-      perUserPartners.get(u1)!.add(u2);
-      perUserPartners.get(u2)!.add(u1);
-    });
-
-    const perUser = Array.from(perUserPartners.entries()).map(([userId, partners]) => {
-      const member = memberMap.get(userId);
-      return {
-        userId,
-        fullName: member?.fullName || `${member?.fname || ''} ${member?.lname || ''}`.trim() || `User ${userId}`,
-        email: member?.email,
-        profilePicture: member?.profilePicture,
-        count: partners.size,
-      };
-    }).sort((a, b) => b.count - a.count || a.fullName.localeCompare(b.fullName));
-
-    return { totalPairs: pairSet.size, perUser };
-  }
-
-  /**
-   * Get partners for a user within a community using the same filters
-   */
-  async getUserMatchPartners(
-    communityId: number,
-    userId: number,
-    startDate?: string,
-    endDate?: string
-  ): Promise<CommunityMember[]> {
-    const [matches, members] = await Promise.all([
-      this.getMatchesForCommunity(communityId, startDate, endDate),
-      this.getCommunityMembers(communityId),
-    ]);
-
-    const memberMap = new Map<number, CommunityMember>();
-    members.forEach(m => {
-      if (m.id) memberMap.set(m.id, m);
-    });
-
-    const partners = new Set<number>();
-
-    matches.forEach((m: any) => {
-      if (m.is_active === false) return;
-      if (m.removed) return;
-      if (m.snoozed_on) return;
-      const u1 = m.userId ?? m.left_user_id ?? m.user_id;
-      const u2 = m.matchedUserId ?? m.right_user_id ?? m.matched_user_id;
-      if (!u1 || !u2) return;
-      if (!memberMap.has(u1) || !memberMap.has(u2)) return;
-      if (u1 === userId) partners.add(u2);
-      else if (u2 === userId) partners.add(u1);
-    });
-
-    return Array.from(partners)
-      .map(id => memberMap.get(id))
-      .filter(Boolean) as CommunityMember[];
-  }
-
-  /**
    * Get User Actions stats (spotlights, user events, etc.)
    * Tries multiple endpoint patterns since this works in other frontend
    */
@@ -2110,7 +2736,6 @@ export class AdminService {
 
     for (const url of endpoints) {
       try {
-        console.log(`[AdminService] 🎯 Trying user actions endpoint: ${url}`);
         const response = await apiService.get<any>(url);
         
         // Handle slack-user-stats format (has rows and columns)
@@ -2124,11 +2749,14 @@ export class AdminService {
             sampleRow: response.rows?.[0],
           });
           const aggregatedStats = this.aggregateSlackUserStats(response);
-          if (aggregatedStats && Object.keys(aggregatedStats).length > 0) {
-            console.log(`[AdminService] ✅ User actions stats aggregated from slack-user-stats:`, aggregatedStats);
+          if (aggregatedStats) {
+            // Use introsLedToConvos from backend (sum of per-user values)
+            // Backend already provides accurate per-user introsLedToConvos values
+            // No need to calculate separately - the aggregated sum from rows is correct
+            console.log(`[AdminService] ✅ User actions stats aggregated from slack-user-stats (using backend introsLedToConvos):`, aggregatedStats);
             return aggregatedStats;
           } else {
-            console.warn(`[AdminService] ⚠️ aggregateSlackUserStats returned null/empty`);
+            console.warn(`[AdminService] ⚠️ aggregateSlackUserStats returned null, continuing to next endpoint`);
           }
         }
         
@@ -2136,6 +2764,17 @@ export class AdminService {
         if (response && typeof response === 'object' && !response.rows) {
           const stats = response as Partial<UserStats>;
           if (stats && Object.keys(stats).length > 0) {
+            // Use introsLedToConvos from backend if provided
+            // Backend already provides accurate per-user introsLedToConvos values
+            // Only calculate if backend doesn't provide it
+            if (stats.introsLedToConvos === undefined || stats.introsLedToConvos === null) {
+              console.log(`[AdminService] Backend didn't provide introsLedToConvos, calculating from matches...`);
+              const calculatedIntros = await this.calculateIntrosLedToConvos(communityId, startDate, endDate);
+              stats.introsLedToConvos = calculatedIntros;
+            } else {
+              console.log(`[AdminService] Using introsLedToConvos from backend: ${stats.introsLedToConvos}`);
+            }
+            
             // Check if stats actually have meaningful values (not all zeros)
             const hasNonZeroValues = Object.values(stats).some((val: any) => 
               typeof val === 'number' && val > 0
@@ -2165,8 +2804,137 @@ export class AdminService {
     }
 
     // If all endpoints fail, try to calculate from available data
-    console.log('[AdminService] All user actions endpoints failed, trying client-side calculation');
-    return this.calculateUserActionsStats(communityId, startDate, endDate);
+    const calculatedStats = await this.calculateUserActionsStats(communityId, startDate, endDate);
+    
+    // Calculate introsLedToConvos from matches only if backend didn't provide it
+    // Backend now provides accurate per-user introsLedToConvos, so prefer that
+    if (calculatedStats) {
+      // Only calculate if backend didn't provide it
+      if (calculatedStats.introsLedToConvos === undefined || calculatedStats.introsLedToConvos === null) {
+        const calculatedIntros = await this.calculateIntrosLedToConvos(communityId, startDate, endDate);
+        calculatedStats.introsLedToConvos = calculatedIntros;
+      }
+      return calculatedStats;
+    }
+    
+    // Fallback: return zeros if calculation also fails
+    const calculatedIntros = await this.calculateIntrosLedToConvos(communityId, startDate, endDate);
+    return {
+      openedTrova: 0,
+      generalActions: 0,
+      spotlightsCreated: 0,
+      recWallsGiven: 0,
+      recWallsReceived: 0,
+      introsLedToConvos: calculatedIntros, // Still calculate from matches as last resort
+    };
+  }
+
+  /**
+   * Calculate "Intros Led To Convos" from all intro matches where both users engaged
+   * This counts unique pairs/groups (same logic as displayed cards), not individual match records
+   * Sums: Trova Magic engaged + Channel Pairing engaged + Mentor/Mentee engaged
+   */
+  private async calculateIntrosLedToConvos(
+    communityId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<number> {
+    try {
+      // Use the same logic as calculateMatchEngagementStats to ensure consistency with displayed numbers
+      
+      // 1. Trova Magic: Use daily breakdown (same as displayed card)
+      let trovaMagicEngaged = 0;
+      try {
+        const magicIntrosByDate = await this.getMagicIntrosByDate(communityId, startDate, endDate);
+        // Filter out dates with >1000 pairings (data issues)
+        const validDates = magicIntrosByDate.filter(day => day.totalPairings <= 1000);
+        // Sum engaged pairings from valid dates
+        trovaMagicEngaged = validDates.reduce((sum, day) => sum + day.engagedPairings, 0);
+      } catch (error) {
+        console.warn('[AdminService] Could not fetch Trova Magic engaged count:', error);
+      }
+      
+      // 2. Channel Pairing: Count unique groups (same as displayed card)
+      let channelPairingEngaged = 0;
+      try {
+        const channelPairingMatches = await this.getMatchesForCommunity(communityId, startDate, endDate, 'channel_pairing');
+        if (channelPairingMatches && channelPairingMatches.length > 0) {
+          // Count unique groups (same logic as calculateMatchEngagementStats)
+          const channelPairingGroups = new Set<number>();
+          for (const match of channelPairingMatches) {
+            const groupId = match.groupId || match.group_id || 
+                           (match.matchIndicesId && match.matchIndicesId !== 0 ? match.matchIndicesId : null);
+            if (groupId !== null && groupId !== undefined) {
+              channelPairingGroups.add(groupId);
+            }
+          }
+          // Calculate engagement for unique groups
+          if (channelPairingGroups.size > 0) {
+            channelPairingEngaged = await this.countEngagedMatchesByGroup(communityId, channelPairingMatches, channelPairingGroups);
+          }
+        }
+      } catch (error) {
+        console.warn('[AdminService] Could not calculate Channel Pairing engaged count:', error);
+      }
+      
+      // 3. Mentor/Mentee: Count unique pairs (same logic as other types)
+      let mentorMenteeEngaged = 0;
+      let mentorMenteeTotalUniquePairs = 0;
+      try {
+        const mentorMenteeMatches = await this.getMatchesForCommunity(communityId, startDate, endDate, 'mentor-mentee');
+        if (mentorMenteeMatches && mentorMenteeMatches.length > 0) {
+          // Count unique pairs (same logic as Trova Magic)
+          const uniquePairs = new Set<string>();
+          const pairDetails = new Map<string, { userId: number; matchedUserId: number; isEngaged: boolean }>();
+          const conversationPairs = await this.getConversationPairs(communityId);
+          for (const match of mentorMenteeMatches) {
+            const userId = match.userId || match.user_id;
+            const matchedUserId = match.matchedUserId || match.matched_user_id;
+            
+            if (userId && matchedUserId) {
+              // Create normalized pair key (sorted IDs to handle A-B and B-A as same pair)
+              const pairKey = [userId, matchedUserId].sort((a, b) => a - b).join('-');
+              
+              // Only count each unique pair once
+              if (!uniquePairs.has(pairKey)) {
+                uniquePairs.add(pairKey);
+                const isEngaged = conversationPairs.has(pairKey);
+                pairDetails.set(pairKey, { userId, matchedUserId, isEngaged });
+                if (isEngaged) {
+                  mentorMenteeEngaged++;
+                }
+              }
+            }
+          }
+          
+          mentorMenteeTotalUniquePairs = uniquePairs.size;
+          console.log(`[AdminService] 🎓 Mentor/Mentee breakdown:`);
+          console.log(`[AdminService]   - Total match records: ${mentorMenteeMatches.length}`);
+          console.log(`[AdminService]   - Unique pairs: ${mentorMenteeTotalUniquePairs}`);
+          console.log(`[AdminService]   - Engaged pairs: ${mentorMenteeEngaged}`);
+          if (mentorMenteeTotalUniquePairs > 0 && mentorMenteeTotalUniquePairs < 10) {
+            console.log(`[AdminService]   - Pair details:`, Array.from(pairDetails.entries()).map(([key, details]) => 
+              `${details.userId}-${details.matchedUserId} (engaged: ${details.isEngaged})`
+            ));
+          }
+        }
+      } catch (error) {
+        console.warn('[AdminService] Could not calculate Mentor/Mentee engaged count:', error);
+      }
+      
+      const totalEngaged = trovaMagicEngaged + channelPairingEngaged + mentorMenteeEngaged;
+      
+      console.log(`[AdminService] 💬 Intros Led To Convos breakdown (unique pairs/groups):`);
+      console.log(`[AdminService]   - Trova Magic: ${trovaMagicEngaged} engaged unique pairs`);
+      console.log(`[AdminService]   - Channel Pairing: ${channelPairingEngaged} engaged unique groups`);
+      console.log(`[AdminService]   - Mentor/Mentee: ${mentorMenteeEngaged} engaged unique pairs (out of ${mentorMenteeTotalUniquePairs} total unique pairs)`);
+      console.log(`[AdminService]   - TOTAL: ${totalEngaged} (sum of engaged unique pairs/groups)`);
+      
+      return totalEngaged;
+    } catch (error) {
+      console.warn('[AdminService] Could not calculate Intros Led To Convos:', error);
+      return 0;
+    }
   }
 
   /**
@@ -2190,8 +2958,19 @@ export class AdminService {
     totalUserCount?: number;
   }): Partial<UserStats> | null {
     if (!response.rows || !Array.isArray(response.rows)) {
-      console.warn('[AdminService] ⚠️ aggregateSlackUserStats: response.rows is missing or not an array');
-      return null;
+      console.warn('[AdminService] ⚠️ aggregateSlackUserStats: response.rows is missing or not an array, returning zeros');
+      // Return zeros instead of null so UI can display the section
+      return {
+        openedTrova: 0,
+        generalActions: 0,
+        spotlightsCreated: 0,
+        recWallsGiven: 0,
+        recWallsReceived: 0,
+        introsLedToConvos: 0,
+        trovaMagicEngagements: 0,
+        channelPairingOnDemand: 0,
+        channelPairingCadence: 0,
+      };
     }
     
     // If no rows, return stats with zeros so UI can display them
@@ -2226,11 +3005,16 @@ export class AdminService {
 
     rows.forEach((row: any) => {
       // Use backend field names (from slack-user-stats endpoint)
-      openedTrova += this.getNumericValue(row, ['homepageViews', 'openedTrova', 'opened_trova', 'Opened Trova']);
+      // IMPORTANT: Only use the primary field name to avoid double-counting
+      // If backend returns the same value in multiple fields, we only count it once
+      const homepageViewsValue = this.getNumericValue(row, ['homepageViews', 'openedTrova', 'opened_trova', 'Opened Trova']);
+      openedTrova += homepageViewsValue;
+      
       generalActions += this.getNumericValue(row, ['profileActions', 'generalActions', 'general_actions', 'General Actions']);
       spotlightsCreated += this.getNumericValue(row, ['spotlightsCreated', 'spotlights_created', 'Spotlights Created']);
       recWallsGiven += this.getNumericValue(row, ['recWallsGiven', 'rec_walls_given', 'Rec Walls Given']);
       recWallsReceived += this.getNumericValue(row, ['recWallsReceived', 'rec_walls_received', 'Rec Walls Received']);
+      // Backend provides introsLedToConvos per user - sum them for aggregated stats
       introsLedToConvos += this.getNumericValue(row, ['introsLedToConvos', 'intros_led_to_convos', 'Intros Led To Convos']);
       trovaMagicEngagements += this.getNumericValue(row, ['introsAttributedToTrovaMagic', 'intros_attributed_to_trova_magic', 'Trova Magic']);
       channelPairingOnDemand += this.getNumericValue(row, ['introsAttributedToChannelPairingOnDemand', 'intros_attributed_to_channel_pairing_on_demand', 'Channel Pairing On Demand']);
@@ -2238,15 +3022,23 @@ export class AdminService {
     });
 
     // Map to UserStats interface fields - always set values (even if 0) so they appear in UI
+    // This ensures the UI can display the cards even if values are 0
     stats.openedTrova = openedTrova;
     stats.generalActions = generalActions;
     stats.spotlightsCreated = spotlightsCreated;
     stats.recWallsGiven = recWallsGiven;
     stats.recWallsReceived = recWallsReceived;
+    // Use introsLedToConvos from backend (sum of per-user values)
+    // Backend provides accurate per-user introsLedToConvos values, so the aggregated sum is correct
     stats.introsLedToConvos = introsLedToConvos;
     stats.trovaMagicEngagements = trovaMagicEngagements;
     stats.channelPairingOnDemand = channelPairingOnDemand;
     stats.channelPairingCadence = channelPairingCadence;
+    
+    // Ensure openedTrova is always defined (critical for UI display)
+    if (stats.openedTrova === undefined || stats.openedTrova === null) {
+      stats.openedTrova = 0;
+    }
 
     // Log what we found
     console.log(`[AdminService] 📊 Aggregated stats from ${rows.length} rows:`, {
@@ -2263,8 +3055,6 @@ export class AdminService {
 
     // Log sample row structure for debugging
     if (rows.length > 0) {
-      console.log(`[AdminService] 📋 Sample row keys:`, Object.keys(rows[0]));
-      console.log(`[AdminService] 📋 Sample row:`, rows[0]);
     }
 
     return stats;
@@ -2416,6 +3206,184 @@ export class AdminService {
   }
 
   /**
+   * Get Slack-style user stats table (used by production console)
+   * startDate (ISO) is required; endDate optional.
+   * Returns active users only (server default).
+   */
+  /**
+   * Calculate unique introductions per user
+   * Counts how many unique people each user was introduced to (across all match types)
+   * Does not count duplicate introductions to the same person
+   * For channel pairing groups, counts all unique users in the group
+   */
+  private async calculateUniqueIntroductionsPerUser(
+    communityId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<Map<number, number>> {
+    const userIntroCounts = new Map<number, Set<number>>(); // userId -> Set of unique matched user IDs
+    
+    try {
+      // Get all match types: trova_magic, channel_pairing, mentor-mentee
+      const matchTypes = ['trova_magic', 'channel_pairing', 'mentor-mentee'];
+      
+      // For channel pairing, we need to group by groupId to get all users in each group
+      const channelPairingGroups = new Map<number | string, Set<number>>(); // groupId -> Set of user IDs in group
+      
+      for (const matchType of matchTypes) {
+        try {
+          const matches = await this.getMatchesForCommunity(communityId, startDate, endDate, matchType);
+          
+          if (matches && matches.length > 0) {
+            if (matchType === 'channel_pairing') {
+              // For channel pairing, collect all users in each group
+              for (const match of matches) {
+                const userId = match.userId || match.user_id;
+                const matchedUserId = match.matchedUserId || match.matched_user_id;
+                const groupId = match.groupId || match.group_id || 
+                               (match.matchIndicesId && match.matchIndicesId !== 0 ? match.matchIndicesId : null);
+                
+                if (groupId) {
+                  if (!channelPairingGroups.has(groupId)) {
+                    channelPairingGroups.set(groupId, new Set());
+                  }
+                  if (userId) channelPairingGroups.get(groupId)!.add(userId);
+                  if (matchedUserId) channelPairingGroups.get(groupId)!.add(matchedUserId);
+                }
+              }
+            } else {
+              // For trova_magic and mentor-mentee, count unique matched users directly
+              for (const match of matches) {
+                const userId = match.userId || match.user_id;
+                const matchedUserId = match.matchedUserId || match.matched_user_id;
+                
+                if (userId && matchedUserId) {
+                  if (!userIntroCounts.has(userId)) {
+                    userIntroCounts.set(userId, new Set());
+                  }
+                  userIntroCounts.get(userId)!.add(matchedUserId);
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.warn(`[AdminService] Error fetching ${matchType} matches for unique introductions:`, error);
+        }
+      }
+      
+      // Process channel pairing groups: each user in a group is introduced to all other users in that group
+      for (const [groupId, userIdsInGroup] of channelPairingGroups.entries()) {
+        const userIdsArray = Array.from(userIdsInGroup);
+        // For each user in the group, add all other users as introductions
+        for (let i = 0; i < userIdsArray.length; i++) {
+          const userId = userIdsArray[i];
+          if (!userIntroCounts.has(userId)) {
+            userIntroCounts.set(userId, new Set());
+          }
+          // Add all other users in the group as introductions
+          for (let j = 0; j < userIdsArray.length; j++) {
+            if (i !== j) {
+              userIntroCounts.get(userId)!.add(userIdsArray[j]);
+            }
+          }
+        }
+      }
+      
+      // Convert Sets to counts
+      const counts = new Map<number, number>();
+      for (const [userId, uniqueMatchedUsers] of userIntroCounts.entries()) {
+        counts.set(userId, uniqueMatchedUsers.size);
+      }
+      
+      console.log(`[AdminService] ✅ Calculated unique introductions for ${counts.size} users`);
+      if (counts.size > 0) {
+        const sampleCounts = Array.from(counts.entries()).slice(0, 5);
+        console.log(`[AdminService] Sample unique intro counts:`, sampleCounts);
+      }
+      return counts;
+    } catch (error) {
+      console.error('[AdminService] Error calculating unique introductions per user:', error);
+      return new Map<number, number>();
+    }
+  }
+
+  async getSlackUserStats(
+    communityId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<{ rows: any[]; columns: any[]; totalUserCount: number; error?: string }> {
+    const params: string[] = [];
+    if (startDate) params.push(`startDate=${encodeURIComponent(startDate)}`);
+    if (endDate) params.push(`endDate=${encodeURIComponent(endDate)}`);
+    const query = params.length ? `?${params.join('&')}` : '';
+    const url = `/communities/${communityId}/slack-user-stats${query}`;
+
+    try {
+      console.log(`[AdminService] Fetching slack-user-stats: ${url}`);
+      const result = await apiService.get<any>(url);
+      if (result && Array.isArray(result.rows)) {
+        // Calculate unique introductions per user and add to each row
+        console.log(`[AdminService] Calculating unique introductions per user...`);
+        const uniqueIntroCounts = await this.calculateUniqueIntroductionsPerUser(communityId, startDate, endDate);
+        
+        // Update rows with unique introduction counts
+        const updatedRows = result.rows.map((row: any) => {
+          const userId = row.userId || row.user_id || row.id;
+          const uniqueIntroCount = userId ? (uniqueIntroCounts.get(userId) || 0) : 0;
+          
+          return {
+            ...row,
+            introsLedToConvos: uniqueIntroCount, // Override with unique introduction count
+          };
+        });
+        
+        return {
+          rows: updatedRows,
+          columns: result.columns || [],
+          totalUserCount: result.totalUserCount || result.rows?.length || 0,
+        };
+      }
+    } catch (error: any) {
+      console.error('[AdminService] Failed to fetch slack-user-stats:', error);
+      
+      // Try fallback: attempt to get user actions stats and convert to rows format
+      // This provides a better user experience than just showing an error
+      try {
+        console.log('[AdminService] Attempting fallback: fetching user actions stats...');
+        const userActionsStats = await this.getUserActionsStats(communityId, startDate, endDate);
+        
+        // If we got stats with openedTrova > 0, we can create a basic rows structure
+        // However, we don't have per-user data, so we'll still show an error but with more context
+        if (userActionsStats && userActionsStats.openedTrova && userActionsStats.openedTrova > 0) {
+          console.log('[AdminService] Fallback found openedTrova stats, but no per-user data available');
+          // Return error but indicate that stats exist (just not per-user breakdown)
+          return { 
+            rows: [], 
+            columns: [], 
+            totalUserCount: 0,
+            error: 'Backend server error. User statistics are available, but per-user details cannot be loaded. Please try again later.'
+          };
+        }
+      } catch (fallbackError) {
+        console.error('[AdminService] Fallback also failed:', fallbackError);
+      }
+      
+      // Return error information so UI can display appropriate message
+      const errorMessage = error?.response?.status === 500 
+        ? 'Backend server error. Please try again later.'
+        : error?.message || 'Failed to fetch user statistics.';
+      return { 
+        rows: [], 
+        columns: [], 
+        totalUserCount: 0,
+        error: errorMessage
+      };
+    }
+
+    return { rows: [], columns: [], totalUserCount: 0 };
+  }
+
+  /**
    * Get Skills stats
    * Tries backend endpoint first, then calculates from skills data
    */
@@ -2499,6 +3467,308 @@ export class AdminService {
   }
 
   /**
+   * Get Weekly Introductions (Onboarding) stats
+   * Fetches counts of users introduced via "Weekly Introductions - Created by Trova Onboarding"
+   * 
+   * @param communityId - The community ID
+   * @returns Object with userOnboardingIntros (usersIntroducedLast12Mo) or null if endpoint fails
+   */
+  async getWeeklyIntroductionsStats(communityId: number): Promise<Partial<UserStats> | null> {
+    try {
+      const url = `/communities/${communityId}/stats/weekly-introductions`;
+      console.log(`[AdminService] 📧 Fetching weekly introductions stats: ${url}`);
+      const response = await apiService.get<{ usersIntroducedLast12Mo: number; usersIntroducedThisYear: number }>(url);
+      
+      if (response && typeof response === 'object') {
+        const usersIntroducedLast12Mo = response.usersIntroducedLast12Mo ?? 0;
+        const usersIntroducedThisYear = response.usersIntroducedThisYear ?? 0;
+        
+        console.log(`[AdminService] ✅ Weekly introductions stats fetched for community ${communityId}:`, {
+          usersIntroducedLast12Mo,
+          usersIntroducedThisYear,
+        });
+        
+        return {
+          userOnboardingIntros: usersIntroducedLast12Mo, // Use last 12 months for the main metric
+        };
+      }
+      
+      console.warn(`[AdminService] Weekly introductions stats endpoint returned invalid response for community ${communityId}`);
+      return null;
+    } catch (error: any) {
+      const status = error?.status || error?.response?.status;
+      if (status === 404) {
+        console.log(`[AdminService] Weekly introductions stats endpoint not found for community ${communityId} (404)`);
+      } else if (status === 500) {
+        console.warn(`[AdminService] Weekly introductions stats endpoint returned 500 error for community ${communityId}:`, error?.response?.data || error?.message);
+      } else {
+        console.warn(`[AdminService] Failed to fetch weekly introductions stats for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Get conversations started from matches (Magic Intros, Channel Pairings, Mentor Matches)
+   * Backend endpoint: GET /communities/:id/stats/conversations-started
+   * 
+   * @param communityId - The community ID
+   * @param startDate - ISO date string (optional)
+   * @param endDate - ISO date string (optional)
+   * @returns ConversationsStartedResponse or null on error
+   */
+  async getConversationsStarted(
+    communityId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<ConversationsStartedResponse | null> {
+    try {
+      let url = `/communities/${communityId}/stats/conversations-started`;
+      const params = new URLSearchParams();
+      if (startDate) params.set('startDate', startDate);
+      if (endDate) params.set('endDate', endDate);
+      const qs = params.toString();
+      if (qs) url += `?${qs}`;
+
+      console.log(`[AdminService] 💬 Fetching conversations started: ${url}`);
+      const response = await apiService.get<ConversationsStartedResponse>(url);
+
+      if (response && typeof response === 'object') {
+        console.log(`[AdminService] ✅ Conversations started fetched:`, {
+          totalConversations: response.totalConversations,
+          totalMessages: response.totalMessages,
+          conversationsCount: response.conversations?.length || 0,
+        });
+        return response;
+      }
+
+      return null;
+    } catch (error: any) {
+      const status = error?.status || error?.response?.status;
+      if (status === 404) {
+        console.log(`[AdminService] Conversations started endpoint not found for community ${communityId} (404)`);
+      } else if (status === 500) {
+        console.warn(`[AdminService] Conversations started endpoint returned 500 error for community ${communityId}:`, error?.response?.data || error?.message);
+      } else {
+        console.warn(`[AdminService] Failed to fetch conversations started for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Get Weekly Introductions (Onboarding) users list
+   * Backend endpoint: GET /communities/:id/stats/weekly-introductions/users
+   * 
+   * @param communityId - The community ID
+   * @param startDate - ISO date string (required, e.g. "2025-01-01")
+   * @param endDate - ISO date string (required, e.g. "2025-12-31")
+   * @returns Array of user rows with userId, name, email, profilePicture, introMessageSentAt, or null on error
+   * 
+   * Backend response format: { rows: Array<{ userId, name, email, profilePicture, introMessageSentAt }> }
+   * Backend returns 400 if startDate or endDate missing or invalid
+   * introMessageSentAt is the latest intro_message_sent_at for that user in the date range (ISO string)
+   */
+  async getWeeklyIntroductionsUsers(
+    communityId: number,
+    startDate: string,
+    endDate: string
+  ): Promise<WeeklyIntroductionsUserRow[] | null> {
+    try {
+      if (!startDate || !endDate) {
+        console.warn('[AdminService] startDate and endDate are required for weekly introductions users');
+        return null;
+      }
+
+      const params = new URLSearchParams();
+      params.set('startDate', startDate);
+      params.set('endDate', endDate);
+      const qs = params.toString();
+      
+      const url = `/communities/${communityId}/stats/weekly-introductions/users?${qs}`;
+      console.log(`[AdminService] 📧 Fetching weekly introductions users: ${url}`);
+
+      const response = await apiService.get<any>(url);
+      
+      // Handle both array response and { rows: [...] } response format
+      const rowsRaw = Array.isArray(response) ? response : response?.rows;
+      if (!Array.isArray(rowsRaw)) {
+        console.warn(`[AdminService] Weekly introductions users endpoint returned unexpected format or no rows for community ${communityId}`);
+        return [];
+      }
+
+      const rows: WeeklyIntroductionsUserRow[] = rowsRaw
+        .map((row: any) => {
+          // Handle different response formats (userId vs user_id, etc.)
+          const userId = row.userId ?? row.user_id ?? row.id;
+          const fname = row.fname ?? row.firstName ?? row.first_name ?? '';
+          const lname = row.lname ?? row.lastName ?? row.last_name ?? '';
+          const name = row.name ?? `${fname} ${lname}`.trim() ?? 'Unknown User';
+
+          return {
+            id: userId,
+            name,
+            email: row.email,
+            profilePicture: row.profilePicture ?? row.profile_picture,
+            introMessageSentAt: row.introMessageSentAt ?? row.intro_message_sent_at ?? row.mostRecentIntroMessageSentAt ?? row.most_recent_intro_message_sent_at,
+          };
+        })
+        .filter((r: WeeklyIntroductionsUserRow) => typeof r.id === 'number' && !!r.name);
+
+      console.log(`[AdminService] ✅ Fetched ${rows.length} weekly introductions users`);
+      return rows;
+    } catch (error: any) {
+      const status = error?.status || error?.response?.status;
+      if (status === 400) {
+        console.warn(`[AdminService] Weekly introductions users endpoint returned 400 (Bad Request) for community ${communityId}:`, error?.response?.data?.error || error?.message);
+      } else if (status === 404) {
+        console.log(`[AdminService] Weekly introductions users endpoint not found for community ${communityId}`);
+      } else {
+        console.warn(`[AdminService] Failed to fetch weekly introductions users for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Get self-introduced stats (profile spotlights/introductions count)
+   * @param communityId Community ID
+   * @param startDate Optional start date (ISO string)
+   * @param endDate Optional end date (ISO string)
+   * @returns Object with selfIntroduced count or null if endpoint fails
+   */
+  async getSelfIntroducedStats(
+    communityId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<Partial<UserStats> | null> {
+    try {
+      const params = new URLSearchParams();
+      if (startDate) params.set('startDate', startDate);
+      if (endDate) params.set('endDate', endDate);
+      const qs = params.toString();
+      const url = `/communities/${communityId}/stats/self-introduced${qs ? `?${qs}` : ''}`;
+      
+      console.log(`[AdminService] 📸 Fetching self-introduced stats: ${url}`);
+      const response = await apiService.get<any>(url);
+      
+      console.log(`[AdminService] 📸 Self-introduced stats response:`, response);
+      
+      // Handle different response formats:
+      // 1. Direct number: response = 19
+      // 2. Object with total/count: response = { total: 19 } or { count: 19 }
+      // 3. Object with other fields: response = { selfIntroduced: 19 } or similar
+      let total = 0;
+      
+      if (typeof response === 'number') {
+        total = response;
+      } else if (response && typeof response === 'object') {
+        total = response.total ?? response.count ?? response.selfIntroduced ?? response.data ?? 0;
+      }
+      
+      console.log(`[AdminService] 📸 Parsed self-introduced count: ${total}`);
+      
+      if (total !== undefined && total !== null) {
+        return {
+          selfIntroduced: total,
+        };
+      }
+      
+      console.warn(`[AdminService] Self-introduced stats endpoint returned invalid response for community ${communityId}`);
+      return null;
+    } catch (error: any) {
+      const status = error?.status || error?.response?.status;
+      if (status === 404) {
+        console.log(`[AdminService] Self-introduced stats endpoint not found for community ${communityId} (404)`);
+      } else if (status === 500) {
+        console.warn(`[AdminService] Self-introduced stats endpoint returned 500 for community ${communityId}`);
+      } else {
+        console.warn(`[AdminService] Failed to fetch self-introduced stats for community ${communityId}:`, error?.message || error);
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Get self-introduced users list
+   * @param communityId Community ID
+   * @param startDate Start date (ISO string)
+   * @param endDate End date (ISO string)
+   * @param page Optional page number for pagination
+   * @param limit Optional limit per page
+   * @returns Array of SelfIntroducedUserRow or null if endpoint fails
+   */
+  async getSelfIntroducedUsers(
+    communityId: number,
+    startDate: string,
+    endDate: string,
+    page?: number,
+    limit?: number
+  ): Promise<SelfIntroducedUserRow[] | null> {
+    try {
+      if (!startDate || !endDate) {
+        console.warn('[AdminService] startDate and endDate are required for self-introduced users');
+        return null;
+      }
+
+      const params = new URLSearchParams();
+      params.set('startDate', startDate);
+      params.set('endDate', endDate);
+      if (page !== undefined) params.set('page', String(page));
+      if (limit !== undefined) params.set('limit', String(limit));
+      const qs = params.toString();
+      
+      const url = `/communities/${communityId}/stats/self-introduced/users?${qs}`;
+      console.log(`[AdminService] 📸 Fetching self-introduced users: ${url}`);
+
+      const response = await apiService.get<any>(url);
+      
+      // Handle both array response and { rows: [...] } or { data: [...] } response format
+      const rowsRaw = Array.isArray(response) 
+        ? response 
+        : response?.rows ?? response?.data ?? response?.users;
+      
+      if (!Array.isArray(rowsRaw)) {
+        console.warn(`[AdminService] Self-introduced users endpoint returned unexpected format or no rows for community ${communityId}`);
+        return [];
+      }
+
+      const rows: SelfIntroducedUserRow[] = rowsRaw
+        .map((row: any) => {
+          // Handle different response formats (userId vs user_id, etc.)
+          const userId = row.userId ?? row.user_id ?? row.id;
+          const fname = row.fname ?? row.firstName ?? row.first_name ?? '';
+          const lname = row.lname ?? row.lastName ?? row.last_name ?? '';
+          const name = row.name ?? `${fname} ${lname}`.trim() ?? 'Unknown User';
+
+          return {
+            id: userId,
+            name,
+            email: row.email,
+            profilePicture: row.profilePicture ?? row.profile_picture,
+            introducedAt: row.introducedAt ?? row.introduced_at ?? row.createdAt ?? row.created_at,
+            channelName: row.channelName ?? row.channel_name,
+            channelId: row.channelId ?? row.channel_id,
+          };
+        })
+        .filter((r: SelfIntroducedUserRow) => typeof r.id === 'number' && !!r.name);
+
+      console.log(`[AdminService] ✅ Fetched ${rows.length} self-introduced users`);
+      return rows;
+    } catch (error: any) {
+      const status = error?.status || error?.response?.status;
+      if (status === 400) {
+        console.warn(`[AdminService] Self-introduced users endpoint returned 400 (Bad Request) for community ${communityId}:`, error?.response?.data?.error || error?.message);
+      } else if (status === 404) {
+        console.log(`[AdminService] Self-introduced users endpoint not found for community ${communityId}`);
+      } else {
+        console.warn(`[AdminService] Failed to fetch self-introduced users for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
+      }
+      return null;
+    }
+  }
+
+  /**
    * Get mentor/mentee stats from user_career table
    * Queries users who are active members and have mentor/mentee flags set
    * 
@@ -2520,7 +3790,7 @@ export class AdminService {
    * JOIN memberships m ON m.user_id = uc.user_id
    * WHERE m.community_id = $1 AND m.is_active = TRUE AND uc.is_active_mentee = TRUE;
    */
-  private async getMentorMenteeStats(communityId: number): Promise<Partial<UserStats> | null> {
+  async getMentorMenteeStats(communityId: number): Promise<Partial<UserStats> | null> {
     const endpoints = [
       // Primary endpoint pattern (should match backend implementation)
       `/communities/${communityId}/stats/mentor-mentee`,
@@ -2575,8 +3845,207 @@ export class AdminService {
       }
     }
 
-    // If no endpoint found, return null (will use fallback calculation)
+    // Fallback: calculate from profiles
+    console.log(`[AdminService] ⚠️ All mentor/mentee stats endpoints failed, trying profile fallback`);
+    return this.getMentorMenteeStatsFallback(communityId);
+  }
+
+  /**
+   * Fallback: Calculate mentor/mentee stats from profiles
+   * First tries to fetch unconsolidated skills data which may include join table info,
+   * then falls back to checking profile fields directly
+   */
+  private async getMentorMenteeStatsFallback(communityId: number): Promise<Partial<UserStats> | null> {
+    try {
+      const profiles = await this.getCachedProfiles(communityId);
+      
+      // FIRST: Try to get unconsolidated skills data which might include user IDs and join table fields
+      const userMentorFlags = new Set<number>();
+      const userMenteeFlags = new Set<number>();
+      
+      try {
+        console.log(`[AdminService] Trying to fetch unconsolidated skills data for mentor/mentee stats`);
+        const unconsolidatedSkills = await this.getSkillsChartData(communityId, 'all', false, true);
+        
+        // Check if the skills data includes user information with join table fields
+        if (unconsolidatedSkills && unconsolidatedSkills.length > 0) {
+          const firstSkill = unconsolidatedSkills[0] as any;
+          console.log(`[AdminService] Sample unconsolidated skill entry for stats:`, firstSkill);
+          
+          // Check if skills data includes user IDs and join table fields
+          unconsolidatedSkills.forEach((skillEntry: any) => {
+            // Check various possible structures
+            const userId = skillEntry.userId || skillEntry.user_id || skillEntry.id;
+            if (userId) {
+              const canBeMentor = skillEntry.can_be_mentor || skillEntry.canBeMentor || skillEntry.canMentor;
+              const wantsToBeMentee = skillEntry.wants_to_be_mentee || skillEntry.wantsToBeMentee || skillEntry.wantMentor || skillEntry.wantsMentor;
+              
+              // Check for can_be_mentor
+              if (canBeMentor === true || canBeMentor === 1 || canBeMentor === 'true' || canBeMentor === '1') {
+                userMentorFlags.add(userId);
+              }
+              
+              // Check for wants_to_be_mentee
+              if (wantsToBeMentee === true || wantsToBeMentee === 1 || wantsToBeMentee === 'true' || wantsToBeMentee === '1') {
+                userMenteeFlags.add(userId);
+              }
+            }
+          });
+          
+          if (userMentorFlags.size > 0 || userMenteeFlags.size > 0) {
+            console.log(`[AdminService] ✅ Found ${userMentorFlags.size} mentors and ${userMenteeFlags.size} mentees from skills data`);
+            return {
+              usersCanMentor: userMentorFlags.size,
+              usersWantMentor: userMenteeFlags.size,
+            };
+          }
+        }
+      } catch (error) {
+        console.log(`[AdminService] Could not fetch unconsolidated skills data for stats:`, error);
+      }
+      
+      // Expanded list of possible field names (matching the users fallback)
+      const canMentorFields = [
+        'canMentor', 'can_mentor', 'dataCanMentor', 'data_can_mentor',
+        'is_active_mentor', 'isActiveMentor', 'isMentor', 'mentor',
+        'canMentorFlag', 'mentorFlag', 'isMentorActive'
+      ];
+      const wantMentorFields = [
+        'wantMentor', 'want_mentor', 'dataWantMentor', 'data_want_mentor',
+        'is_active_mentee', 'isActiveMentee', 'isMentee', 'mentee', 'wantsMentor',
+        'wantMentorFlag', 'menteeFlag', 'isMenteeActive', 'wants_mentor'
+      ];
+      
+      let canMentorCount = 0;
+      let wantMentorCount = 0;
+      
+      profiles.forEach(profile => {
+        const profileAny = profile as any;
+        const userId = profile.userId || profile.id;
+        
+        // FIRST: Check skills array for can_be_mentor and wants_to_be_mentee from join_user_skill table
+        const skills = profileAny.skills || profileAny.dataSkills || profileAny.userSkills;
+        let foundCanMentorInSkills = false;
+        let foundWantMentorInSkills = false;
+        
+        if (skills) {
+          let skillsArray: any[] = [];
+          
+          // Normalize skills to array
+          if (Array.isArray(skills)) {
+            skillsArray = skills;
+          } else if (typeof skills === 'object') {
+            skillsArray = Object.values(skills);
+          }
+          
+          // Check each skill object for mentor/mentee flags
+          for (const skill of skillsArray) {
+            if (typeof skill === 'object' && skill !== null) {
+              // Check for can_be_mentor (from join_user_skill table)
+              const canBeMentor = skill.can_be_mentor || skill.canBeMentor || skill.canMentor;
+              if (canBeMentor === true || canBeMentor === 1 || canBeMentor === 'true' || canBeMentor === '1') {
+                foundCanMentorInSkills = true;
+              }
+              
+              // Check for wants_to_be_mentee (from join_user_skill table)
+              const wantsToBeMentee = skill.wants_to_be_mentee || skill.wantsToBeMentee || skill.wantMentor || skill.wantsMentor;
+              if (wantsToBeMentee === true || wantsToBeMentee === 1 || wantsToBeMentee === 'true' || wantsToBeMentee === '1') {
+                foundWantMentorInSkills = true;
+              }
+            }
+          }
+        }
+        
+        // SECOND: Check all possible field names for canMentor at profile level
+        let foundCanMentor = foundCanMentorInSkills;
+        if (!foundCanMentor) {
+          for (const field of canMentorFields) {
+            let value = profileAny[field];
+            
+            // Also check nested structures
+            if (value === undefined || value === null) {
+              if (profileAny.data && typeof profileAny.data === 'object') {
+                value = profileAny.data[field];
+              }
+              if ((value === undefined || value === null) && profileAny.career && typeof profileAny.career === 'object') {
+                value = profileAny.career[field];
+              }
+              if ((value === undefined || value === null) && profileAny.userCareer && typeof profileAny.userCareer === 'object') {
+                value = profileAny.userCareer[field];
+              }
+            }
+            
+            if (value !== undefined && value !== null) {
+              if (typeof value === 'boolean' && value === true) {
+                foundCanMentor = true;
+                break;
+              } else if (typeof value === 'number' && (value === 1 || value > 0)) {
+                foundCanMentor = true;
+                break;
+              } else if (typeof value === 'string') {
+                const lower = value.toLowerCase();
+                if (lower === 'true' || lower === '1' || lower === 'yes') {
+                  foundCanMentor = true;
+                  break;
+                }
+              }
+            }
+          }
+        }
+        if (foundCanMentor) canMentorCount++;
+        
+        // THIRD: Check all possible field names for wantMentor at profile level
+        let foundWantMentor = foundWantMentorInSkills;
+        if (!foundWantMentor) {
+          for (const field of wantMentorFields) {
+            let value = profileAny[field];
+            
+            // Also check nested structures
+            if (value === undefined || value === null) {
+              if (profileAny.data && typeof profileAny.data === 'object') {
+                value = profileAny.data[field];
+              }
+              if ((value === undefined || value === null) && profileAny.career && typeof profileAny.career === 'object') {
+                value = profileAny.career[field];
+              }
+              if ((value === undefined || value === null) && profileAny.userCareer && typeof profileAny.userCareer === 'object') {
+                value = profileAny.userCareer[field];
+              }
+            }
+            
+            if (value !== undefined && value !== null) {
+              if (typeof value === 'boolean' && value === true) {
+                foundWantMentor = true;
+                break;
+              } else if (typeof value === 'number' && (value === 1 || value > 0)) {
+                foundWantMentor = true;
+                break;
+              } else if (typeof value === 'string') {
+                const lower = value.toLowerCase();
+                if (lower === 'true' || lower === '1' || lower === 'yes') {
+                  foundWantMentor = true;
+                  break;
+                }
+              }
+            }
+          }
+        }
+        if (foundWantMentor) wantMentorCount++;
+      });
+      
+      console.log(`[AdminService] ✅ Fallback: Calculated mentor/mentee stats from profiles:`, {
+        usersCanMentor: canMentorCount,
+        usersWantMentor: wantMentorCount,
+      });
+      
+      return {
+        usersCanMentor: canMentorCount,
+        usersWantMentor: wantMentorCount,
+      };
+    } catch (error) {
+      console.error('[AdminService] Error in mentor/mentee stats fallback:', error);
     return null;
+    }
   }
 
   /**
@@ -2589,8 +4058,6 @@ export class AdminService {
     type: 'can' | 'want'
   ): Promise<CommunityMember[]> {
     const endpoints = [
-      // New primary endpoint that returns users with skills and intent
-      `/communities/${communityId}/mentor-mentee/users?type=${type}`,
       `/communities/${communityId}/mentors/${type === 'can' ? 'mentors' : 'mentees'}`,
       `/communities/${communityId}/mentor-mentee/${type === 'can' ? 'mentors' : 'mentees'}`,
       `/communities/${communityId}/users/mentor-mentee?type=${type}`,
@@ -2603,59 +4070,7 @@ export class AdminService {
         const users = await apiService.get<CommunityMember[]>(url);
         if (users && Array.isArray(users)) {
           console.log(`[AdminService] ✅ Found ${users.length} ${type === 'can' ? 'mentors' : 'mentees'}`);
-          console.log('[AdminService] 🧪 mentor/mentee sample', users.slice(0, 3).map((u: any) => ({
-            id: u.id,
-            skills: u.skills,
-            mentorsOn: u.mentorsOn,
-            wantsMentorOn: u.wantsMentorOn,
-          })));
-
-          // First, try to use skills provided by the endpoint (skills, mentorsOn, wantsMentorOn)
-          let enriched = users.map((user: any) => {
-            const skillSources = [
-              user.skills,
-              type === 'can' ? user.mentorsOn : user.wantsMentorOn,
-              user.skillList,
-              user.skillsList,
-              user.skillNames,
-              user.skill_names,
-              user.skillsString,
-            ];
-
-            const endpointSkills = Array.from(
-              new Set(
-                skillSources.flatMap((src: any) => this.normalizeSkills(src))
-              )
-            );
-
-            return endpointSkills.length > 0 ? { ...user, skills: endpointSkills } : user;
-          });
-
-          // If any user still lacks skills, try enriching from profiles
-          const needsProfileEnrichment = enriched.some((u: any) => !u.skills || u.skills.length === 0);
-          if (needsProfileEnrichment) {
-            try {
-              const { profileService } = await import('./profile.service');
-              const profiles = await profileService.getProfilesForUserAndCommunity(communityId);
-              const profileMap = new Map<number, any>();
-              profiles.forEach((p: any) => {
-                const userId = p.userId || p.id || p.user_id;
-                if (userId) profileMap.set(userId, p);
-              });
-
-              enriched = enriched.map((user: any) => {
-                if (user.skills && user.skills.length > 0) return user;
-                const profile = profileMap.get(user.id);
-                if (!profile) return user;
-                const skills = this.normalizeSkills(profile.skills);
-                return skills.length > 0 ? { ...user, skills } : user;
-              });
-            } catch (profileError) {
-              console.warn('[AdminService] Could not enrich mentor/mentee users with skills from profiles:', profileError);
-            }
-          }
-
-          return enriched;
+          return users;
         }
       } catch (error: any) {
         const status = error?.status || error?.response?.status;
@@ -2670,109 +4085,358 @@ export class AdminService {
       }
     }
 
-    // Fallback: derive from profiles using possible mentor/mentee flags
-    try {
-      const { profileService } = await import('./profile.service');
-      const profiles = await profileService.getProfilesForUserAndCommunity(communityId);
-      console.warn(`[AdminService] No mentor/mentee user endpoint; using profiles fallback (${profiles.length} profiles)`);
-
-      const filtered: CommunityMember[] = profiles
-        .map((p: any) => {
-          const userId = p.userId || p.id || p.user_id;
-          if (!userId) return null;
-
-          // Heuristic flags
-          const isMentor =
-            p.is_active_mentor === true ||
-            p.isActiveMentor === true ||
-            p.canMentor === true ||
-            p.isMentor === true;
-          const isMentee =
-            p.is_active_mentee === true ||
-            p.isActiveMentee === true ||
-            p.wantMentor === true ||
-            p.isMentee === true ||
-            p.wantsMentor === true;
-
-          const matchesType = type === 'can' ? isMentor : isMentee;
-          if (!matchesType) return null;
-
-          const skills = this.normalizeSkills(p.skills);
-
-          const member: CommunityMember = {
-            id: userId,
-            fname: p.fname || p.firstName || '',
-            lname: p.lname || p.lastName || '',
-            fullName: p.fullName || `${p.fname || ''} ${p.lname || ''}`.trim() || p.name || `User ${userId}`,
-            email: p.email || p.mail || '',
-            profilePicture: p.profilePicture || p.avatarUrl || p.photoUrl,
-            skills: skills.length > 0 ? skills : undefined,
-          };
-          return member;
-        })
-        .filter(Boolean) as CommunityMember[];
-
-      console.log(`[AdminService] ✅ Profiles fallback found ${filtered.length} ${type === 'can' ? 'mentors' : 'mentees'}`);
-      return filtered;
-    } catch (fallbackError) {
-      console.warn('[AdminService] Mentor/mentee profiles fallback failed:', fallbackError);
-      return [];
-    }
+    // Fallback: try to get from profiles (canMentor and wantMentor are fields in the profile)
+    console.log(`[AdminService] ⚠️ All mentor/mentee endpoints failed, trying profile fallback for ${type === 'can' ? 'mentors' : 'mentees'}`);
+    return this.getMentorMenteeUsersFallback(communityId, type);
   }
 
   /**
-   * Normalize skills payload into a simple string array
+   * Fallback: Get mentor/mentee users from profiles
+   * First tries to fetch unconsolidated skills data which may include join table info,
+   * then falls back to checking profile fields directly
+   * 
+   * NOTE: This fallback has limitations because:
+   * 1. The `/communities/getProfilesForUserAndCommunity` endpoint returns `dataSkills` as an array of strings (e.g., ["Vue.js"])
+   * 2. The join table fields (`can_be_mentor`, `wants_to_be_mentee`) from `join_user_skill` are NOT included in the profile response
+   * 3. The unconsolidated skills endpoint returns aggregated data (name + count), not per-user data with join table fields
+   * 
+   * To properly support this feature, the backend needs to either:
+   * - Include the join table data in the profile response (e.g., `dataSkills` as array of objects with `can_be_mentor`/`wants_to_be_mentee` fields)
+   * - Provide a new endpoint that returns user skills with join table data (e.g., `/communities/:id/users/skills-with-join-data`)
    */
-  private normalizeSkills(skills: any): string[] {
-    if (!skills) return [];
-
-    // Comma-separated string
-    if (typeof skills === 'string') {
-      return skills
-        .split(',')
-        .map(s => s.trim())
-        .filter(s => s.length > 0);
-    }
-
-    // Already an array of strings
-    if (Array.isArray(skills)) {
-      const normalized = skills
-        .map((s: any) => {
-          if (!s) return '';
-          if (typeof s === 'string') return s.trim();
-          if (typeof s === 'object') {
-            const candidate =
-              s.name ||
-              s.skill ||
-              s.skillName ||
-              s.skill_name ||
-              s.skillId ||
-              s.skill_id ||
-              s.displayName ||
-              s.label ||
-              s.title ||
-              (s.skill && (s.skill.name || s.skill.skillName)) ||
-              (s.meta && s.meta.name);
-            if (candidate) return String(candidate).trim();
+  private async getMentorMenteeUsersFallback(
+    communityId: number,
+    type: 'can' | 'want'
+  ): Promise<CommunityMember[]> {
+    try {
+      const profiles = await this.getCachedProfiles(communityId);
+      
+      // FIRST: Try to get unconsolidated skills data which might include user IDs and join table fields
+      let userMentorFlags = new Map<number, { canMentor: boolean; wantMentor: boolean }>();
+      
+      try {
+        console.log(`[AdminService] Trying to fetch unconsolidated skills data for mentor/mentee flags`);
+        const unconsolidatedSkills = await this.getSkillsChartData(communityId, 'all', false, true);
+        
+        // Check if the skills data includes user information with join table fields
+        if (unconsolidatedSkills && unconsolidatedSkills.length > 0) {
+          const firstSkill = unconsolidatedSkills[0] as any;
+          console.log(`[AdminService] Sample unconsolidated skill entry:`, firstSkill);
+          
+          // Check if skills data includes user IDs and join table fields
+          unconsolidatedSkills.forEach((skillEntry: any) => {
+            // Check various possible structures
+            const userId = skillEntry.userId || skillEntry.user_id || skillEntry.id;
+            if (userId) {
+              const canBeMentor = skillEntry.can_be_mentor || skillEntry.canBeMentor || skillEntry.canMentor;
+              const wantsToBeMentee = skillEntry.wants_to_be_mentee || skillEntry.wantsToBeMentee || skillEntry.wantMentor || skillEntry.wantsMentor;
+              
+              if (canBeMentor !== undefined || wantsToBeMentee !== undefined) {
+                const existing = userMentorFlags.get(userId) || { canMentor: false, wantMentor: false };
+                
+                // Check for can_be_mentor
+                if (canBeMentor === true || canBeMentor === 1 || canBeMentor === 'true' || canBeMentor === '1') {
+                  existing.canMentor = true;
+                }
+                
+                // Check for wants_to_be_mentee
+                if (wantsToBeMentee === true || wantsToBeMentee === 1 || wantsToBeMentee === 'true' || wantsToBeMentee === '1') {
+                  existing.wantMentor = true;
+                }
+                
+                userMentorFlags.set(userId, existing);
+              }
+            }
+          });
+          
+          if (userMentorFlags.size > 0) {
+            console.log(`[AdminService] ✅ Found ${userMentorFlags.size} users with mentor/mentee flags from skills data`);
           }
-          return String(s).trim();
+        }
+      } catch (error) {
+        console.log(`[AdminService] Could not fetch unconsolidated skills data:`, error);
+      }
+      
+      const fieldName = type === 'can' ? 'canMentor' : 'wantMentor';
+      // Expanded list of possible field names (including variations with underscores, data prefix, etc.)
+      const altFieldNames = type === 'can' 
+        ? [
+            'canMentor', 'can_mentor', 'dataCanMentor', 'data_can_mentor',
+            'is_active_mentor', 'isActiveMentor', 'isMentor', 'mentor',
+            'canMentorFlag', 'mentorFlag', 'isMentorActive'
+          ]
+        : [
+            'wantMentor', 'want_mentor', 'dataWantMentor', 'data_want_mentor',
+            'is_active_mentee', 'isActiveMentee', 'isMentee', 'mentee', 'wantsMentor',
+            'wantMentorFlag', 'menteeFlag', 'isMenteeActive', 'wants_mentor'
+          ];
+      
+      console.log(`[AdminService] Fallback: Filtering ${profiles.length} profiles for ${fieldName}`);
+      
+      // Enhanced debug: Log sample profile structure to understand what data is available
+      if (profiles.length > 0) {
+        const sampleProfile = profiles[0] as any;
+        console.log(`[AdminService] 🔍 Sample profile structure for mentor/mentee detection:`, {
+          userId: sampleProfile.userId || sampleProfile.id,
+          hasSkills: !!sampleProfile.skills,
+          hasDataSkills: !!sampleProfile.dataSkills,
+          hasUserSkills: !!sampleProfile.userSkills,
+          skillsType: typeof sampleProfile.skills,
+          dataSkillsType: typeof sampleProfile.dataSkills,
+          skillsValue: sampleProfile.skills,
+          dataSkillsValue: sampleProfile.dataSkills,
+          allKeys: Object.keys(sampleProfile),
+          // Check for any nested objects that might contain mentor/mentee data
+          hasData: !!sampleProfile.data,
+          hasCareer: !!sampleProfile.career,
+          hasUserCareer: !!sampleProfile.userCareer,
+        });
+        
+        // If dataSkills is an array, check if it contains objects or just strings
+        if (Array.isArray(sampleProfile.dataSkills) && sampleProfile.dataSkills.length > 0) {
+          console.log(`[AdminService] 🔍 Sample dataSkills entry:`, sampleProfile.dataSkills[0], `(type: ${typeof sampleProfile.dataSkills[0]})`);
+        }
+      }
+      
+      const filtered = profiles
+        .map(profile => {
+          const profileAny = profile as any;
+          const userId = profile.userId || profile.id;
+          
+          // Collect skills that have mentor/mentee flags
+          const relevantSkills: string[] = [];
+          const skills = profileAny.skills || profileAny.dataSkills || profileAny.userSkills;
+          
+          if (skills) {
+            let skillsArray: any[] = [];
+            
+            // Normalize skills to array
+            if (Array.isArray(skills)) {
+              skillsArray = skills;
+            } else if (typeof skills === 'object') {
+              skillsArray = Object.values(skills);
+            }
+            
+            // Check each skill object for mentor/mentee flags and collect skill names
+            for (const skill of skillsArray) {
+              if (typeof skill === 'object' && skill !== null) {
+                const skillName = skill.name || skill.skill || skill.value || '';
+                
+                // Check for can_be_mentor (from join_user_skill table)
+                if (type === 'can') {
+                  const canBeMentor = skill.can_be_mentor || skill.canBeMentor || skill.canMentor;
+                  if (canBeMentor === true || canBeMentor === 1 || canBeMentor === 'true' || canBeMentor === '1') {
+                    if (skillName) {
+                      relevantSkills.push(skillName);
+                    }
+                  }
+                }
+                
+                // Check for wants_to_be_mentee (from join_user_skill table)
+                if (type === 'want') {
+                  const wantsToBeMentee = skill.wants_to_be_mentee || skill.wantsToBeMentee || skill.wantMentor || skill.wantsMentor;
+                  if (wantsToBeMentee === true || wantsToBeMentee === 1 || wantsToBeMentee === 'true' || wantsToBeMentee === '1') {
+                    if (skillName) {
+                      relevantSkills.push(skillName);
+                    }
+                  }
+                }
+              } else if (typeof skill === 'string' && skill.trim()) {
+                // If skills are just strings, we can't determine mentor/mentee status from them
+                // But we'll check profile-level flags below
+              }
+            }
+          }
+          
+          return {
+            id: userId,
+            fname: profile.fname,
+            lname: profile.lname,
+            fullName: profile.fullName || `${profile.fname} ${profile.lname}`,
+            email: '',
+            profilePicture: profile.profilePicture,
+            isManager: false,
+            enabled: true,
+            joinDate: undefined,
+            jobTitle: profile.jobTitle,
+            currentEmployer: profile.currentEmployer,
+            // Add skills that have mentor/mentee flags
+            mentorSkills: type === 'can' ? relevantSkills : undefined,
+            menteeSkills: type === 'want' ? relevantSkills : undefined,
+            _profile: profile, // Store profile reference for filtering
+            _relevantSkills: relevantSkills, // Store for filtering
+          };
         })
-        .filter((s: string) => s.length > 0);
-      return Array.from(new Set(normalized));
-    }
+        .filter(member => {
+          const profile = member._profile;
+          if (!profile) return false;
+          
+          // Ensure _relevantSkills is always an array
+          if (!member._relevantSkills) {
+            member._relevantSkills = [];
+          }
+          
+          // If we found skills with mentor/mentee flags, include this user
+          if (member._relevantSkills.length > 0) {
+            console.log(`[AdminService] Found ${member._relevantSkills.length} skill(s) with ${type === 'can' ? 'can_be_mentor' : 'wants_to_be_mentee'}=true for user ${member.id}:`, member._relevantSkills);
+            return true;
+          }
+          
+          const profileAny = profile as any;
+          
+          // FIRST: Check if we found this user in the skills data with join table flags
+          const mentorFlags = userMentorFlags.get(member.id);
+          if (mentorFlags) {
+            if (type === 'can' && mentorFlags.canMentor) {
+              console.log(`[AdminService] Found can_be_mentor=true from skills data for user ${member.id}`);
+              return true;
+            }
+            if (type === 'want' && mentorFlags.wantMentor) {
+              console.log(`[AdminService] Found wants_to_be_mentee=true from skills data for user ${member.id}`);
+              return true;
+            }
+          }
+          
+          // SECOND: Check skills array for can_be_mentor and wants_to_be_mentee from join_user_skill table
+          const skills = profileAny.skills || profileAny.dataSkills || profileAny.userSkills;
+          if (skills) {
+            let skillsArray: any[] = [];
+            
+            // Normalize skills to array
+            if (Array.isArray(skills)) {
+              skillsArray = skills;
+            } else if (typeof skills === 'object') {
+              skillsArray = Object.values(skills);
+            }
+            
+            // Check each skill object for mentor/mentee flags and collect skill names
+            for (const skill of skillsArray) {
+              if (typeof skill === 'object' && skill !== null) {
+                const skillName = skill.name || skill.skill || skill.value || '';
+                
+                // Check for can_be_mentor (from join_user_skill table)
+                if (type === 'can') {
+                  const canBeMentor = skill.can_be_mentor || skill.canBeMentor || skill.canMentor;
+                  if (canBeMentor === true || canBeMentor === 1 || canBeMentor === 'true' || canBeMentor === '1') {
+                    if (skillName && !member._relevantSkills.includes(skillName)) {
+                      member._relevantSkills.push(skillName);
+                    }
+                    console.log(`[AdminService] Found can_be_mentor=true in skills for user ${member.id}${skillName ? ` (skill: ${skillName})` : ''}`);
+                    // Don't return yet - continue collecting all skills with this flag
+                  }
+                }
+                
+                // Check for wants_to_be_mentee (from join_user_skill table)
+                if (type === 'want') {
+                  const wantsToBeMentee = skill.wants_to_be_mentee || skill.wantsToBeMentee || skill.wantMentor || skill.wantsMentor;
+                  if (wantsToBeMentee === true || wantsToBeMentee === 1 || wantsToBeMentee === 'true' || wantsToBeMentee === '1') {
+                    if (skillName && !member._relevantSkills.includes(skillName)) {
+                      member._relevantSkills.push(skillName);
+                    }
+                    console.log(`[AdminService] Found wants_to_be_mentee=true in skills for user ${member.id}${skillName ? ` (skill: ${skillName})` : ''}`);
+                    // Don't return yet - continue collecting all skills with this flag
+                  }
+                }
+              }
+            }
+            
+            // If we found any skills with mentor/mentee flags, include this user
+            if (member._relevantSkills.length > 0) {
+              return true;
+            }
+          }
+          
+          // THIRD: Check all possible field names for mentor/mentee flags at profile level
+          // If profile-level flag is true but we don't have specific skills, include all skills
+          let foundProfileLevelFlag = false;
+          for (const field of altFieldNames) {
+            let value = profileAny[field];
+            
+            // Also check nested structures (e.g., data.canMentor, career.is_active_mentor)
+            if (value === undefined || value === null) {
+              if (profileAny.data && typeof profileAny.data === 'object') {
+                value = profileAny.data[field];
+              }
+              if ((value === undefined || value === null) && profileAny.career && typeof profileAny.career === 'object') {
+                value = profileAny.career[field];
+              }
+              if ((value === undefined || value === null) && profileAny.userCareer && typeof profileAny.userCareer === 'object') {
+                value = profileAny.userCareer[field];
+              }
+            }
+            
+            if (value !== undefined && value !== null) {
+              // Handle boolean, number (1/0), or string ('true'/'false', '1'/'0')
+              let isTrue = false;
+              if (typeof value === 'boolean') {
+                isTrue = value === true;
+              } else if (typeof value === 'number') {
+                isTrue = value === 1 || value > 0;
+              } else if (typeof value === 'string') {
+                const lower = value.toLowerCase();
+                isTrue = lower === 'true' || lower === '1' || lower === 'yes';
+              }
+              
+              if (isTrue) {
+                foundProfileLevelFlag = true;
+                // If we found a profile-level flag but no specific skills, collect all skills
+                if (member._relevantSkills.length === 0) {
+                  const allSkills = profileAny.skills || profileAny.dataSkills || profileAny.userSkills;
+                  if (allSkills) {
+                    let skillsArray: any[] = [];
+                    if (Array.isArray(allSkills)) {
+                      skillsArray = allSkills;
+                    } else if (typeof allSkills === 'object') {
+                      skillsArray = Object.values(allSkills);
+                    }
+                    
+                    skillsArray.forEach((skill: any) => {
+                      if (typeof skill === 'object' && skill !== null) {
+                        const skillName = skill.name || skill.skill || skill.value || '';
+                        if (skillName && !member._relevantSkills.includes(skillName)) {
+                          member._relevantSkills.push(skillName);
+                        }
+                      } else if (typeof skill === 'string' && skill.trim()) {
+                        if (!member._relevantSkills.includes(skill)) {
+                          member._relevantSkills.push(skill);
+                        }
+                      }
+                    });
+                  }
+                }
+                break; // Found a flag, no need to check other fields
+              }
+            }
+          }
+          
+          if (foundProfileLevelFlag) {
+            return true;
+          }
+          
+          return false;
+        })
+        .map(member => {
+          // Update skills fields and remove internal fields before returning
+          const { _profile, _relevantSkills = [], ...cleanMember } = member;
+          if (type === 'can') {
+            cleanMember.mentorSkills = _relevantSkills;
+          } else {
+            cleanMember.menteeSkills = _relevantSkills;
+          }
+          return cleanMember;
+        });
 
-    // Object map { skillName: true } or { skillName: level }
-    if (typeof skills === 'object') {
-      return Array.from(
-        new Set(
-          Object.keys(skills)
-            .map(k => k.trim())
-            .filter(k => k.length > 0)
-        )
-      );
-    }
-
+      console.log(`[AdminService] ✅ Fallback: Found ${filtered.length} ${type === 'can' ? 'mentors' : 'mentees'} from profiles`);
+      
+      // Note: If the backend stats endpoint returns a different count, it may be querying the user_career table
+      // directly, which might have users that don't have the flag set in their profile dataSkills array.
+      // We can only return users for whom we have profile data.
+      
+      return filtered;
+    } catch (error) {
+      console.error('[AdminService] Error in mentor/mentee fallback:', error);
     return [];
+    }
   }
 
   /**
@@ -2809,10 +4473,9 @@ export class AdminService {
 
         stats.totalSkills = uniqueSkills.size;
 
-        // Try to get users with skills by querying profiles
+        // Try to get users with skills by querying profiles (use cached if available)
         try {
-          const { profileService } = await import('./profile.service');
-          const profiles = await profileService.getProfilesForUserAndCommunity(communityId);
+          const profiles = await this.getCachedProfiles(communityId);
           console.log(`[AdminService] 🎓 Processing ${profiles.length} profiles for skills calculation`);
           
           profiles.forEach((profile: any) => {
@@ -2820,7 +4483,8 @@ export class AdminService {
             if (!userId) return;
             
             // Check if profile has skills (could be array, object, or string)
-            const skills = profile.skills;
+            // Check multiple possible field names: skills, dataSkills, userSkills
+            const skills = profile.skills || profile.dataSkills || profile.userSkills;
             if (skills) {
               if (Array.isArray(skills) && skills.length > 0) {
                 usersWithSkillsSet.add(userId);
@@ -2897,6 +4561,7 @@ export class AdminService {
 
   /**
    * Calculate Match Engagement stats from available data
+   * Uses slack-user-stats for Trova Magic (correct MPIM + type_id=9 logic) instead of matches-based fallback
    */
   private async calculateMatchEngagementStats(
     communityId: number,
@@ -2906,41 +4571,130 @@ export class AdminService {
     try {
       const stats: Partial<UserStats> = {
         trovaMagicMatches: 0,
+        trovaMagicSessions: 0,
         channelPairingMatches: 0,
+        channelPairingSessions: 0,
+        mentorMenteeMatches: 0,
         allMatchesEngaged: 0,
         matchEngagementRate: 0,
       };
 
-      // Get matches by type for efficiency (backend can filter)
-      const [trovaMagicMatches, channelPairingMatches] = await Promise.all([
-        this.getMatchesForCommunity(communityId, startDate, endDate, 'trova_magic'),
-        this.getMatchesForCommunity(communityId, startDate, endDate, 'channel_pairing'),
-      ]);
+      // Use daily breakdown for both total and engaged, excluding dates with >1000 pairings (data issues)
+      // This ensures consistency and accuracy - total should be sum of all valid daily pairings
+      let trovaMagicTotal = 0;
+      let trovaMagicEngaged = 0;
+      let trovaMagicSessions = 0;
+      try {
+        const magicIntrosByDate = await this.getMagicIntrosByDate(communityId, startDate, endDate);
+        // Filter out dates with >1000 pairings (data issues like June 24, 2025 with 17,005)
+        const validDates = magicIntrosByDate.filter(day => day.totalPairings <= 1000);
+        
+        // Sum total pairings from valid dates (this matches what user sees in the list: 2+2+5+2+4+5+...)
+        trovaMagicTotal = validDates.reduce((sum, day) => sum + day.totalPairings, 0);
+        
+        // Sum engaged pairings from valid dates
+        trovaMagicEngaged = validDates.reduce((sum, day) => sum + day.engagedPairings, 0);
+        
+        // Get total sessions (match records) by fetching all matches
+        const trovaMagicMatchRecords = await this.getMatchesForCommunity(communityId, startDate, endDate, 'trova_magic');
+        trovaMagicSessions = trovaMagicMatchRecords?.length || 0;
+        
+        console.log(`[AdminService] 🔗 Trova Magic: ${trovaMagicSessions} sessions → ${trovaMagicTotal} unique pairs, ${trovaMagicEngaged} engaged (${validDates.length} valid dates, ${magicIntrosByDate.length - validDates.length} dates excluded)`);
+      } catch (error) {
+        console.warn('[AdminService] Could not fetch Trova Magic from daily breakdown:', error);
+      }
+      
+      stats.trovaMagicMatches = trovaMagicTotal;
+      stats.trovaMagicSessions = trovaMagicSessions;
+      stats.trovaMagicEngagements = trovaMagicEngaged;
 
-      stats.trovaMagicMatches = trovaMagicMatches?.length || 0;
-      stats.channelPairingMatches = channelPairingMatches?.length || 0;
+      // Get Channel Pairing matches separately (they don't have a daily breakdown endpoint)
+      const channelPairingMatches = await this.getMatchesForCommunity(communityId, startDate, endDate, 'channel_pairing');
       
-      const totalMatches = stats.trovaMagicMatches + stats.channelPairingMatches;
+      // Count unique matches by group_id (a match between 3 users = 1 match)
+      // This is the same logic used for "Connections Made"
+      const channelPairingGroups = new Set<number>();
+      const channelPairingMatchesByGroup = new Map<number, any>(); // group_id -> match (for engagement tracking)
       
-      // Calculate engagement (matches that led to conversations)
-      if (totalMatches > 0) {
-        try {
-          const allMatches = [...(trovaMagicMatches || []), ...(channelPairingMatches || [])];
-          const engagedCount = await this.countEngagedMatches(communityId, allMatches);
-          stats.allMatchesEngaged = engagedCount;
-          stats.matchEngagementRate = (engagedCount / totalMatches) * 100;
+      if (channelPairingMatches && channelPairingMatches.length > 0) {
+        for (const match of channelPairingMatches) {
+          // Get the group identifier (same logic as Connections Made)
+          const groupId = match.groupId || match.group_id || 
+                         (match.matchIndicesId && match.matchIndicesId !== 0 ? match.matchIndicesId : null);
           
-          // Calculate Trova Magic Engagements (Trova Magic matches that led to conversations)
-          if (trovaMagicMatches && trovaMagicMatches.length > 0) {
-            const trovaMagicEngaged = await this.countEngagedMatches(communityId, trovaMagicMatches);
-            stats.trovaMagicEngagements = trovaMagicEngaged;
+          if (groupId !== null && groupId !== undefined) {
+            // Count each unique group_id as 1 match
+            if (!channelPairingGroups.has(groupId)) {
+              channelPairingGroups.add(groupId);
+              // Store one match per group for engagement tracking
+              channelPairingMatchesByGroup.set(groupId, match);
+            }
           }
+        }
+      }
+
+      stats.channelPairingMatches = channelPairingGroups.size;
+      stats.channelPairingSessions = channelPairingMatches?.length || 0;
+      
+      // Calculate engagement for Channel Pairing matches
+      // A match is "engaged" if any users in that match group have a conversation
+      let channelPairingEngaged = 0;
+      if (channelPairingGroups.size > 0) {
+        try {
+          // Check if any users in each group have conversations
+          channelPairingEngaged = await this.countEngagedMatchesByGroup(communityId, channelPairingMatches, channelPairingGroups);
         } catch (error) {
-          console.warn('[AdminService] Could not calculate match engagement:', error);
+          console.warn('[AdminService] Could not calculate channel pairing engagement:', error);
         }
       }
       
-      console.log(`[AdminService] 🔗 Match engagement: ${stats.trovaMagicMatches} Trova Magic, ${stats.channelPairingMatches} Channel Pairing, ${stats.allMatchesEngaged}/${totalMatches} engaged`);
+      // Store channel pairing engagements for display
+      stats.channelPairingEngagements = channelPairingEngaged;
+      
+      // Get Mentor/Mentee matches - count total matches and unique pairs
+      let mentorMenteeTotal = 0;
+      let mentorMenteeUniquePairs = 0;
+      try {
+        console.log(`[AdminService] 🎓 Fetching mentor/mentee matches for stats calculation`, { startDate, endDate });
+        // Use the user-based method to get total match count
+        const usersWithMatches = await this.getMentorMenteeUsersWithMatches(communityId, startDate, endDate);
+        mentorMenteeTotal = usersWithMatches.reduce((sum, user) => sum + user.matchCount, 0);
+        
+        // Calculate unique pairs by fetching matches and deduplicating
+        const mentorMenteeMatches = await this.getMatchesForCommunity(communityId, startDate, endDate, 'mentor-mentee');
+        if (mentorMenteeMatches && mentorMenteeMatches.length > 0) {
+          const uniquePairs = new Set<string>();
+          for (const match of mentorMenteeMatches) {
+            const userId = match.userId || match.user_id;
+            const matchedUserId = match.matchedUserId || match.matched_user_id;
+            if (userId && matchedUserId) {
+              const pairKey = [userId, matchedUserId].sort((a, b) => a - b).join('-');
+              uniquePairs.add(pairKey);
+            }
+          }
+          mentorMenteeUniquePairs = uniquePairs.size;
+        }
+        
+        console.log(`[AdminService] 🎓 Mentor/Mentee: ${mentorMenteeTotal} sessions, ${mentorMenteeUniquePairs} unique pairs (from ${usersWithMatches.length} users)`);
+      } catch (error) {
+        console.error('[AdminService] Error fetching Mentor/Mentee matches:', error);
+      }
+      
+      stats.mentorMenteeMatches = mentorMenteeTotal;
+      stats.mentorMenteeUniquePairs = mentorMenteeUniquePairs;
+      stats.mentorMenteeEngagements = 0; // Not tracking engagements for mentor/mentee matches
+      
+      // Calculate total engaged and engagement rate (excluding mentor/mentee engagements)
+      const totalMatches = stats.trovaMagicMatches + stats.channelPairingMatches + stats.mentorMenteeMatches;
+      if (totalMatches > 0) {
+        stats.allMatchesEngaged = trovaMagicEngaged + channelPairingEngaged; // Not including mentor/mentee engagements
+        stats.matchEngagementRate = (stats.allMatchesEngaged / totalMatches) * 100;
+      }
+      
+      // Note: "Intros Led To Convos" is calculated in getUserActionsStats() to ensure it's always available
+      // It counts ALL individual match records (not unique pairs) where both users engaged
+      
+      console.log(`[AdminService] 🔗 Match engagement: ${stats.trovaMagicMatches} Trova Magic (${stats.trovaMagicEngagements} engaged), ${stats.channelPairingMatches} Channel Pairing (${channelPairingEngaged} engaged), ${stats.mentorMenteeMatches} Mentor/Mentee (matches only, no engagement tracking), ${stats.allMatchesEngaged}/${totalMatches} total engaged`);
 
       return stats;
     } catch (error) {
@@ -3197,6 +4951,146 @@ export class AdminService {
       return { totalMessagesSent: totalMessages };
     } catch (error) {
       console.error('[AdminService] Error calculating message stats:', error);
+      return { totalMessagesSent: 0 };
+    }
+  }
+
+  /**
+   * Get unique messages sent from conversations that originated from matches
+   * This filters messages to only those from conversations where user pairs match the pairs from /communities/{id}/matches
+   * 
+   * @param communityId - The community ID
+   * @param startDate - Optional start date filter
+   * @param endDate - Optional end date filter
+   * @returns Object with totalMessagesSent count (unique messages from match-based conversations)
+   */
+  async getMessagesFromMatches(
+    communityId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<{ totalMessagesSent: number } | null> {
+    try {
+      const firebase = useFirebase();
+      const firestore = firebase.firestore;
+      
+      if (!firestore) {
+        console.warn('[AdminService] Firestore not initialized, cannot query messages');
+        return { totalMessagesSent: 0 };
+      }
+
+      console.log(`[AdminService] 📨 Getting messages from match-based conversations for community ${communityId}`);
+      
+      // Step 1: Get all matches from /communities/{id}/matches (all types)
+      const allMatches = await this.getMatchesForCommunity(communityId, startDate, endDate);
+      
+      if (!allMatches || allMatches.length === 0) {
+        console.log(`[AdminService] 📨 No matches found, returning 0 messages`);
+        return { totalMessagesSent: 0 };
+      }
+
+      // Step 2: Extract unique user pairs from matches
+      const matchPairs = new Set<string>();
+      
+      allMatches.forEach((match: any) => {
+        const userId = match.userId || match.user_id;
+        const matchedUserId = match.matchedUserId || match.matched_user_id;
+        
+        if (userId && matchedUserId) {
+          const pairKey = [userId, matchedUserId].sort((a, b) => a - b).join('-');
+          matchPairs.add(pairKey);
+        }
+      });
+
+      console.log(`[AdminService] 📨 Found ${matchPairs.size} unique user pairs from ${allMatches.length} matches`);
+
+      // Step 3: Get all conversations for the community
+      const conversationIds = await this.getConversationsForCommunity(communityId);
+      
+      if (conversationIds.size === 0) {
+        console.log(`[AdminService] 📨 No conversations found`);
+        return { totalMessagesSent: 0 };
+      }
+
+      // Step 4: Filter conversations to only those that contain match pairs
+      const matchConversationIds = new Set<string>();
+      const batchSize = 10;
+      const conversationIdsArray = Array.from(conversationIds);
+      
+      for (let i = 0; i < conversationIdsArray.length; i += batchSize) {
+        const batch = conversationIdsArray.slice(i, i + batchSize);
+        const batchPromises = batch.map(async (conversationId) => {
+          try {
+            const conversationDoc = await getDoc(doc(firestore, `messages/${conversationId}`));
+            if (conversationDoc.exists()) {
+              const conversationData = conversationDoc.data();
+              if (conversationData.users && Array.isArray(conversationData.users)) {
+                const userIds = conversationData.users.filter((id: any) => typeof id === 'number');
+                
+                // Check if this conversation contains any of our match pairs
+                for (let i = 0; i < userIds.length; i++) {
+                  for (let j = i + 1; j < userIds.length; j++) {
+                    const pairKey = [userIds[i], userIds[j]].sort((a, b) => a - b).join('-');
+                    if (matchPairs.has(pairKey)) {
+                      return conversationId;
+                    }
+                  }
+                }
+              }
+            }
+            return null;
+          } catch (error) {
+            console.debug(`[AdminService] Error checking conversation ${conversationId}:`, error);
+            return null;
+          }
+        });
+        
+        const batchResults = await Promise.all(batchPromises);
+        batchResults.forEach((conversationId) => {
+          if (conversationId) {
+            matchConversationIds.add(conversationId);
+          }
+        });
+      }
+
+      console.log(`[AdminService] 📨 Found ${matchConversationIds.size} conversations from ${conversationIds.size} total that match user pairs from matches`);
+
+      // Step 5: Count unique messages from match-based conversations
+      const startTimestamp = startDate ? Timestamp.fromDate(new Date(startDate)) : null;
+      const endTimestamp = endDate ? Timestamp.fromDate(new Date(endDate)) : null;
+      
+      let totalMessages = 0;
+      const matchConversationIdsArray = Array.from(matchConversationIds);
+      
+      for (let i = 0; i < matchConversationIdsArray.length; i += batchSize) {
+        const batch = matchConversationIdsArray.slice(i, i + batchSize);
+        
+        const batchPromises = batch.map(async (conversationId) => {
+          try {
+            const messagesSubcollection = collection(firestore, `messages/${conversationId}/conv`);
+            const convQuery = startTimestamp && endTimestamp
+              ? query(
+                  messagesSubcollection,
+                  where('timestamp', '>=', startTimestamp),
+                  where('timestamp', '<=', endTimestamp)
+                )
+              : query(messagesSubcollection);
+            
+            const convSnapshot = await getDocs(convQuery);
+            return convSnapshot.size;
+          } catch (subcollectionError) {
+            console.debug(`[AdminService] Could not query messages subcollection for ${conversationId}:`, subcollectionError);
+            return 0;
+          }
+        });
+        
+        const batchResults = await Promise.all(batchPromises);
+        totalMessages += batchResults.reduce((sum, count) => sum + count, 0);
+      }
+
+      console.log(`[AdminService] 📨 Calculated ${totalMessages} unique messages from match-based conversations (from ${matchConversationIds.size} conversations)`);
+      return { totalMessagesSent: totalMessages };
+    } catch (error) {
+      console.error('[AdminService] Error getting messages from matches:', error);
       return { totalMessagesSent: 0 };
     }
   }
@@ -3626,6 +5520,63 @@ export class AdminService {
   }
 
   /**
+   * Count engaged matches by group_id (for multi-user matches)
+   * A match group is "engaged" if any users in that group have a conversation
+   */
+  private async countEngagedMatchesByGroup(
+    communityId: number, 
+    allMatches: any[], 
+    uniqueGroups: Set<number>
+  ): Promise<number> {
+    try {
+      if (!allMatches || allMatches.length === 0 || uniqueGroups.size === 0) {
+        return 0;
+      }
+
+      // Get cached conversation pairs
+      const conversationPairs = await this.getConversationPairs(communityId);
+
+      // Group matches by group_id and collect all user pairs in each group
+      const groupsByUserPairs = new Map<number, Set<string>>();
+      
+      allMatches.forEach((match: any) => {
+        const groupId = match.groupId || match.group_id || 
+                       (match.matchIndicesId && match.matchIndicesId !== 0 ? match.matchIndicesId : null);
+        
+        if (groupId && uniqueGroups.has(groupId)) {
+          const userId = match.userId || match.user_id;
+          const matchedUserId = match.matchedUserId || match.matched_user_id;
+          
+          if (userId && matchedUserId) {
+            if (!groupsByUserPairs.has(groupId)) {
+              groupsByUserPairs.set(groupId, new Set<string>());
+            }
+            
+            // Create normalized pair key
+            const pairKey = [userId, matchedUserId].sort((a, b) => a - b).join('-');
+            groupsByUserPairs.get(groupId)!.add(pairKey);
+          }
+        }
+      });
+
+      // Count groups where at least one user pair has a conversation
+      let engagedGroups = 0;
+      groupsByUserPairs.forEach((userPairs, groupId) => {
+        // Check if any user pair in this group has a conversation
+        const hasEngagement = Array.from(userPairs).some(pairKey => conversationPairs.has(pairKey));
+        if (hasEngagement) {
+          engagedGroups++;
+        }
+      });
+
+      return engagedGroups;
+    } catch (error) {
+      console.warn('[AdminService] Error counting engaged matches by group:', error);
+      return 0;
+    }
+  }
+
+  /**
    * Get Trova-initiated chats count from Firebase
    * Counts conversations where messages contain "Trova" identifier
    * Includes: MPIM, Channel Breakout groups, Directory messages
@@ -3849,12 +5800,21 @@ export class AdminService {
         return [];
       }
 
+      // Parse date range for filtering
+      const start = startDate ? new Date(startDate) : null;
+      const end = endDate ? new Date(endDate) : null;
+      
       // Group matches by date (using createdAt or created_at)
       const matchesByDate = new Map<string, any[]>();
+      let skippedInvalid = 0;
+      let skippedOutOfRange = 0;
       
       matches.forEach((match) => {
         const createdAt = match.createdAt || match.created_at;
-        if (!createdAt) return;
+        if (!createdAt) {
+          skippedInvalid++;
+          return;
+        }
         
         // Parse date - handle both ISO strings and timestamps
         let date: Date;
@@ -3870,14 +5830,42 @@ export class AdminService {
           date = new Date(createdAt);
         }
         
+        // Validate date - skip if invalid
+        if (isNaN(date.getTime())) {
+          skippedInvalid++;
+          console.warn(`[AdminService] Invalid date for match ${match.id}:`, createdAt);
+          return;
+        }
+        
+        // Filter by date range if provided
+        if (start && date < start) {
+          skippedOutOfRange++;
+          return;
+        }
+        if (end && date > end) {
+          skippedOutOfRange++;
+          return;
+        }
+        
         // Get date string in YYYY-MM-DD format
         const dateStr = date.toISOString().split('T')[0];
+        
+        // Additional validation: ensure date string is valid (YYYY-MM-DD format)
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+          skippedInvalid++;
+          console.warn(`[AdminService] Invalid date string format for match ${match.id}:`, dateStr);
+          return;
+        }
         
         if (!matchesByDate.has(dateStr)) {
           matchesByDate.set(dateStr, []);
         }
         matchesByDate.get(dateStr)!.push(match);
       });
+      
+      if (skippedInvalid > 0 || skippedOutOfRange > 0) {
+        console.log(`[AdminService] ✨ Filtered ${matches.length} matches: ${skippedInvalid} invalid dates, ${skippedOutOfRange} out of range`);
+      }
 
       // Get conversation pairs for engagement calculation
       const conversationPairs = await this.getConversationPairs(communityId);
@@ -3899,44 +5887,61 @@ export class AdminService {
           day: 'numeric' 
         });
 
-        // Deduplicate pairings by normalized pair key and track engagement
-        const uniquePairs = new Map<string, { isEngaged: boolean }>();
+        // Count unique user pairs (same logic as getMagicIntroPairings)
+        // Deduplicate by unique user pairs - iterate through all matches and only keep first occurrence of each pair
+        const uniquePairs = new Set<string>(); // Set of pair keys
+        const pairEngagement = new Map<string, boolean>(); // pairKey -> isEngaged
+        
         for (const match of dateMatches) {
           const userId = match.userId || match.user_id;
           const matchedUserId = match.matchedUserId || match.matched_user_id;
           
-          if (!userId || !matchedUserId) continue;
-
+          if (!userId || !matchedUserId) {
+            continue;
+          }
+          
+          // Create normalized pair key (sorted IDs to handle A-B and B-A as same pair)
           const pairKey = [userId, matchedUserId].sort((a, b) => a - b).join('-');
-          const engaged = conversationPairs.has(pairKey);
-
+          
+          // Only count each unique pair once
           if (!uniquePairs.has(pairKey)) {
-            uniquePairs.set(pairKey, { isEngaged: engaged });
-          } else if (engaged) {
-            // If any match for this pair is engaged, mark the pair engaged
-            uniquePairs.get(pairKey)!.isEngaged = true;
+            uniquePairs.add(pairKey);
+            
+            // Check if this pair is engaged
+            const isEngaged = conversationPairs.has(pairKey);
+            pairEngagement.set(pairKey, isEngaged);
           }
         }
 
-        const totalPairings = uniquePairs.size;
-        const engagedCount = Array.from(uniquePairs.values()).filter(p => p.isEngaged).length;
-        const engagementRate = totalPairings > 0 
-          ? (engagedCount / totalPairings) * 100 
+        // Count engaged pairs
+        const engagedCount = Array.from(pairEngagement.values()).filter(engaged => engaged).length;
+
+        const engagementRate = uniquePairs.size > 0 
+          ? (engagedCount / uniquePairs.size) * 100 
           : 0;
+
+        console.log(`[AdminService] Date ${dateStr}: ${uniquePairs.size} unique pairs, ${engagedCount} engaged (from ${dateMatches.length} matches)`);
 
         result.push({
           date: dateStr,
           dateDisplay,
-          totalPairings,
+          totalPairings: uniquePairs.size, // Count unique user pairs (matches detail view)
           engagedPairings: engagedCount,
-          engagementRate: Math.round(engagementRate * 10) / 10, // Round to 1 decimal
+          engagementRate: Math.round(engagementRate * 10) / 10, // Round to 1 decimal place
         });
       }
 
       // Sort by date descending (most recent first)
       result.sort((a, b) => b.date.localeCompare(a.date));
 
-      console.log(`[AdminService] ✨ Found ${result.length} magic intro dates`);
+      // Check for suspiciously high counts (likely data issues)
+      const suspiciousDates = result.filter(r => r.totalPairings > 1000);
+      if (suspiciousDates.length > 0) {
+        console.warn(`[AdminService] ⚠️ Found ${suspiciousDates.length} dates with >1000 pairings (possible data issue):`, 
+          suspiciousDates.map(d => `${d.date}: ${d.totalPairings}`));
+      }
+
+      console.log(`[AdminService] ✨ Found ${result.length} magic intro dates, total pairings: ${result.reduce((sum, r) => sum + r.totalPairings, 0)}`);
       return result;
     } catch (error: any) {
       console.error('[AdminService] Error fetching magic intros by date:', error);
@@ -3991,41 +5996,48 @@ export class AdminService {
       // Get conversation pairs to mark which pairings are engaged
       const conversationPairs = await this.getConversationPairs(communityId);
 
-      // Deduplicate pairings by normalizing user pairs (sort user IDs)
-      // Keep the first match for each unique pair
-      const seenPairs = new Map<string, any>();
+      // Deduplicate by unique user pairs - iterate through all matches and only keep first occurrence of each pair
+      const seenPairs = new Map<string, any>(); // pairKey -> pairing object
+      
+      console.log(`[AdminService] Processing ${dateMatches.length} matches for date ${date}`);
       
       for (const match of dateMatches) {
         const userId = match.userId || match.user_id;
         const matchedUserId = match.matchedUserId || match.matched_user_id;
         
-        if (!userId || !matchedUserId) continue;
+        if (!userId || !matchedUserId) {
+          console.log(`[AdminService] Skipping match ${match.id} - missing userId or matchedUserId`);
+          continue;
+        }
         
-        // Create normalized pair key (sorted IDs)
-        const normalizedPair = [userId, matchedUserId].sort((a, b) => a - b);
-        const pairKey = normalizedPair.join('-');
+        // Create normalized pair key (sorted IDs to handle A-B and B-A as same pair)
+        const pairKey = [userId, matchedUserId].sort((a, b) => a - b).join('-');
         
-        // Check if we've seen this pair before
+        // Only add if we haven't seen this pair before
         if (!seenPairs.has(pairKey)) {
-          // Determine which user is "user" and which is "matchedUser" based on original match
-          // Keep the original order from the match
-          const pairKeyEngaged = pairKey;
-          const isEngaged = conversationPairs.has(pairKeyEngaged);
+          const groupId = match.groupId || match.group_id || 
+                         (match.matchIndicesId && match.matchIndicesId !== 0 ? match.matchIndicesId : null);
+          
+          // Check if this pair is engaged
+          const isEngaged = conversationPairs.has(pairKey);
           
           seenPairs.set(pairKey, {
             ...match,
-            userId: normalizedPair[0], // Always use smaller ID as userId
-            matchedUserId: normalizedPair[1], // Larger ID as matchedUserId
+            id: `pair-${pairKey}`, // Use pair-based ID for uniqueness
+            groupId: groupId,
+            userId: userId,
+            matchedUserId: matchedUserId,
             isEngaged,
-            // Preserve original order for display purposes
-            originalUserId: userId,
-            originalMatchedUserId: matchedUserId,
           });
+        } else {
+          console.log(`[AdminService] Skipping duplicate pair ${pairKey} (users ${userId} and ${matchedUserId})`);
         }
       }
 
-      // Convert to array
+      // Convert to array - these are unique user pairs (deduplicated)
       const uniquePairings = Array.from(seenPairs.values());
+      
+      console.log(`[AdminService] Deduplicated to ${uniquePairings.length} unique pairings from ${dateMatches.length} matches`);
 
       // Collect all unique user IDs to fetch
       const userIdsToFetch = new Set<number>();
@@ -4069,9 +6081,1423 @@ export class AdminService {
       return [];
     }
   }
+
+  /**
+   * Get channel pairings by date
+   * Similar to getMagicIntrosByDate but for channel_pairing matches
+   */
+  async getChannelPairingsByDate(communityId: number, startDate?: string, endDate?: string): Promise<Array<{
+    date: string; // ISO date string (YYYY-MM-DD)
+    dateDisplay: string; // Formatted date for display
+    channelName?: string | null; // Channel name if all matches on this date share the same channel
+    totalPairings: number;
+    engagedPairings: number;
+    engagementRate: number;
+  }>> {
+    try {
+      console.log(`[AdminService] 🔗 Fetching channel pairings by date for community ${communityId}`);
+      
+      // Get all Channel Pairing matches
+      const matches = await this.getMatchesForCommunity(communityId, startDate, endDate, 'channel_pairing');
+      
+      if (!matches || matches.length === 0) {
+        return [];
+      }
+
+      // Parse date range for filtering
+      const start = startDate ? new Date(startDate) : null;
+      const end = endDate ? new Date(endDate) : null;
+      
+      // Group matches by date (using createdAt or created_at)
+      const matchesByDate = new Map<string, any[]>();
+      let skippedInvalid = 0;
+      let skippedOutOfRange = 0;
+      
+      matches.forEach((match) => {
+        const createdAt = match.createdAt || match.created_at;
+        if (!createdAt) {
+          skippedInvalid++;
+          return;
+        }
+        
+        // Parse date - handle both ISO strings and timestamps
+        let date: Date;
+        if (typeof createdAt === 'string') {
+          date = new Date(createdAt);
+        } else if (createdAt.toDate) {
+          // Firebase Timestamp
+          date = createdAt.toDate();
+        } else if (createdAt.seconds) {
+          // Firebase Timestamp object
+          date = new Date(createdAt.seconds * 1000);
+        } else {
+          date = new Date(createdAt);
+        }
+        
+        // Validate date - skip if invalid
+        if (isNaN(date.getTime())) {
+          skippedInvalid++;
+          console.warn(`[AdminService] Invalid date for channel pairing match ${match.id}:`, createdAt);
+          return;
+        }
+        
+        // Filter by date range if provided
+        if (start && date < start) {
+          skippedOutOfRange++;
+          return;
+        }
+        if (end && date > end) {
+          skippedOutOfRange++;
+          return;
+        }
+        
+        // Get date string in YYYY-MM-DD format
+        const dateStr = date.toISOString().split('T')[0];
+        
+        // Additional validation: ensure date string is valid (YYYY-MM-DD format)
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+          skippedInvalid++;
+          console.warn(`[AdminService] Invalid date string format for channel pairing match ${match.id}:`, dateStr);
+          return;
+        }
+        
+        if (!matchesByDate.has(dateStr)) {
+          matchesByDate.set(dateStr, []);
+        }
+        matchesByDate.get(dateStr)!.push(match);
+      });
+      
+      if (skippedInvalid > 0 || skippedOutOfRange > 0) {
+        console.log(`[AdminService] 🔗 Filtered ${matches.length} channel pairing matches: ${skippedInvalid} invalid dates, ${skippedOutOfRange} out of range`);
+      }
+
+      // Get conversation pairs for engagement calculation
+      const conversationPairs = await this.getConversationPairs(communityId);
+
+      // Build result array with stats for each date
+      const result: Array<{
+        date: string;
+        dateDisplay: string;
+        channelName?: string | null;
+        totalPairings: number;
+        engagedPairings: number;
+        engagementRate: number;
+      }> = [];
+
+      for (const [dateStr, dateMatches] of matchesByDate.entries()) {
+        const date = new Date(dateStr);
+        const dateDisplay = date.toLocaleDateString('en-US', { 
+          year: 'numeric', 
+          month: 'long', 
+          day: 'numeric' 
+        });
+
+        // Extract channel names from matches for this date
+        const channelNames = new Set<string>();
+        dateMatches.forEach((match) => {
+          const channelName = match.channelName || 
+                             match.channel_name || 
+                             match.slackChannelName || 
+                             match.slack_channel_name ||
+                             match.channel?.name ||
+                             match.slackChannel?.name ||
+                             null;
+          if (channelName) {
+            channelNames.add(channelName);
+          }
+        });
+        
+        // If all matches have the same channel name, use it; otherwise null
+        const channelName = channelNames.size === 1 ? Array.from(channelNames)[0] : null;
+
+        // Count unique user pairs (same logic as getChannelPairingPairings)
+        // Deduplicate by unique user pairs - iterate through all matches and only keep first occurrence of each pair
+        const uniquePairs = new Set<string>(); // Set of pair keys
+        const pairEngagement = new Map<string, boolean>(); // pairKey -> isEngaged
+        
+        let skippedWrongCommunity = 0;
+        
+        // First, filter by communityId to ensure we only process matches for this community
+        const communityFilteredMatches = dateMatches.filter((match) => {
+          const matchCommunityId = match.communityId || match.community_id;
+          if (matchCommunityId && matchCommunityId !== communityId) {
+            skippedWrongCommunity++;
+            return false;
+          }
+          return true;
+        });
+        
+        if (skippedWrongCommunity > 0) {
+          console.warn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} channel pairing matches with wrong communityId (expected ${communityId}) for date ${dateStr}`);
+        }
+        
+        console.log(`[AdminService] After community filter for ${dateStr}: ${communityFilteredMatches.length} matches (from ${dateMatches.length} total)`);
+        
+        for (const match of communityFilteredMatches) {
+          const userId = match.userId || match.user_id;
+          const matchedUserId = match.matchedUserId || match.matched_user_id;
+          
+          if (!userId || !matchedUserId) {
+            continue;
+          }
+          
+          // Create normalized pair key (sorted IDs to handle A-B and B-A as same pair)
+          const pairKey = [userId, matchedUserId].sort((a, b) => a - b).join('-');
+          
+          // Only count each unique pair once
+          if (!uniquePairs.has(pairKey)) {
+            uniquePairs.add(pairKey);
+            
+            // Check if this pair is engaged
+            const isEngaged = conversationPairs.has(pairKey);
+            pairEngagement.set(pairKey, isEngaged);
+          }
+        }
+        
+
+        // Count engaged pairs
+        const engagedCount = Array.from(pairEngagement.values()).filter(engaged => engaged).length;
+
+        const engagementRate = uniquePairs.size > 0 
+          ? (engagedCount / uniquePairs.size) * 100 
+          : 0;
+
+
+        result.push({
+          date: dateStr,
+          dateDisplay,
+          channelName: channelName, // Add channel name to result
+          totalPairings: uniquePairs.size, // Count unique user pairs (matches detail view)
+          engagedPairings: engagedCount,
+          engagementRate: Math.round(engagementRate * 10) / 10, // Round to 1 decimal place
+        });
+      }
+
+      // Sort by date descending (most recent first)
+      result.sort((a, b) => b.date.localeCompare(a.date));
+
+      // Check for suspiciously high counts (likely data issues)
+      const suspiciousDates = result.filter(r => r.totalPairings > 1000);
+      if (suspiciousDates.length > 0) {
+        console.warn(`[AdminService] ⚠️ Found ${suspiciousDates.length} channel pairing dates with >1000 pairings (possible data issue):`, 
+          suspiciousDates.map(d => `${d.date}: ${d.totalPairings}`));
+      }
+
+      console.log(`[AdminService] 🔗 Found ${result.length} channel pairing dates, total pairings: ${result.reduce((sum, r) => sum + r.totalPairings, 0)}`);
+      return result;
+    } catch (error: any) {
+      console.error('[AdminService] Error fetching channel pairings by date:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get pairings for a specific channel pairing date
+   * Returns an array of match objects with user details
+   * Deduplicates pairings (normalizes user pairs) and fetches user names
+   */
+  async getChannelPairingPairings(
+    communityId: number, 
+    date: string, 
+    startDate?: string, 
+    endDate?: string
+  ): Promise<any[]> {
+    try {
+      console.log(`[AdminService] 🔗 Fetching pairings for channel pairing date ${date}`);
+      
+      // Get all Channel Pairing matches for the date range
+      const matches = await this.getMatchesForCommunity(communityId, startDate, endDate, 'channel_pairing');
+      
+      if (!matches || matches.length === 0) {
+        return [];
+      }
+
+      // Filter matches for the specific date (using UTC to avoid timezone issues)
+      const dateMatches = matches.filter((match) => {
+        const createdAt = match.createdAt || match.created_at;
+        if (!createdAt) return false;
+        
+        let matchDate: Date;
+        if (typeof createdAt === 'string') {
+          matchDate = new Date(createdAt);
+        } else if (createdAt.toDate) {
+          matchDate = createdAt.toDate();
+        } else if (createdAt.seconds) {
+          matchDate = new Date(createdAt.seconds * 1000);
+        } else {
+          matchDate = new Date(createdAt);
+        }
+        
+        // Use UTC date string to avoid timezone issues
+        const matchDateStr = matchDate.toISOString().split('T')[0];
+        // Also handle date string that might be in YYYY-MM-DD format already
+        const targetDateStr = date.includes('T') ? date.split('T')[0] : date;
+        return matchDateStr === targetDateStr;
+      });
+
+      // Get conversation pairs to mark which pairings are engaged
+      const conversationPairs = await this.getConversationPairs(communityId);
+
+      // Deduplicate by unique user pairs - iterate through all matches and only keep first occurrence of each pair
+      const seenPairs = new Map<string, any>(); // pairKey -> pairing object
+      
+      console.log(`[AdminService] Processing ${dateMatches.length} channel pairing matches for date ${date}`);
+      
+      // Log sample matches to inspect structure
+      if (dateMatches.length > 0) {
+        console.log(`[AdminService] Sample channel pairing match:`, {
+          id: dateMatches[0].id,
+          userId: dateMatches[0].userId,
+          user_id: dateMatches[0].user_id,
+          matchedUserId: dateMatches[0].matchedUserId,
+          matched_user_id: dateMatches[0].matched_user_id,
+          communityId: dateMatches[0].communityId,
+          community_id: dateMatches[0].community_id,
+          type: dateMatches[0].type,
+          matchType: dateMatches[0].matchType,
+          fullMatch: dateMatches[0]
+        });
+      }
+      
+      let skippedWrongCommunity = 0;
+      
+      // First, filter by communityId to ensure we only process matches for this community
+      const communityFilteredMatches = dateMatches.filter((match) => {
+        const matchCommunityId = match.communityId || match.community_id;
+        if (matchCommunityId && matchCommunityId !== communityId) {
+          skippedWrongCommunity++;
+          return false;
+        }
+        return true;
+      });
+      
+      if (skippedWrongCommunity > 0) {
+        console.warn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} channel pairing matches with wrong communityId (expected ${communityId})`);
+      }
+      
+      console.log(`[AdminService] After community filter: ${communityFilteredMatches.length} matches (from ${dateMatches.length} total)`);
+      
+      // Log first match to see what fields are available
+      if (dateMatches.length > 0) {
+        console.log(`[AdminService] 🔍 Sample channel pairing match structure:`, {
+          keys: Object.keys(dateMatches[0]),
+          sampleMatch: dateMatches[0],
+          hasChannelName: !!dateMatches[0].channelName,
+          hasChannel_name: !!dateMatches[0].channel_name,
+          hasSlackChannelName: !!dateMatches[0].slackChannelName,
+          hasSlack_channel_name: !!dateMatches[0].slack_channel_name,
+          hasChannel: !!dateMatches[0].channel,
+          hasSlackChannel: !!dateMatches[0].slackChannel,
+          hasSlack_channel_id: !!dateMatches[0].slack_channel_id,
+          hasSlackChannelId: !!dateMatches[0].slackChannelId,
+          groupId: dateMatches[0].groupId || dateMatches[0].group_id
+        });
+      }
+      
+      for (const match of communityFilteredMatches) {
+        const userId = match.userId || match.user_id;
+        const matchedUserId = match.matchedUserId || match.matched_user_id;
+        
+        if (!userId || !matchedUserId) {
+          console.log(`[AdminService] Skipping channel pairing match ${match.id} - missing userId or matchedUserId`);
+          continue;
+        }
+        
+        // Create normalized pair key (sorted IDs to handle A-B and B-A as same pair)
+        const pairKey = [userId, matchedUserId].sort((a, b) => a - b).join('-');
+        
+        // Only add if we haven't seen this pair before
+        if (!seenPairs.has(pairKey)) {
+          const groupId = match.groupId || match.group_id || 
+                         (match.matchIndicesId && match.matchIndicesId !== 0 ? match.matchIndicesId : null);
+          
+          // Extract channel name from original match data (before deduplication)
+          const channelName = match.channelName || 
+                             match.channel_name || 
+                             match.slackChannelName || 
+                             match.slack_channel_name ||
+                             match.channel?.name ||
+                             match.slackChannel?.name ||
+                             null;
+          
+          // Check if this pair is engaged
+          const isEngaged = conversationPairs.has(pairKey);
+          
+          seenPairs.set(pairKey, {
+            ...match,
+            id: `pair-${pairKey}`, // Use pair-based ID for uniqueness
+            groupId: groupId,
+            userId: userId,
+            matchedUserId: matchedUserId,
+            isEngaged,
+            channelName: channelName, // Preserve channel name from original match
+          });
+        } else {
+          console.log(`[AdminService] Skipping duplicate channel pairing pair ${pairKey} (users ${userId} and ${matchedUserId})`);
+        }
+      }
+      
+      
+      // Convert to array - these are unique user pairs (deduplicated)
+      const uniquePairings = Array.from(seenPairs.values());
+      
+      console.log(`[AdminService] Deduplicated to ${uniquePairings.length} unique channel pairing pairings from ${dateMatches.length} matches`);
+
+      // Log first pairing to see what fields are available for channel name
+      if (uniquePairings.length > 0) {
+        console.log(`[AdminService] 🔍 Sample pairing structure for channel name extraction:`, {
+          keys: Object.keys(uniquePairings[0]),
+          samplePairing: uniquePairings[0],
+          hasChannelName: !!uniquePairings[0].channelName,
+          hasChannel_name: !!uniquePairings[0].channel_name,
+          hasSlackChannelName: !!uniquePairings[0].slackChannelName,
+          hasSlack_channel_name: !!uniquePairings[0].slack_channel_name,
+          hasChannel: !!uniquePairings[0].channel,
+          hasSlackChannel: !!uniquePairings[0].slackChannel,
+          hasSlack_channel_id: !!uniquePairings[0].slack_channel_id,
+          hasSlackChannelId: !!uniquePairings[0].slackChannelId,
+          groupId: uniquePairings[0].groupId || uniquePairings[0].group_id
+        });
+      }
+
+      // Collect all unique user IDs to fetch
+      const userIdsToFetch = new Set<number>();
+      uniquePairings.forEach(pairing => {
+        if (pairing.userId) userIdsToFetch.add(pairing.userId);
+        if (pairing.matchedUserId) userIdsToFetch.add(pairing.matchedUserId);
+      });
+
+      // Fetch user details
+      const { userService } = await import('./user.service');
+      const usersMap = await userService.getUsersByIds(Array.from(userIdsToFetch));
+
+      // Enrich pairings with user data and channel name
+      const enrichedPairings = uniquePairings.map((pairing) => {
+        const user = usersMap.get(pairing.userId);
+        const matchedUser = usersMap.get(pairing.matchedUserId);
+        
+        // Use channel name that was preserved from original match data during deduplication
+        // If not found, check other possible field names as fallback
+        const channelName = pairing.channelName || 
+                           pairing.channel_name || 
+                           pairing.slackChannelName || 
+                           pairing.slack_channel_name ||
+                           pairing.channel?.name ||
+                           pairing.slackChannel?.name ||
+                           null;
+        
+        return {
+          ...pairing,
+          channelName: channelName, // Add channel name to pairing
+          user: user ? {
+            id: user.id,
+            fname: user.fname,
+            lname: user.lname,
+            fullName: user.fullName || `${user.fname} ${user.lname}`,
+            profilePicture: user.profilePicture,
+          } : null,
+          matchedUser: matchedUser ? {
+            id: matchedUser.id,
+            fname: matchedUser.fname,
+            lname: matchedUser.lname,
+            fullName: matchedUser.fullName || `${matchedUser.fname} ${matchedUser.lname}`,
+            profilePicture: matchedUser.profilePicture,
+          } : null,
+        };
+      });
+
+      console.log(`[AdminService] 🔗 Found ${enrichedPairings.length} unique channel pairing pairings for date ${date} (deduplicated from ${dateMatches.length} matches)`);
+      return enrichedPairings;
+    } catch (error: any) {
+      console.error('[AdminService] Error fetching channel pairing pairings:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get mentor/mentee matches by date
+   * Similar to getMagicIntrosByDate but for mentor-mentee matches
+   * Returns matches array and a flag indicating if backend issue was detected
+   */
+  async getMentorMenteeMatchesByDate(communityId: number, startDate?: string, endDate?: string): Promise<{
+    matches: Array<{
+      date: string; // ISO date string (YYYY-MM-DD)
+      dateDisplay: string; // Formatted date for display
+      totalPairings: number;
+      engagedPairings: number;
+      engagementRate: number;
+    }>;
+    hasBackendIssue: boolean; // True if backend endpoint doesn't return mentor/mentee matches
+  }> {
+    try {
+      console.log(`[AdminService] 🎓 Fetching mentor/mentee matches by date for community ${communityId}`, {
+        startDate,
+        endDate
+      });
+      
+      // Backend now supports 'mentor-mentee' and 'mentor_mentee' query parameters
+      // The backend was updated to include mentor/mentee matches in the /communities/:id/matches endpoint
+      // Try the primary supported types first, then fallback to variations
+      const typeVariations = ['mentor-mentee', 'mentor_mentee', 'mentor-match', 'mentor_mentee_match'];
+      let matches: any[] = [];
+      let detectedBackendIssue = false;
+      let uniqueTypes: Set<string> = new Set();
+      
+      for (const type of typeVariations) {
+        console.log(`[AdminService] 🎓 Trying type: ${type}`);
+        const typeMatches = await this.getMatchesForCommunity(communityId, startDate, endDate, type);
+        if (typeMatches && typeMatches.length > 0) {
+          console.log(`[AdminService] ✅ Found ${typeMatches.length} matches with type: ${type}`);
+          matches = typeMatches;
+          break;
+        } else {
+          console.log(`[AdminService] ⚠️ No matches found with type: ${type}`);
+        }
+      }
+      
+      // Fallback: If no matches found with type filter, try fetching all matches and filter client-side
+      if (!matches || matches.length === 0) {
+        console.log(`[AdminService] 🎓 No matches found with type filter, trying fallback: fetch all matches and filter client-side`);
+        
+        // First try with date range
+        let allMatches = await this.getMatchesForCommunity(communityId, startDate, endDate);
+        
+        // Always try without date range as well (app might show all-time, and mentor/mentee matches might be older)
+        // This is important because mentor/mentee matches might exist outside the selected date range
+        console.log(`[AdminService] 🎓 Also fetching all-time matches (no date restrictions) to check for mentor/mentee matches outside date range`);
+        const allTimeMatches = await this.getMatchesForCommunity(communityId);
+        
+        // Combine both sets and deduplicate by ID
+        const allMatchesMap = new Map();
+        if (allMatches) {
+          allMatches.forEach(m => allMatchesMap.set(m.id, m));
+        }
+        if (allTimeMatches) {
+          allTimeMatches.forEach(m => allMatchesMap.set(m.id, m));
+        }
+        allMatches = Array.from(allMatchesMap.values());
+        
+        console.log(`[AdminService] 🎓 Combined ${allMatches.length} total matches (${allMatches.length - (allTimeMatches?.length || 0)} from date range, ${allTimeMatches?.length || 0} from all-time)`);
+        
+        if (allMatches && allMatches.length > 0) {
+          console.log(`[AdminService] 🎓 Fetched ${allMatches.length} total matches, filtering for mentor/mentee types...`);
+          
+          // DEBUG: Log unique type values to see what's actually in the data
+          const uniqueMatchTypes = new Set<string>();
+          const uniqueSubTypes = new Set<string>();
+          allMatches.forEach((match: any) => {
+            if (match.type) uniqueTypes.add(match.type);
+            if (match.matchType) uniqueMatchTypes.add(match.matchType);
+            if (match.sub_type || match.subType) uniqueSubTypes.add(match.sub_type || match.subType);
+          });
+          console.log(`[AdminService] 🎓 DEBUG: Found unique type values:`, Array.from(uniqueTypes));
+          console.log(`[AdminService] 🎓 DEBUG: Found unique matchType values:`, Array.from(uniqueMatchTypes));
+          console.log(`[AdminService] 🎓 DEBUG: Found unique sub_type values:`, Array.from(uniqueSubTypes));
+          
+          // Check if mentor/mentee types are present in the response
+          // Note: Backend was updated to support mentor/mentee matches, but if they're still not found,
+          // it might indicate a data issue or the matches are outside the date range
+          const hasMentorMenteeTypes = Array.from(uniqueTypes).some(t => {
+            const typeLower = t.toLowerCase();
+            return typeLower.includes('mentor') || typeLower.includes('mentee');
+          });
+          
+          if (Array.from(uniqueTypes).length > 0 && !hasMentorMenteeTypes) {
+            // Only flag as backend issue if we have other types but no mentor/mentee types
+            // This could also mean the matches are outside the date range or don't exist
+            detectedBackendIssue = true;
+            console.warn(`[AdminService] ⚠️ No mentor/mentee types found in response. Found types: ${Array.from(uniqueTypes).join(', ')}`);
+            console.warn(`[AdminService] ⚠️ This might indicate: (1) No mentor/mentee matches in date range, (2) Backend filtering issue, or (3) Type mismatch`);
+          }
+          
+          // Filter for mentor/mentee matches by checking the type field and sub_type field
+          matches = allMatches.filter((match: any) => {
+            const matchType = match.type || match.matchType;
+            const subType = match.sub_type || match.subType;
+            
+            // Check type field
+            if (matchType) {
+              const typeLower = matchType.toLowerCase();
+              if (typeLower.includes('mentor') || typeLower.includes('mentee')) {
+                return true;
+              }
+            }
+            
+            // Check sub_type field (mentor/mentee matches might be identified by sub_type)
+            if (subType) {
+              const subTypeLower = subType.toLowerCase();
+              if (subTypeLower.includes('mentor') || subTypeLower.includes('mentee')) {
+                return true;
+              }
+            }
+            
+            return false;
+          });
+          console.log(`[AdminService] 🎓 Filtered to ${matches.length} mentor/mentee matches from ${allMatches.length} total matches`);
+          
+          // DEBUG: Log sample matches if found
+          if (matches.length > 0) {
+            console.log(`[AdminService] 🎓 DEBUG: Sample mentor/mentee match:`, matches[0]);
+          } else {
+            // Log a few sample matches to see their structure
+            console.log(`[AdminService] 🎓 DEBUG: No mentor/mentee matches found. Sample matches:`, allMatches.slice(0, 3).map(m => ({
+              id: m.id,
+              type: m.type,
+              matchType: m.matchType,
+              sub_type: m.sub_type || m.subType,
+              userId: m.userId,
+              matchedUserId: m.matchedUserId
+            })));
+          }
+        }
+      }
+      
+      if (!matches || matches.length === 0) {
+        console.warn(`[AdminService] ⚠️ No mentor/mentee matches found. Tried type variations: ${typeVariations.join(', ')} and client-side filtering`);
+        // If we detected a backend issue (no mentor/mentee types in response), set the flag
+        if (!detectedBackendIssue && uniqueTypes.size > 0) {
+          detectedBackendIssue = !Array.from(uniqueTypes).some(t => t.toLowerCase().includes('mentor') || t.toLowerCase().includes('mentee'));
+        }
+        return {
+          matches: [],
+          hasBackendIssue: detectedBackendIssue
+        };
+      }
+      
+      console.log(`[AdminService] 🎓 Processing ${matches.length} mentor/mentee matches`);
+
+      // Parse date range for filtering
+      const start = startDate ? new Date(startDate) : null;
+      const end = endDate ? new Date(endDate) : null;
+      
+      // Group matches by date (using createdAt or created_at)
+      const matchesByDate = new Map<string, any[]>();
+      let skippedInvalid = 0;
+      let skippedOutOfRange = 0;
+      
+      matches.forEach((match) => {
+        const createdAt = match.createdAt || match.created_at;
+        if (!createdAt) {
+          skippedInvalid++;
+          return;
+        }
+        
+        // Parse date - handle both ISO strings and timestamps
+        let date: Date;
+        if (typeof createdAt === 'string') {
+          date = new Date(createdAt);
+        } else if (createdAt.toDate) {
+          // Firebase Timestamp
+          date = createdAt.toDate();
+        } else if (createdAt.seconds) {
+          // Firebase Timestamp object
+          date = new Date(createdAt.seconds * 1000);
+        } else {
+          date = new Date(createdAt);
+        }
+        
+        // Validate date - skip if invalid
+        if (isNaN(date.getTime())) {
+          skippedInvalid++;
+          console.warn(`[AdminService] Invalid date for mentor/mentee match ${match.id}:`, createdAt);
+          return;
+        }
+        
+        // Filter by date range if provided
+        if (start && date < start) {
+          skippedOutOfRange++;
+          return;
+        }
+        if (end && date > end) {
+          skippedOutOfRange++;
+          return;
+        }
+        
+        // Get date string in YYYY-MM-DD format
+        const dateStr = date.toISOString().split('T')[0];
+        
+        // Additional validation: ensure date string is valid (YYYY-MM-DD format)
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+          skippedInvalid++;
+          console.warn(`[AdminService] Invalid date string format for mentor/mentee match ${match.id}:`, dateStr);
+          return;
+        }
+        
+        if (!matchesByDate.has(dateStr)) {
+          matchesByDate.set(dateStr, []);
+        }
+        matchesByDate.get(dateStr)!.push(match);
+      });
+      
+      if (skippedInvalid > 0 || skippedOutOfRange > 0) {
+        console.log(`[AdminService] 🎓 Filtered ${matches.length} mentor/mentee matches: ${skippedInvalid} invalid dates, ${skippedOutOfRange} out of range`);
+      }
+
+      // Get conversation pairs for engagement calculation
+      const conversationPairs = await this.getConversationPairs(communityId);
+
+      // Build result array with stats for each date
+      const result: Array<{
+        date: string;
+        dateDisplay: string;
+        totalPairings: number;
+        engagedPairings: number;
+        engagementRate: number;
+      }> = [];
+
+      for (const [dateStr, dateMatches] of matchesByDate.entries()) {
+        const date = new Date(dateStr);
+        const dateDisplay = date.toLocaleDateString('en-US', { 
+          year: 'numeric', 
+          month: 'long', 
+          day: 'numeric' 
+        });
+
+        // Count unique user pairs (same logic as getMentorMenteeMatchPairings)
+        const uniquePairs = new Set<string>(); // Set of pair keys
+        const pairEngagement = new Map<string, boolean>(); // pairKey -> isEngaged
+        
+        let skippedWrongCommunity = 0;
+        
+        // First, filter by communityId to ensure we only process matches for this community
+        const communityFilteredMatches = dateMatches.filter((match) => {
+          const matchCommunityId = match.communityId || match.community_id;
+          if (matchCommunityId && matchCommunityId !== communityId) {
+            skippedWrongCommunity++;
+            return false;
+          }
+          return true;
+        });
+        
+        if (skippedWrongCommunity > 0) {
+          console.warn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} mentor/mentee matches with wrong communityId (expected ${communityId}) for date ${dateStr}`);
+        }
+        
+        console.log(`[AdminService] After community filter for ${dateStr}: ${communityFilteredMatches.length} matches (from ${dateMatches.length} total)`);
+        
+        for (const match of communityFilteredMatches) {
+          const userId = match.userId || match.user_id;
+          const matchedUserId = match.matchedUserId || match.matched_user_id;
+          
+          if (!userId || !matchedUserId) {
+            continue;
+          }
+          
+          // Create normalized pair key (sorted IDs to handle A-B and B-A as same pair)
+          const pairKey = [userId, matchedUserId].sort((a, b) => a - b).join('-');
+          
+          // Only count each unique pair once
+          if (!uniquePairs.has(pairKey)) {
+            uniquePairs.add(pairKey);
+            
+            // Check if this pair is engaged
+            const isEngaged = conversationPairs.has(pairKey);
+            pairEngagement.set(pairKey, isEngaged);
+          }
+        }
+        
+
+        // Count engaged pairs
+        const engagedCount = Array.from(pairEngagement.values()).filter(engaged => engaged).length;
+
+        const engagementRate = uniquePairs.size > 0 
+          ? (engagedCount / uniquePairs.size) * 100 
+          : 0;
+
+        console.log(`[AdminService] Mentor/Mentee Date ${dateStr}: ${uniquePairs.size} unique pairs, ${engagedCount} engaged (from ${dateMatches.length} matches)`);
+
+        result.push({
+          date: dateStr,
+          dateDisplay,
+          totalPairings: uniquePairs.size,
+          engagedPairings: engagedCount,
+          engagementRate: Math.round(engagementRate * 10) / 10,
+        });
+      }
+
+      // Sort by date descending (most recent first)
+      result.sort((a, b) => b.date.localeCompare(a.date));
+
+      console.log(`[AdminService] 🎓 Found ${result.length} mentor/mentee match dates, total pairings: ${result.reduce((sum, r) => sum + r.totalPairings, 0)}`);
+      return {
+        matches: result,
+        hasBackendIssue: detectedBackendIssue
+      };
+    } catch (error: any) {
+      console.error('[AdminService] Error fetching mentor/mentee matches by date:', error);
+      return {
+        matches: [],
+        hasBackendIssue: false
+      };
+    }
+  }
+
+  /**
+   * Get list of users with their mentor/mentee match counts
+   * Returns users sorted by match count (descending)
+   */
+  async getMentorMenteeUsersWithMatches(
+    communityId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<Array<{
+    userId: number;
+    userName: string;
+    matchCount: number;
+  }>> {
+    try {
+      console.log(`[AdminService] 🎓 Fetching users with mentor/mentee matches for community ${communityId}`);
+      
+      // Fetch all mentor/mentee matches
+      const typeVariations = ['mentor-mentee', 'mentor_mentee', 'mentor-match', 'mentor_mentee_match'];
+      let matches: any[] = [];
+      
+      for (const type of typeVariations) {
+        const typeMatches = await this.getMatchesForCommunity(communityId, startDate, endDate, type);
+        if (typeMatches && typeMatches.length > 0) {
+          console.log(`[AdminService] ✅ Found ${typeMatches.length} matches with type: ${type}`);
+          matches = typeMatches;
+          break;
+        }
+      }
+      
+      // Fallback: fetch all matches and filter client-side
+      if (!matches || matches.length === 0) {
+        const allMatches = await this.getMatchesForCommunity(communityId, startDate, endDate);
+        if (allMatches && allMatches.length > 0) {
+          matches = allMatches.filter((match: any) => {
+            const matchType = match.type || match.matchType;
+            const subType = match.sub_type || match.subType;
+            if (matchType) {
+              const typeLower = matchType.toLowerCase();
+              if (typeLower.includes('mentor') || typeLower.includes('mentee')) {
+                return true;
+              }
+            }
+            if (subType) {
+              const subTypeLower = subType.toLowerCase();
+              if (subTypeLower.includes('mentor') || subTypeLower.includes('mentee')) {
+                return true;
+              }
+            }
+            return false;
+          });
+        }
+      }
+      
+      if (!matches || matches.length === 0) {
+        console.warn(`[AdminService] ⚠️ No mentor/mentee matches found`);
+        return [];
+      }
+      
+      // Filter by communityId
+      const validMatches = matches.filter((match: any) => {
+        return match.communityId === communityId;
+      });
+      
+      // Count matches per user
+      const userMatchCounts = new Map<number, number>();
+      validMatches.forEach((match: any) => {
+        const userId = match.userId || match.user_id;
+        if (userId) {
+          userMatchCounts.set(userId, (userMatchCounts.get(userId) || 0) + 1);
+        }
+      });
+      
+      // Fetch user names
+      const userIds = Array.from(userMatchCounts.keys());
+      const { userService } = await import('./user.service');
+      const userMap = await userService.getUsersByIds(userIds);
+      
+      // Build result array
+      const result = Array.from(userMatchCounts.entries())
+        .map(([userId, matchCount]) => {
+          const user = userMap.get(userId);
+          const userName = user ? (user.fullName || `${user.fname || ''} ${user.lname || ''}`.trim() || `User ${userId}`) : `User ${userId}`;
+          return {
+            userId,
+            userName,
+            matchCount
+          };
+        })
+        .sort((a, b) => b.matchCount - a.matchCount); // Sort by match count descending
+      
+      console.log(`[AdminService] 🎓 Found ${result.length} users with mentor/mentee matches`);
+      return result;
+    } catch (error: any) {
+      console.error('[AdminService] Error fetching users with mentor/mentee matches:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get all mentor/mentee matches for a specific user
+   * Returns matches with the matched user details and mentor/mentee roles
+   */
+  async getMentorMenteeMatchesForUser(
+    communityId: number,
+    userId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<Array<{
+    id: number;
+    matchedUserId: number;
+    matchedUserName: string;
+    createdAt: string;
+    subType?: string;
+    userWasMentor: boolean;
+    userWasMentee: boolean;
+  }>> {
+    try {
+      console.log(`[AdminService] 🎓 Fetching mentor/mentee matches for user ${userId}`);
+      
+      // Fetch all mentor/mentee matches
+      const typeVariations = ['mentor-mentee', 'mentor_mentee', 'mentor-match', 'mentor_mentee_match'];
+      let matches: any[] = [];
+      
+      for (const type of typeVariations) {
+        const typeMatches = await this.getMatchesForCommunity(communityId, startDate, endDate, type);
+        if (typeMatches && typeMatches.length > 0) {
+          matches = typeMatches;
+          break;
+        }
+      }
+      
+      // Fallback: fetch all matches and filter client-side
+      if (!matches || matches.length === 0) {
+        const allMatches = await this.getMatchesForCommunity(communityId, startDate, endDate);
+        if (allMatches && allMatches.length > 0) {
+          matches = allMatches.filter((match: any) => {
+            const matchType = match.type || match.matchType;
+            const subType = match.sub_type || match.subType;
+            if (matchType) {
+              const typeLower = matchType.toLowerCase();
+              if (typeLower.includes('mentor') || typeLower.includes('mentee')) {
+                return true;
+              }
+            }
+            if (subType) {
+              const subTypeLower = subType.toLowerCase();
+              if (subTypeLower.includes('mentor') || subTypeLower.includes('mentee')) {
+                return true;
+              }
+            }
+            return false;
+          });
+        }
+      }
+      
+      if (!matches || matches.length === 0) {
+        return [];
+      }
+      
+      // Filter matches for this specific user
+      const userMatches = matches.filter((match: any) => {
+        const matchUserId = match.userId || match.user_id;
+        const matchedUserId = match.matchedUserId || match.matched_user_id || match.otherUserId || match.other_user_id;
+        return matchUserId === userId && 
+               matchedUserId &&
+               match.communityId === communityId;
+      });
+      
+      // Get matched user IDs and fetch their names
+      const matchedUserIds = [...new Set(userMatches.map((m: any) => 
+        m.matchedUserId || m.matched_user_id || m.otherUserId || m.other_user_id
+      ).filter(Boolean))];
+      const { userService } = await import('./user.service');
+      const matchedUserMap = await userService.getUsersByIds(matchedUserIds);
+      
+      // Build result array with mentor/mentee role information
+      const result = userMatches.map((match: any) => {
+        const matchedUserId = match.matchedUserId || match.matched_user_id || match.otherUserId || match.other_user_id;
+        const matchedUser = matchedUserMap.get(matchedUserId);
+        const matchedUserName = matchedUser ? (matchedUser.fullName || `${matchedUser.fname || ''} ${matchedUser.lname || ''}`.trim() || `User ${matchedUserId}`) : `User ${matchedUserId}`;
+        
+        // Determine if the user (userId) was the mentor or mentee based on sub_type
+        // sub_type values: 'mentor-did-not-request', 'mentor-that-requested' indicate the user is the mentor
+        // Based on the SQL query pattern, these sub_types mean the user (userId) was the mentor
+        const subType = match.sub_type || match.subType || '';
+        const subTypeLower = subType.toLowerCase();
+        
+        // Check if user was mentor based on sub_type
+        // These specific sub_types indicate the user was the mentor
+        const userWasMentor = subTypeLower.includes('mentor-did-not-request') || 
+                              subTypeLower.includes('mentor-that-requested');
+        
+        // If not clearly a mentor, assume mentee (or check for explicit mentee indicators)
+        const userWasMentee = !userWasMentor;
+        
+        return {
+          id: match.id,
+          matchedUserId,
+          matchedUserName,
+          createdAt: match.createdAt || match.created_at,
+          subType: subType,
+          userWasMentor: userWasMentor, // true if the selected user was the mentor
+          userWasMentee: userWasMentee // true if the selected user was the mentee
+        };
+      }).sort((a, b) => {
+        // Sort by date descending (most recent first)
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+      
+      console.log(`[AdminService] 🎓 Found ${result.length} mentor/mentee matches for user ${userId}`);
+      return result;
+    } catch (error: any) {
+      console.error('[AdminService] Error fetching mentor/mentee matches for user:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get all users with their connection counts
+   * Counts from each person's perspective (A→B and B→A are separate)
+   */
+  async getUsersWithConnections(
+    communityId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<Array<{
+    userId: number;
+    userName: string;
+    connectionCount: number;
+  }>> {
+    try {
+      console.log(`[AdminService] 🔗 Fetching users with connections for community ${communityId}`);
+      
+      // Fetch all matches (excluding mentor/mentee which are handled separately)
+      const allMatches = await this.getMatchesForCommunity(communityId, startDate, endDate);
+      
+      if (!allMatches || allMatches.length === 0) {
+        console.warn(`[AdminService] ⚠️ No matches found`);
+        return [];
+      }
+      
+      // Filter out mentor/mentee matches (they're tracked separately)
+      const validMatches = allMatches.filter((match: any) => {
+        const userId = match.userId || match.user_id;
+        const matchedUserId = match.matchedUserId || match.matched_user_id || match.otherUserId || match.other_user_id;
+        const matchType = (match.type || match.matchType || '').toLowerCase();
+        
+        // Exclude mentor/mentee matches (they're tracked separately)
+        if (matchType.includes('mentor') || matchType.includes('mentee')) {
+          return false;
+        }
+        
+        // Only require valid user IDs (not null/undefined) and matching community
+        return userId && matchedUserId && match.communityId === communityId;
+      });
+      
+      // Count unique connections per user (from each person's perspective)
+      // A→B counts as 1 for A, B→A counts as 1 for B
+      // For group matches (channel pairings), deduplicate by group_id to avoid counting the same connection multiple times
+      const userConnections = new Map<number, Set<number>>();
+      
+      // First, group matches by group_id to handle channel pairings correctly
+      const matchesByGroup = new Map<string | number, any[]>();
+      const matchesWithoutGroup: any[] = [];
+      
+      validMatches.forEach((match: any) => {
+        const groupId = match.groupId || match.group_id || 
+                       (match.matchIndicesId && match.matchIndicesId !== 0 ? match.matchIndicesId : null);
+        
+        if (groupId !== null && groupId !== undefined) {
+          const groupKey = String(groupId);
+          if (!matchesByGroup.has(groupKey)) {
+            matchesByGroup.set(groupKey, []);
+          }
+          matchesByGroup.get(groupKey)!.push(match);
+        } else {
+          matchesWithoutGroup.push(match);
+        }
+      });
+      
+      // Process group matches: collect all unique users in each group, then count connections
+      matchesByGroup.forEach((groupMatches) => {
+        const usersInGroup = new Set<number>();
+        groupMatches.forEach((match: any) => {
+          const userId = match.userId || match.user_id;
+          const matchedUserId = match.matchedUserId || match.matched_user_id || match.otherUserId || match.other_user_id;
+          if (userId) usersInGroup.add(userId);
+          if (matchedUserId) usersInGroup.add(matchedUserId);
+        });
+        
+        // For each user in the group, add connections to all other users in the group
+        const usersArray = Array.from(usersInGroup);
+        usersArray.forEach((userId) => {
+          if (!userConnections.has(userId)) {
+            userConnections.set(userId, new Set());
+          }
+          usersArray.forEach((otherUserId) => {
+            if (userId !== otherUserId) {
+              userConnections.get(userId)!.add(otherUserId);
+            }
+          });
+        });
+      });
+      
+      // Process matches without groups (1-to-1 matches like trova_magic)
+      matchesWithoutGroup.forEach((match: any) => {
+        const userId = match.userId || match.user_id;
+        const matchedUserId = match.matchedUserId || match.matched_user_id || match.otherUserId || match.other_user_id;
+        
+        if (userId && matchedUserId) {
+          // Count from userId's perspective (userId → matchedUserId)
+          if (!userConnections.has(userId)) {
+            userConnections.set(userId, new Set());
+          }
+          userConnections.get(userId)!.add(matchedUserId);
+          
+          // Count from matchedUserId's perspective (matchedUserId → userId)
+          if (!userConnections.has(matchedUserId)) {
+            userConnections.set(matchedUserId, new Set());
+          }
+          userConnections.get(matchedUserId)!.add(userId);
+        }
+      });
+      
+      // Fetch user names in batches to reduce network noise
+      const userIds = Array.from(userConnections.keys());
+      const { userService } = await import('./user.service');
+      
+      // Batch user fetches in chunks of 50 to reduce network noise
+      const BATCH_SIZE = 50;
+      const userMap = new Map<number, any>();
+      
+      for (let i = 0; i < userIds.length; i += BATCH_SIZE) {
+        const batch = userIds.slice(i, i + BATCH_SIZE);
+        const batchResults = await userService.getUsersByIds(batch);
+        batchResults.forEach((user, userId) => {
+          userMap.set(userId, user);
+        });
+      }
+      
+      // Build result array
+      const result = Array.from(userConnections.entries())
+        .map(([userId, connectionsSet]) => {
+          const user = userMap.get(userId);
+          const userName = user ? (user.fullName || `${user.fname || ''} ${user.lname || ''}`.trim() || `User ${userId}`) : `User ${userId}`;
+          return {
+            userId,
+            userName,
+            connectionCount: connectionsSet.size
+          };
+        })
+        .filter(user => user.connectionCount > 0) // Only include users with connections
+        .sort((a, b) => b.connectionCount - a.connectionCount); // Sort by connection count descending
+      
+      console.log(`[AdminService] 🔗 Found ${result.length} users with connections`);
+      return result;
+    } catch (error: any) {
+      console.error('[AdminService] Error fetching users with connections:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get all connections for a specific user
+   * Returns the list of people this user connected with
+   */
+  async getConnectionsForUser(
+    communityId: number,
+    userId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<Array<{
+    id: number;
+    connectedUserId: number;
+    connectedUserName: string;
+    createdAt: string;
+    matchType?: string;
+  }>> {
+    try {
+      console.log(`[AdminService] 🔗 Fetching connections for user ${userId}`);
+      
+      // Fetch all matches
+      const allMatches = await this.getMatchesForCommunity(communityId, startDate, endDate);
+      
+      if (!allMatches || allMatches.length === 0) {
+        return [];
+      }
+      
+      // Filter matches where this user is involved
+      const userMatches = allMatches.filter((match: any) => {
+        const matchUserId = match.userId || match.user_id;
+        const matchMatchedUserId = match.matchedUserId || match.matched_user_id || match.otherUserId || match.other_user_id;
+        const matchType = (match.type || match.matchType || '').toLowerCase();
+        
+        // Exclude mentor/mentee matches
+        if (matchType.includes('mentor') || matchType.includes('mentee')) {
+          return false;
+        }
+        
+        // Check if this user is involved
+        const isUserInvolved = (matchUserId === userId || matchMatchedUserId === userId);
+        
+        return isUserInvolved &&
+               matchUserId &&
+               matchMatchedUserId &&
+               match.communityId === communityId;
+      });
+      
+      // Get unique connected users (deduplicate by user ID, keep earliest match)
+      const connectedUsersMap = new Map<number, any>();
+      
+      userMatches.forEach((match: any) => {
+        const matchUserId = match.userId || match.user_id;
+        const matchMatchedUserId = match.matchedUserId || match.matched_user_id || match.otherUserId || match.other_user_id;
+        const connectedUserId = matchUserId === userId ? matchMatchedUserId : matchUserId;
+        
+        if (connectedUserId && connectedUserId !== userId) {
+          // Keep the earliest match for each connection
+          if (!connectedUsersMap.has(connectedUserId)) {
+            connectedUsersMap.set(connectedUserId, match);
+          } else {
+            const existingMatch = connectedUsersMap.get(connectedUserId);
+            const existingDate = new Date(existingMatch.createdAt || existingMatch.created_at || 0);
+            const currentDate = new Date(match.createdAt || match.created_at || 0);
+            if (currentDate < existingDate) {
+              connectedUsersMap.set(connectedUserId, match);
+            }
+          }
+        }
+      });
+      
+      // Fetch user details for connected users in batches to reduce network noise
+      const connectedUserIds = Array.from(connectedUsersMap.keys());
+      const { userService } = await import('./user.service');
+      
+      // Batch user fetches in chunks of 50 to reduce network noise
+      const BATCH_SIZE = 50;
+      const userMap = new Map<number, any>();
+      
+      for (let i = 0; i < connectedUserIds.length; i += BATCH_SIZE) {
+        const batch = connectedUserIds.slice(i, i + BATCH_SIZE);
+        const batchResults = await userService.getUsersByIds(batch);
+        batchResults.forEach((user, userId) => {
+          userMap.set(userId, user);
+        });
+      }
+      
+      // Build result array
+      const result = Array.from(connectedUsersMap.entries())
+        .map(([connectedUserId, match]) => {
+          const user = userMap.get(connectedUserId);
+          const connectedUserName = user ? (user.fullName || `${user.fname || ''} ${user.lname || ''}`.trim() || `User ${connectedUserId}`) : `User ${connectedUserId}`;
+          return {
+            id: match.id || `connection-${userId}-${connectedUserId}`,
+            connectedUserId,
+            connectedUserName,
+            createdAt: match.createdAt || match.created_at || '',
+            matchType: match.type || match.matchType
+          };
+        })
+        .sort((a, b) => {
+          // Sort by date (most recent first)
+          const dateA = new Date(a.createdAt).getTime();
+          const dateB = new Date(b.createdAt).getTime();
+          return dateB - dateA;
+        });
+      
+      console.log(`[AdminService] 🔗 Found ${result.length} connections for user ${userId}`);
+      return result;
+    } catch (error: any) {
+      console.error('[AdminService] Error fetching connections for user:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get pairings for a specific mentor/mentee match date
+   * Returns an array of match objects with user details
+   * Deduplicates pairings (normalizes user pairs) and fetches user names
+   * @deprecated - Use getMentorMenteeUsersWithMatches and getMentorMenteeMatchesForUser instead
+   */
+  async getMentorMenteeMatchPairings(
+    communityId: number, 
+    date: string, 
+    startDate?: string, 
+    endDate?: string
+  ): Promise<any[]> {
+    try {
+      console.log(`[AdminService] 🎓 Fetching pairings for mentor/mentee match date ${date}`);
+      
+      // Backend now supports 'mentor-mentee' and 'mentor_mentee' query parameters
+      // Try the primary supported types first, then fallback to variations
+      const typeVariations = ['mentor-mentee', 'mentor_mentee', 'mentor-match', 'mentor_mentee_match'];
+      let matches: any[] = [];
+      
+      for (const type of typeVariations) {
+        const typeMatches = await this.getMatchesForCommunity(communityId, startDate, endDate, type);
+        if (typeMatches && typeMatches.length > 0) {
+          console.log(`[AdminService] ✅ Found ${typeMatches.length} matches with type: ${type}`);
+          matches = typeMatches;
+          break;
+        }
+      }
+      
+      // Fallback: If no matches found with type filter, try fetching all matches and filter client-side
+      if (!matches || matches.length === 0) {
+        console.log(`[AdminService] 🎓 No matches found with type filter, trying fallback: fetch all matches and filter client-side`);
+        const allMatches = await this.getMatchesForCommunity(communityId, startDate, endDate);
+        if (allMatches && allMatches.length > 0) {
+          // Filter for mentor/mentee matches by checking the type field and sub_type field
+          matches = allMatches.filter((match: any) => {
+            const matchType = match.type || match.matchType;
+            const subType = match.sub_type || match.subType;
+            
+            // Check type field
+            if (matchType) {
+              const typeLower = matchType.toLowerCase();
+              if (typeLower.includes('mentor') || typeLower.includes('mentee')) {
+                return true;
+              }
+            }
+            
+            // Check sub_type field (mentor/mentee matches might be identified by sub_type)
+            if (subType) {
+              const subTypeLower = subType.toLowerCase();
+              if (subTypeLower.includes('mentor') || subTypeLower.includes('mentee')) {
+                return true;
+              }
+            }
+            
+            return false;
+          });
+          console.log(`[AdminService] 🎓 Filtered to ${matches.length} mentor/mentee matches from ${allMatches.length} total matches`);
+        }
+      }
+      
+      if (!matches || matches.length === 0) {
+        console.warn(`[AdminService] ⚠️ No mentor/mentee matches found with any type variation or client-side filtering`);
+        return [];
+      }
+
+      // Filter matches for the specific date
+      const dateMatches = matches.filter((match) => {
+        const createdAt = match.createdAt || match.created_at;
+        if (!createdAt) return false;
+        
+        let matchDate: Date;
+        if (typeof createdAt === 'string') {
+          matchDate = new Date(createdAt);
+        } else if (createdAt.toDate) {
+          matchDate = createdAt.toDate();
+        } else if (createdAt.seconds) {
+          matchDate = new Date(createdAt.seconds * 1000);
+        } else {
+          matchDate = new Date(createdAt);
+        }
+        
+        const matchDateStr = matchDate.toISOString().split('T')[0];
+        const targetDateStr = date.includes('T') ? date.split('T')[0] : date;
+        return matchDateStr === targetDateStr;
+      });
+
+      // Get conversation pairs to mark which pairings are engaged
+      const conversationPairs = await this.getConversationPairs(communityId);
+
+      // Deduplicate by unique user pairs
+      const seenPairs = new Map<string, any>();
+      
+      console.log(`[AdminService] Processing ${dateMatches.length} mentor/mentee matches for date ${date}`);
+      
+      let skippedWrongCommunity = 0;
+      
+      // First, filter by communityId
+      const communityFilteredMatches = dateMatches.filter((match) => {
+        const matchCommunityId = match.communityId || match.community_id;
+        if (matchCommunityId && matchCommunityId !== communityId) {
+          skippedWrongCommunity++;
+          return false;
+        }
+        return true;
+      });
+      
+      if (skippedWrongCommunity > 0) {
+        console.warn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} mentor/mentee matches with wrong communityId (expected ${communityId})`);
+      }
+      
+      console.log(`[AdminService] After community filter: ${communityFilteredMatches.length} matches (from ${dateMatches.length} total)`);
+      
+      for (const match of communityFilteredMatches) {
+        const userId = match.userId || match.user_id;
+        const matchedUserId = match.matchedUserId || match.matched_user_id;
+        
+        if (!userId || !matchedUserId) {
+          continue;
+        }
+        
+        // Create normalized pair key
+        const pairKey = [userId, matchedUserId].sort((a, b) => a - b).join('-');
+        
+        // Only add if we haven't seen this pair before
+        if (!seenPairs.has(pairKey)) {
+          const isEngaged = conversationPairs.has(pairKey);
+          
+          seenPairs.set(pairKey, {
+            ...match,
+            id: `pair-${pairKey}`,
+            userId: userId,
+            matchedUserId: matchedUserId,
+            isEngaged,
+          });
+        }
+      }
+      
+      
+      // Convert to array
+      const uniquePairings = Array.from(seenPairs.values());
+      
+      console.log(`[AdminService] Deduplicated to ${uniquePairings.length} unique mentor/mentee pairings from ${dateMatches.length} matches`);
+
+      // Collect all unique user IDs to fetch
+      const userIdsToFetch = new Set<number>();
+      uniquePairings.forEach(pairing => {
+        if (pairing.userId) userIdsToFetch.add(pairing.userId);
+        if (pairing.matchedUserId) userIdsToFetch.add(pairing.matchedUserId);
+      });
+
+      // Fetch user details
+      const { userService } = await import('./user.service');
+      const usersMap = await userService.getUsersByIds(Array.from(userIdsToFetch));
+
+      // Enrich pairings with user data
+      const enrichedPairings = uniquePairings.map((pairing) => {
+        const user = usersMap.get(pairing.userId);
+        const matchedUser = usersMap.get(pairing.matchedUserId);
+        
+        return {
+          ...pairing,
+          user: user ? {
+            id: user.id,
+            fname: user.fname,
+            lname: user.lname,
+            fullName: user.fullName || `${user.fname} ${user.lname}`,
+            profilePicture: user.profilePicture,
+          } : null,
+          matchedUser: matchedUser ? {
+            id: matchedUser.id,
+            fname: matchedUser.fname,
+            lname: matchedUser.lname,
+            fullName: matchedUser.fullName || `${matchedUser.fname} ${matchedUser.lname}`,
+            profilePicture: matchedUser.profilePicture,
+          } : null,
+        };
+      });
+
+      console.log(`[AdminService] 🎓 Found ${enrichedPairings.length} unique mentor/mentee pairings for date ${date} (deduplicated from ${dateMatches.length} matches)`);
+      return enrichedPairings;
+    } catch (error: any) {
+      console.error('[AdminService] Error fetching mentor/mentee match pairings:', error);
+      return [];
+    }
+  }
 }
 
 export const adminService = new AdminService();
+
+
 
 
 
