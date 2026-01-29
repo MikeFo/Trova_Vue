@@ -1,0 +1,13 @@
+---
+description: Staging build and deploy commands
+alwaysApply: true
+---
+
+# Staging Build & Deploy
+
+When building or deploying for **staging**, use:
+
+- **Build for staging**: `npm run build:staging`
+- **Deploy to staging**: Push to `staging` branch → Netlify auto-builds (`npm run build:staging`) and publishes to vue.trova-staging.com
+
+Prefer `npm run build:staging` over `npm run build` when the target is staging.

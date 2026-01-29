@@ -233,6 +233,21 @@ function attachClusterVisibilityListener() {
 }
 
 /**
+ * Returns true if the URL is cross-origin (different domain). Cross-origin images
+ * will trigger CORS when drawn to canvas or used as marker icon, so we skip them
+ * and use the default icon without attempting to load.
+ */
+function isCrossOriginImageUrl(url: string): boolean {
+  if (!url || url.startsWith('data:')) return false;
+  try {
+    const u = new URL(url, window.location.origin);
+    return u.origin !== window.location.origin;
+  } catch {
+    return true; // treat invalid URLs as cross-origin to avoid failed requests
+  }
+}
+
+/**
  * Create a default marker icon for users without profile pictures
  */
 function createDefaultMarkerIcon(): string {
@@ -790,20 +805,19 @@ function bringMarkerToFront(marker: google.maps.Marker) {
  */
 async function updateMarkerIcon(marker: google.maps.Marker, profile: ProfilesInit) {
   let markerIcon: string;
-  if (profile.profilePicture) {
+  if (profile.profilePicture && !isCrossOriginImageUrl(profile.profilePicture)) {
     try {
-      // Try canvas without CORS first - works for same-origin or CORS-enabled images
       markerIcon = await createCircularImageWithoutCORS(profile.profilePicture);
     } catch (noCorsError) {
-      // If that fails, try with CORS
       try {
         markerIcon = await createCircularImage(profile.profilePicture);
       } catch (corsError) {
-        // If both canvas methods fail, use the image URL directly
-        // Google Maps can display external images, we'll rely on CSS to make them circular
-        markerIcon = profile.profilePicture;
+        markerIcon = createDefaultMarkerIcon();
       }
     }
+  } else if (profile.profilePicture) {
+    // Cross-origin URL (Gravatar, Slack, S3, Firebase) - use default icon without attempting load
+    markerIcon = createDefaultMarkerIcon();
   } else {
     // Create default icon for profiles without pictures
     markerIcon = createDefaultMarkerIcon();
@@ -1278,23 +1292,20 @@ async function updateMapMarkers() {
     const coords = jitter ?? { lat: profile.currentLat, lng: profile.currentLong };
     
     let markerIcon: string;
-    if (profile.profilePicture) {
+    if (profile.profilePicture && !isCrossOriginImageUrl(profile.profilePicture)) {
       try {
-        // Try canvas without CORS first - works for same-origin or CORS-enabled images
         markerIcon = await createCircularImageWithoutCORS(profile.profilePicture);
       } catch (noCorsError) {
-        // If that fails, try with CORS
         try {
           markerIcon = await createCircularImage(profile.profilePicture);
         } catch (corsError) {
-          // If both canvas methods fail, use the image URL directly
-          // Google Maps can display external images, we'll rely on CSS to make them circular
-          console.log(`[MapPage] Canvas failed for ${profile.fname} ${profile.lname}, using direct URL`);
-          markerIcon = profile.profilePicture;
+          markerIcon = createDefaultMarkerIcon();
         }
       }
+    } else if (profile.profilePicture) {
+      // Cross-origin URL (Gravatar, Slack, S3, Firebase) - use default icon without attempting load
+      markerIcon = createDefaultMarkerIcon();
     } else {
-      // Create default icon for profiles without pictures
       markerIcon = createDefaultMarkerIcon();
     }
 
