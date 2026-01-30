@@ -45,10 +45,10 @@
             </ion-button>
           </div>
 
-          <!-- User List -->
+          <!-- User List (only profiles currently in map viewport) -->
           <div ref="userListRef" class="user-list">
             <div
-              v-for="profile in filteredProfiles"
+              v-for="profile in visibleInViewportProfiles"
               :key="profile.userId || profile.id"
               :ref="el => setUserCardRef(el, profile.userId || profile.id)"
               class="user-card"
@@ -114,9 +114,10 @@
             </div>
 
             <!-- Empty State -->
-            <div v-if="filteredProfiles.length === 0" class="empty-state">
+            <div v-if="visibleInViewportProfiles.length === 0" class="empty-state">
               <ion-icon :icon="person" class="empty-icon"></ion-icon>
-              <p>No members found</p>
+              <p v-if="filteredProfiles.length === 0">No members found</p>
+              <p v-else>No members in view — pan or zoom the map to see members</p>
             </div>
           </div>
         </div>
@@ -727,15 +728,25 @@ const filteredProfiles = computed(() => {
   return filtered;
 });
 
-// Profiles visible in the current map viewport, sorted alphabetically
+// Profiles visible in the current map viewport (sidebar list refreshes with map pan/zoom)
 const visibleInViewportProfiles = computed(() => {
-  // Filter to only profiles that are in the current viewport
   const visible = filteredProfiles.value.filter(profile => {
     const userId = profile.userId || profile.id;
     return visibleUserIds.value.has(userId);
   });
-  
-  // Sort alphabetically by full name
+
+  // Sort: clicked user first (if any), then alphabetically
+  if (clickedUserId.value !== null) {
+    return [...visible].sort((a, b) => {
+      const aId = a.userId || a.id;
+      const bId = b.userId || b.id;
+      if (aId === clickedUserId.value) return -1;
+      if (bId === clickedUserId.value) return 1;
+      const nameA = (a.fullName || `${a.fname} ${a.lname}`).toLowerCase();
+      const nameB = (b.fullName || `${b.fname} ${b.lname}`).toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+  }
   return visible.sort((a, b) => {
     const nameA = (a.fullName || `${a.fname} ${a.lname}`).toLowerCase();
     const nameB = (b.fullName || `${b.fname} ${b.lname}`).toLowerCase();
@@ -767,9 +778,13 @@ function toggleSelection(profile: ProfilesInit) {
  * Set user card ref for scrolling/highlighting
  */
 function setUserCardRef(el: any, userId: number) {
-  if (el && el instanceof HTMLElement) {
+  if (el == null) {
+    userCardRefs.delete(userId);
+    return;
+  }
+  if (el instanceof HTMLElement) {
     userCardRefs.set(userId, el);
-  } else if (el && '$el' in el && el.$el instanceof HTMLElement) {
+  } else if ('$el' in el && el.$el instanceof HTMLElement) {
     userCardRefs.set(userId, el.$el);
   }
 }
@@ -801,29 +816,13 @@ function bringMarkerToFront(marker: google.maps.Marker) {
 }
 
 /**
- * Update a marker's icon to match the current profile picture
+ * Update a marker's icon to match the current profile picture.
+ * Uses profile picture URL directly; CSS makes marker images circular.
  */
 async function updateMarkerIcon(marker: google.maps.Marker, profile: ProfilesInit) {
-  let markerIcon: string;
-  if (profile.profilePicture && !isCrossOriginImageUrl(profile.profilePicture)) {
-    try {
-      markerIcon = await createCircularImageWithoutCORS(profile.profilePicture);
-    } catch (noCorsError) {
-      try {
-        markerIcon = await createCircularImage(profile.profilePicture);
-      } catch (corsError) {
-        markerIcon = createDefaultMarkerIcon();
-      }
-    }
-  } else if (profile.profilePicture) {
-    // Cross-origin URL (Gravatar, Slack, S3, Firebase) - use default icon without attempting load
-    markerIcon = createDefaultMarkerIcon();
-  } else {
-    // Create default icon for profiles without pictures
-    markerIcon = createDefaultMarkerIcon();
-  }
-  
-  // Update the marker's icon
+  const markerIcon = profile.profilePicture
+    ? profile.profilePicture
+    : createDefaultMarkerIcon();
   marker.setIcon({
     url: markerIcon,
     scaledSize: new google.maps.Size(40, 40),
@@ -1291,20 +1290,12 @@ async function updateMapMarkers() {
     const jitter = jitteredPositions.get(profile.userId || profile.id);
     const coords = jitter ?? { lat: profile.currentLat, lng: profile.currentLong };
     
+    // Use profile picture URL directly as marker icon when available. Legacy Marker
+    // displays image URLs fine (including cross-origin); canvas/SVG data URLs were
+    // failing for cross-origin pics. Existing CSS makes marker images circular.
     let markerIcon: string;
-    if (profile.profilePicture && !isCrossOriginImageUrl(profile.profilePicture)) {
-      try {
-        markerIcon = await createCircularImageWithoutCORS(profile.profilePicture);
-      } catch (noCorsError) {
-        try {
-          markerIcon = await createCircularImage(profile.profilePicture);
-        } catch (corsError) {
-          markerIcon = createDefaultMarkerIcon();
-        }
-      }
-    } else if (profile.profilePicture) {
-      // Cross-origin URL (Gravatar, Slack, S3, Firebase) - use default icon without attempting load
-      markerIcon = createDefaultMarkerIcon();
+    if (profile.profilePicture) {
+      markerIcon = profile.profilePicture;
     } else {
       markerIcon = createDefaultMarkerIcon();
     }
