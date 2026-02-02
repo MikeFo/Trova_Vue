@@ -14,7 +14,7 @@ export const environment = {
   scheme: 'com.okta.dev-62292605:/',
   siteUrl: 'https://www.trova-staging.com',
   googleMapsApiFindPlaceUrl: 'https://maps.googleapis.com/maps/api/place',
-  googleMapsApiKey: 'AIzaSyByxzIDhPosaIwi_sHHXSmLWdltBVKemeI',
+  googleMapsApiKey: 'AIzaSyB6H_o_9iGrFIftKKa7zNJeqHeIR_eUZxw',
   googleAnalyticsTrackerId: 'UA-123516927-1',
   oktaDomain: 'dev-62292605.okta.com',
   oktaClientId: '0oa4q2hnylxAJfIHR5d7',
