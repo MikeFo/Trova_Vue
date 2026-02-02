@@ -91,14 +91,15 @@ To add or modify domains:
 2. Select the project (production or staging)
 3. Add custom domain in the Hosting settings
 
-## Environment Variables
+## Environment Variables (Secrets)
 
-Environment-specific configurations are in:
-- `src/environments/environment.local.ts` - Local development
-- `src/environments/environment.staging.ts` - Staging environment
-- `src/environments/environment.prod.ts` - Production environment
+API keys and other secrets are **not** committed. They are injected at build time via Vite env vars (prefix `VITE_`).
 
-The correct environment is automatically selected based on the build mode.
+- **Local development**: Copy `.env.example` to `.env.local` and fill in values. `.env.local` is gitignored.
+- **Netlify (staging)**: In Netlify → Site settings → Environment variables, add every variable listed in `.env.example` (e.g. `VITE_GOOGLE_MAPS_API_KEY`, `VITE_FIREBASE_API_KEY`, etc.) for the staging site. Netlify runs `npm run build:staging` and Vite injects these at build time.
+- **Production**: Same as staging; set `VITE_*` vars in your production build environment (Firebase/Netlify/CI).
+
+The correct environment file (`environment.local.ts`, `environment.staging.ts`, or `environment.prod.ts`) is selected by build mode; each reads from `import.meta.env.VITE_*`.
 
 ## Troubleshooting
 
