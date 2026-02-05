@@ -1,7 +1,8 @@
 export const environment = {
   production: false,
   env: 'local',
-  apiUrl: '/api', // Use Vite proxy in development
+  // Point at staging API so login/auth work without a local backend. For a local API, use apiUrl: '/api' and set VITE_API_TARGET in vite proxy.
+  apiUrl: 'https://trova-api-staging.herokuapp.com',
   oidcConfig: {
     client_id: '0oa4q2hnylxAJfIHR5d7',
     server_host: 'https://dev-62292605.okta.com/oauth2/default',
