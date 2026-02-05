@@ -1,4 +1,4 @@
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, User as FirebaseUser, type Auth } from 'firebase/auth';
 import { useFirebase } from '../composables/useFirebase';
 import { apiService } from './api.service';
 import { useAuthStore } from '../stores/auth.store';
@@ -23,22 +23,21 @@ export class AuthService {
 
   private setupAuthListener() {
     if (this.authListenerSetup) return;
-    
+
     try {
       const { auth } = useFirebase();
       if (auth) {
         this.authListenerSetup = true;
+        // Handle Google sign-in redirect result (user returning from Google)
+        // Must run before onAuthStateChanged; only resolves with a value when returning from redirect
+        this.handleRedirectResult(auth);
         // Listen for auth state changes - this will fire immediately with current user if authenticated
-        // The first call happens synchronously if auth state is already known
         onAuthStateChanged(auth, async (firebaseUser: FirebaseUser | null) => {
           if (firebaseUser) {
             try {
-              // Restore user profile from backend when auth state is restored
               await this.getUserProfile();
             } catch (error) {
               console.warn('Failed to get user profile on auth state change:', error);
-              // If profile fetch fails, still mark as authenticated based on Firebase
-              // This prevents redirect to login when backend is temporarily unavailable
             }
           } else {
             this.authStore.setUser(null);
@@ -47,12 +46,72 @@ export class AuthService {
       }
     } catch (error) {
       console.warn('Firebase auth not available yet:', error);
-      // Retry after a short delay if Firebase isn't ready
       setTimeout(() => {
         if (!this.authListenerSetup) {
           this.setupAuthListener();
         }
       }, 100);
+    }
+  }
+
+  /**
+   * Process the result of signInWithRedirect when the user returns from Google.
+   * Runs once on app load; only does work when there is a pending redirect result.
+   */
+  private async handleRedirectResult(auth: Auth): Promise<void> {
+    try {
+      const { getRedirectResult } = await import('firebase/auth');
+      const result = await getRedirectResult(auth);
+      if (!result?.user) return;
+
+      const token = await result.user.getIdToken();
+      const givenName = result.user.displayName?.split(' ')[0] || '';
+      const familyName = result.user.displayName?.split(' ').slice(1).join(' ') || '';
+
+      let user = await this.getUserProfile();
+      if (!user || !user.id) {
+        try {
+          user = await apiService.post<User>('/auth/signup?setEmailAsVerified=true&setCommunityFromEmail=true', {
+            fname: givenName,
+            lname: familyName,
+          });
+          if (user?.id) {
+            this.authStore.setUser(user);
+            slackSessionService.clearValidation();
+          }
+        } catch (error: any) {
+          const status = error?.status || error?.response?.status;
+          const isConflictOrServerError = status === 409 || status === 500;
+          if (isConflictOrServerError) {
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              await new Promise((r) => setTimeout(r, attempt * 500));
+              try {
+                user = await this.getUserProfile();
+                if (user?.id) {
+                  this.authStore.setUser(user);
+                  slackSessionService.clearValidation();
+                  break;
+                }
+              } catch (_) {
+                if (attempt === 3) break;
+              }
+            }
+          } else {
+            await new Promise((r) => setTimeout(r, 500));
+            user = await this.getUserProfile();
+            if (user?.id) {
+              this.authStore.setUser(user);
+              slackSessionService.clearValidation();
+            }
+          }
+        }
+      } else {
+        this.authStore.setUser(user);
+      }
+    } catch (error) {
+      console.warn('Redirect result handling failed:', error);
+    } finally {
+      this.authStore.isLoading = false;
     }
   }
 
@@ -249,89 +308,20 @@ export class AuthService {
     const { auth } = useFirebase();
     if (!auth) throw new Error('Firebase auth not initialized');
 
+    if (typeof window === 'undefined' || (window as any).Capacitor) {
+      throw new Error('Mobile Google auth not yet implemented');
+    }
+
     this.authStore.isLoading = true;
     try {
-      const { GoogleAuthProvider, signInWithPopup } = await import('firebase/auth');
+      const { GoogleAuthProvider, signInWithRedirect } = await import('firebase/auth');
       const provider = new GoogleAuthProvider();
-      
-      // For web, use popup
-      if (typeof window !== 'undefined' && !(window as any).Capacitor) {
-        const result = await signInWithPopup(auth, provider);
-        const token = await result.user.getIdToken();
-        
-        // Extract user info from Google
-        const givenName = result.user.displayName?.split(' ')[0] || '';
-        const familyName = result.user.displayName?.split(' ').slice(1).join(' ') || '';
-        
-        // Try to get existing user profile first
-        let user = await this.getUserProfile();
-        
-        // If user doesn't exist (no id), try to create new user
-        if (!user || !user.id) {
-          try {
-            user = await apiService.post<User>('/auth/signup?setEmailAsVerified=true&setCommunityFromEmail=true', {
-              fname: givenName,
-              lname: familyName,
-            });
-            if (user && user.id) {
-              this.authStore.setUser(user);
-              // Clear Slack session validation - user is now fully authenticated
-              slackSessionService.clearValidation();
-            }
-          } catch (error: any) {
-            console.warn('Failed to create user in backend:', error);
-            
-            // If error is 409 (Conflict) or 500, user might already exist
-            // Retry getting user profile with exponential backoff
-            const status = error?.status || error?.response?.status;
-            const isConflictOrServerError = status === 409 || status === 500;
-            
-            if (isConflictOrServerError) {
-              console.log('User might already exist, retrying getUserProfile...');
-              // Retry up to 3 times with increasing delays
-              for (let attempt = 1; attempt <= 3; attempt++) {
-                const delay = attempt * 500; // 500ms, 1000ms, 1500ms
-                await new Promise(resolve => setTimeout(resolve, delay));
-                
-                try {
-                  user = await this.getUserProfile();
-                  if (user && user.id) {
-                    console.log(`Successfully loaded user profile on attempt ${attempt}`);
-                    this.authStore.setUser(user);
-                    slackSessionService.clearValidation();
-                    break;
-                  }
-                } catch (retryError) {
-                  console.warn(`getUserProfile attempt ${attempt} failed:`, retryError);
-                  if (attempt === 3) {
-                    // Last attempt failed - user might not exist or backend is down
-                    console.warn('Could not load user profile after multiple retries');
-                  }
-                }
-              }
-            } else {
-              // For other errors, try once more
-              await new Promise(resolve => setTimeout(resolve, 500));
-              user = await this.getUserProfile();
-              if (user && user.id) {
-                this.authStore.setUser(user);
-                slackSessionService.clearValidation();
-              }
-            }
-          }
-        } else {
-          // User exists, ensure it's set in store
-          this.authStore.setUser(user);
-        }
-      } else {
-        // For mobile, would use Capacitor Google Auth plugin
-        throw new Error('Mobile Google auth not yet implemented');
-      }
+      await signInWithRedirect(auth, provider);
+      // Page will redirect to Google; when user returns, handleRedirectResult() runs
     } catch (error: any) {
+      this.authStore.isLoading = false;
       console.error('Google sign in error:', error);
       throw error;
-    } finally {
-      this.authStore.isLoading = false;
     }
   }
 }

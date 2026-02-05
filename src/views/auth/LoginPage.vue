@@ -2,9 +2,15 @@
   <ion-page>
     <ion-content :fullscreen="true" class="login-content">
       <div class="login-container">
-        <!-- Trova Logo -->
         <div class="logo-section">
-          <h1 class="trova-logo">Trova</h1>
+          <img
+            v-show="!logoError"
+            src="/logo.svg"
+            alt="Trova"
+            class="logo-img"
+            @error="logoError = true"
+          />
+          <h1 v-show="logoError" class="trova-logo">Trova</h1>
         </div>
 
         <!-- Welcome Header -->
@@ -15,14 +21,14 @@
         <!-- Social Login (Primary) -->
         <div class="social-section">
           <div class="social-buttons">
-            <button 
+            <button
               class="social-button facebook-button"
               @click="handleFacebookLogin"
               :disabled="loading"
             >
               <span class="social-icon facebook-icon">f</span>
             </button>
-            <button 
+            <button
               class="social-button google-button"
               @click="handleGoogleLogin"
               :disabled="loading"
@@ -32,49 +38,59 @@
           </div>
         </div>
 
-        <!-- Email Input (Secondary) -->
-        <div class="form-section">
-          <label class="input-label">Enter Work Email</label>
-          <ion-input
-            v-model="email"
-            type="email"
-            placeholder="john@workemail.com"
-            class="email-input"
-            @keyup.enter="handleLogin"
-          ></ion-input>
-        </div>
+        <form class="login-form" @submit.prevent="handleLogin">
+          <!-- Email Input -->
+          <div class="form-section">
+            <label class="input-label" for="login-email">Enter Work Email</label>
+            <div class="auth-input-wrapper">
+              <ion-input
+                id="login-email"
+                v-model="email"
+                type="email"
+                name="email"
+                autocomplete="email"
+                placeholder="john@workemail.com"
+                class="auth-input"
+              ></ion-input>
+            </div>
+          </div>
 
-        <!-- Password Input -->
-        <div class="form-section">
-          <label class="input-label">Password</label>
-          <ion-input
-            v-model="password"
-            type="password"
-            placeholder="Enter your password"
-            class="email-input"
-            @keyup.enter="handleLogin"
-          ></ion-input>
-        </div>
+          <!-- Password Input -->
+          <div class="form-section">
+            <label class="input-label" for="login-password">Password</label>
+            <div class="auth-input-wrapper">
+              <ion-input
+                id="login-password"
+                v-model="password"
+                type="password"
+                name="password"
+                autocomplete="current-password"
+                placeholder="Enter your password"
+                class="auth-input"
+              ></ion-input>
+            </div>
+          </div>
 
-        <!-- Legal Text -->
-        <p class="legal-text">
-          By signing in you agree to our 
-          <a href="#" class="legal-link">Privacy Policy</a> 
-          and 
-          <a href="#" class="legal-link">Terms of Use</a>.
-        </p>
+          <!-- Legal Text -->
+          <p class="legal-text">
+            By signing in you agree to our
+            <a href="#" class="legal-link">Privacy Policy</a>
+            and
+            <a href="#" class="legal-link">Terms of Use</a>.
+          </p>
 
-        <!-- Sign In Button -->
-        <ion-button
-          expand="block"
-          size="large"
-          @click="handleLogin"
-          :disabled="!email || !password || loading"
-          class="next-button"
-        >
-          <ion-spinner v-if="loading" name="crescent"></ion-spinner>
-          <span v-else>Sign In</span>
-        </ion-button>
+          <!-- Sign In Button -->
+          <ion-button
+            type="submit"
+            expand="block"
+            size="large"
+            :disabled="!email || !password || loading"
+            class="submit-button"
+          >
+            <ion-spinner v-if="loading" name="crescent"></ion-spinner>
+            <span v-else>Sign In</span>
+          </ion-button>
+        </form>
 
         <!-- Create Account -->
         <div class="signup-section">
@@ -112,6 +128,7 @@ const authStore = useAuthStore();
 const email = ref('');
 const password = ref('');
 const loading = ref(false);
+const logoError = ref(false);
 
 async function handleLogin() {
   if (!email.value || !password.value) {
@@ -232,8 +249,12 @@ async function handleFacebookLogin() {
 </script>
 
 <style scoped>
+/* Logo green from public/logo.svg (.cls-1 fill) – single source for all greens on this page */
 .login-content {
   --background: #ffffff;
+  --trova-green: #60c19b;
+  --trova-green-dark: #4dad84;
+  --trova-green-rgb: 96, 193, 155;
 }
 
 .login-container {
@@ -246,74 +267,111 @@ async function handleFacebookLogin() {
 }
 
 .logo-section {
-  margin-bottom: 48px;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+}
+
+.logo-img {
+  height: 36px;
+  width: auto;
+  max-width: 160px;
+  object-fit: contain;
+  display: block;
 }
 
 .trova-logo {
   font-size: 28px;
   font-weight: 600;
-  color: #34a853;
+  color: var(--trova-green);
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   letter-spacing: -0.5px;
 }
 
 .welcome-section {
-  margin-bottom: 32px;
+  margin-bottom: 28px;
 }
 
 .welcome-title {
-  font-size: 36px;
-  font-weight: 700;
-  color: #34a853;
+  font-size: 22px;
+  font-weight: 600;
+  color: #374151;
   margin: 0;
-  line-height: 1.2;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.login-form {
+  margin: 0;
 }
 
 .form-section {
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 
 .input-label {
   display: block;
   font-size: 14px;
   font-weight: 500;
-  color: #1a1a1a;
-  margin-bottom: 8px;
+  color: var(--ion-text-color, #1a1a1a);
+  margin-bottom: 6px;
 }
 
-.email-input {
-  --padding-start: 16px;
-  --padding-end: 16px;
-  --padding-top: 14px;
-  --padding-bottom: 14px;
-  border: 1px solid #e0e0e0;
-  border-radius: 12px;
+/* Wrapper gives a clear visible field box (works regardless of ion-input shadow DOM) */
+.auth-input-wrapper {
+  border: 1px solid #9ca3af;
+  border-radius: 10px;
+  background: #f9fafb;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.auth-input-wrapper:focus-within {
+  border-color: var(--trova-green);
+  box-shadow: 0 0 0 3px rgba(var(--trova-green-rgb), 0.2);
+  background: #fff;
+}
+
+.auth-input {
+  --padding-start: 14px;
+  --padding-end: 14px;
+  --padding-top: 12px;
+  --padding-bottom: 12px;
+  --border-width: 0;
+  --border-style: none;
+  --border-color: transparent;
+  --border-radius: 10px;
+  --background: transparent;
+  --highlight-color: transparent;
+  --highlight-color-focused: transparent;
+  --highlight-color-valid: transparent;
+  --highlight-color-invalid: transparent;
   font-size: 16px;
-  background: #ffffff;
-  margin-top: 8px;
+  margin-top: 0;
 }
 
-.email-input:focus-within {
-  border-color: #34a853;
-  box-shadow: 0 0 0 3px rgba(52, 168, 83, 0.1);
+.auth-input-wrapper .auth-input {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .legal-text {
-  font-size: 12px;
-  color: #9ca3af;
+  font-size: 13px;
+  color: var(--ion-color-medium, #6b7280);
   margin: 0 0 24px 0;
   line-height: 1.5;
   text-align: center;
 }
 
 .legal-link {
-  color: #6b7280;
+  color: var(--trova-green);
   text-decoration: underline;
 }
 
-.next-button {
-  --background: linear-gradient(135deg, #34a853 0%, #1db98a 100%);
+.submit-button {
+  --background: var(--trova-green);
   --color: #ffffff;
   --border-radius: 12px;
   --padding-top: 16px;
@@ -323,10 +381,10 @@ async function handleFacebookLogin() {
   font-size: 16px;
   text-transform: none;
   margin-bottom: 32px;
-  box-shadow: 0 4px 12px rgba(52, 168, 83, 0.3);
+  box-shadow: 0 4px 12px rgba(var(--trova-green-rgb), 0.35);
 }
 
-.next-button:disabled {
+.submit-button:disabled {
   --background: #e5e7eb;
   --color: #9ca3af;
   box-shadow: none;
@@ -406,8 +464,8 @@ async function handleFacebookLogin() {
 }
 
 .create-account-button {
-  --border-color: #ef4444;
-  --color: #ef4444;
+  --border-color: var(--trova-green);
+  --color: var(--trova-green);
   --border-radius: 12px;
   --padding-top: 16px;
   --padding-bottom: 16px;
@@ -419,17 +477,16 @@ async function handleFacebookLogin() {
 }
 
 .create-account-button:hover {
-  --background: #fef2f2;
+  --background: rgba(var(--trova-green-rgb), 0.08);
 }
 
-/* Responsive adjustments */
 @media (max-width: 480px) {
   .login-container {
     padding: 32px 20px;
   }
 
   .welcome-title {
-    font-size: 32px;
+    font-size: 20px;
   }
 }
 </style>
