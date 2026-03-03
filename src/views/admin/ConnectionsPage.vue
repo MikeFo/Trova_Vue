@@ -297,20 +297,11 @@ async function loadUsers() {
   selectedUserId.value = null;
   selectedUserName.value = '';
   try {
-    console.log('[ConnectionsPage] Loading users with connections:', {
-      communityId: communityId.value,
-      startDate: startDateISO.value,
-      endDate: endDateISO.value
-    });
-    
     const result = await adminService.getUsersWithConnections(
       communityId.value,
       startDateISO.value,
       endDateISO.value
     );
-    
-    console.log('[ConnectionsPage] Received users:', result);
-    
     users.value = result;
   } catch (error) {
     console.error('Error loading users:', error);

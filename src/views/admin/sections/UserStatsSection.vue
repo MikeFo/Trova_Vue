@@ -917,7 +917,6 @@ async function loadProfiles() {
     
     // If no rows returned, try fallback to get profiles from profile service
     if (!result.rows || result.rows.length === 0) {
-      console.log('[UserStatsSection] No slack-user-stats rows, trying fallback to profile service');
       try {
         const { profileService } = await import('@/services/profile.service');
         const profiles = await profileService.getProfilesForUserAndCommunity(props.communityId);
@@ -1248,7 +1247,6 @@ async function loadSelfIntroducedUsers() {
       end = now.toISOString();
     }
     
-    console.log(`[UserStatsSection] Loading self-introduced users for community ${props.communityId}, dates: ${start} to ${end}`);
     const rows = await adminService.getSelfIntroducedUsers(props.communityId, start, end);
 
     if (rows === null) {
@@ -1270,7 +1268,6 @@ async function loadSelfIntroducedUsers() {
     if (rows.length > 0 && stats.value) {
       const actualCount = rows.length;
       if (stats.value.selfIntroduced !== actualCount) {
-        console.log(`[UserStatsSection] Updating selfIntroduced stat from ${stats.value.selfIntroduced} to ${actualCount} based on fetched users`);
         stats.value.selfIntroduced = actualCount;
       }
     }
@@ -1346,7 +1343,6 @@ async function loadConversationsStarted() {
     const { start, end } = getDateRangeForPeriod(selectedPeriod.value);
     
     // For 'all-time', start and end will be undefined, which the API accepts
-    console.log(`[UserStatsSection] Loading conversations started for community ${props.communityId}, period: ${selectedPeriod.value}, dates: ${start || 'all-time'} to ${end || 'all-time'}`);
     const response = await adminService.getConversationsStarted(props.communityId, start, end);
 
     if (response === null) {
@@ -1470,7 +1466,6 @@ async function loadOnboardingIntroUsers() {
       end = now.toISOString();
     }
     
-    console.log(`[UserStatsSection] Loading onboarding intro users for community ${props.communityId}, dates: ${start} to ${end}`);
     const rows = await adminService.getWeeklyIntroductionsUsers(props.communityId, start, end);
 
     if (rows === null) {
@@ -1817,22 +1812,10 @@ async function loadStats() {
         const totalConversations = conversationsStarted.value.totalConversations || 0;
         const conversationsCount = conversationsStarted.value.conversations?.length || 0;
         
-        console.log(`[UserStatsSection] Conversations started stats:`, {
-          totalMessages,
-          totalConversations,
-          conversationsCount,
-          period: selectedPeriod.value,
-          startDate: start,
-          endDate: end,
-        });
-        
-        // Verify: sum of individual conversation message counts should match totalMessages
         if (conversationsStarted.value.conversations && conversationsStarted.value.conversations.length > 0) {
           const sumOfMessageCounts = conversationsStarted.value.conversations.reduce((sum, conv) => sum + (conv.messageCount || 0), 0);
           if (sumOfMessageCounts !== totalMessages) {
-            console.warn(`[UserStatsSection] ⚠️ Mismatch: sum of individual message counts (${sumOfMessageCounts}) != totalMessages (${totalMessages})`);
-          } else {
-            console.log(`[UserStatsSection] ✅ Verified: sum of message counts (${sumOfMessageCounts}) matches totalMessages (${totalMessages})`);
+            console.warn(`[UserStatsSection] Mismatch: sum of message counts (${sumOfMessageCounts}) != totalMessages (${totalMessages})`);
           }
         }
         
@@ -1872,10 +1855,8 @@ async function loadStats() {
       // Merge self-introduced stats
       if (selfIntroduced.status === 'fulfilled') {
         if (selfIntroduced.value) {
-          console.log(`[UserStatsSection] Self-introduced stats received:`, selfIntroduced.value);
           mergeStats(selfIntroduced.value, updatedStats);
-          console.log(`[UserStatsSection] Updated stats after merge:`, updatedStats.selfIntroduced);
-          
+
           // If stats endpoint returned a count, also fetch users to verify/update the count
           // This ensures the stat card shows the correct count even if stats endpoint is inaccurate
           if (updatedStats.selfIntroduced !== undefined && updatedStats.selfIntroduced !== null && props.communityId !== null && start && end) {
@@ -1884,7 +1865,6 @@ async function loadStats() {
                 if (users && users.length > 0 && stats.value) {
                   const actualCount = users.length;
                   if (stats.value.selfIntroduced !== actualCount) {
-                    console.log(`[UserStatsSection] Updating selfIntroduced stat from ${stats.value.selfIntroduced} to ${actualCount} based on fetched users`);
                     stats.value.selfIntroduced = actualCount;
                   }
                 }
@@ -1937,7 +1917,6 @@ async function exportStats() {
     } catch (exportError: any) {
       // If backend export fails, create CSV client-side
       if (exportError?.status === 404 || exportError?.response?.status === 404) {
-        console.log('[UserStatsSection] Backend export not available, creating client-side CSV');
       } else {
         throw exportError;
       }

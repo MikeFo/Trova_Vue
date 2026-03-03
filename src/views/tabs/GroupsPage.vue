@@ -181,7 +181,6 @@ async function loadGroups() {
   try {
     // Get community ID from user object (as stored in production DB)
     const communityId = getCommunityId();
-    console.log('[GroupsPage] Loading groups for communityId:', communityId, 'userId:', authStore.user.id);
 
     if (!communityId) {
       console.warn('[GroupsPage] No community selected');
@@ -197,10 +196,7 @@ async function loadGroups() {
       return;
     }
 
-    // Load groups for the user's community
-    console.log('[GroupsPage] Calling groupService.getGroups...');
     const groups = await groupService.getGroups(communityId, authStore.user.id);
-    console.log('[GroupsPage] Received groups:', groups?.length || 0, groups);
 
     if (!groups || groups.length === 0) {
       console.warn('[GroupsPage] No groups returned from API');
@@ -210,9 +206,7 @@ async function loadGroups() {
       return;
     }
 
-    // Filter to only show active groups
     const activeGroups = groups.filter((group) => group.isActive !== false);
-    console.log('[GroupsPage] Active groups:', activeGroups.length);
 
     // Set userFollows based on whether user is in members array
     // Backend returns members array, but doesn't set userFollows property
@@ -227,19 +221,12 @@ async function loadGroups() {
     // Separate into joined and not joined
     myGroups.value = activeGroups.filter((group) => group.userFollows === true);
     allGroups.value = activeGroups.filter((group) => group.userFollows === false);
-    
-    console.log('[GroupsPage] My groups:', myGroups.value.length, 'All groups:', allGroups.value.length);
 
     // TODO: Load suggested groups separately if there's an endpoint
     // suggestedGroups.value = await groupService.getSuggestedGroups(communityId, authStore.user.id);
   } catch (error: any) {
-    console.error('[GroupsPage] Error loading groups:', error);
-    console.error('[GroupsPage] Error details:', {
-      message: error.message,
-      response: error.response?.data,
-      status: error.response?.status,
-    });
-    
+    console.error('[GroupsPage] Error loading groups:', error?.message ?? error);
+
     // Show user-friendly error message
     if (error.message?.includes('Community not found')) {
       const toast = await toastController.create({
@@ -306,8 +293,8 @@ async function handleJoinGroup(group: Group) {
     // Reload groups to ensure we have the latest data
     await loadGroups();
   } catch (error: any) {
-    console.error('[GroupsPage] Error joining group:', error);
-    
+    console.error('[GroupsPage] Error joining group:', error?.message ?? error);
+
     // Show error toast with helpful message
     let errorMessage = 'Failed to join group. Please try again.';
     if (error.message && error.message !== 'Request failed') {
@@ -325,14 +312,12 @@ async function handleJoinGroup(group: Group) {
   }
 }
 
-function handleFavorite(group: Group) {
+function handleFavorite(_group: Group) {
   // TODO: Save favorite status to backend
-  console.log('Toggle favorite for group:', group.id, group.isFavorite);
 }
 
-function showFilterMenu(event: Event, type: 'mine' | 'all') {
+function showFilterMenu(_event: Event, _type: 'mine' | 'all') {
   // TODO: Implement filter popover
-  console.log('Show filter menu for', type);
 }
 
 // Watch for community changes and reload groups

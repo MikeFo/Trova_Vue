@@ -76,6 +76,7 @@ export interface ProfilesInit {
   matchReasons?: Record<string, any>;
   isCurrentUser?: boolean; // For map highlighting
   skills?: string[] | Array<{ name: string; type?: string }> | Record<string, any> | string; // Skills data - can be array, object, or string
+  slackId?: string; // Slack user ID for "View profile in Slack"
 }
 
 export class ProfileService {
@@ -123,12 +124,10 @@ export class ProfileService {
     const user = authStore.user;
     
     if (!user || !user.id) {
-      console.error('completeSetup: User not authenticated. User object:', user);
+      console.error('completeSetup: User not authenticated');
       throw new Error('User not authenticated. Please log in again.');
     }
 
-    console.log(`completeSetup: Updating setup step for user ${user.id}`);
-    
     try {
       // Update user setup step to complete
       // Use PATCH /users/${userId}/edit?background=false (matches backend API)
@@ -144,9 +143,7 @@ export class ProfileService {
       delete (userPayload as any).profilePicture175x175;
       
       const updatedUser = await apiService.patch(`/users/${user.id}/edit?background=false`, userPayload);
-      
-      console.log('completeSetup: Setup step updated successfully', updatedUser);
-      
+
       // Update auth store with updated user
       if (updatedUser) {
         authStore.setUser(updatedUser as any);
@@ -157,7 +154,7 @@ export class ProfileService {
       
       return updatedUser;
     } catch (error: any) {
-      console.error('completeSetup: Error updating setup step:', error);
+      console.error('completeSetup: Error updating setup step:', error?.message ?? error);
       // Even if API call fails, update locally so user can proceed
       authStore.updateSetupStep('complete');
       throw error;
@@ -177,11 +174,40 @@ export class ProfileService {
         payload.s = secretId;
       }
       
-      const profiles = await apiService.post<ProfilesInit[]>(
+      const raw = await apiService.post<ProfilesInit[] | Record<string, unknown>[] | { profiles?: unknown[]; data?: unknown[] }>(
         '/communities/getProfilesForUserAndCommunity',
         payload
       );
-      return profiles || [];
+      let list: (ProfilesInit | Record<string, unknown>)[];
+      if (Array.isArray(raw)) {
+        list = raw;
+      } else if (raw && typeof raw === 'object' && Array.isArray((raw as { profiles?: unknown[] }).profiles)) {
+        list = (raw as { profiles: (ProfilesInit | Record<string, unknown>)[] }).profiles;
+      } else if (raw && typeof raw === 'object' && Array.isArray((raw as { data?: unknown[] }).data)) {
+        list = (raw as { data: (ProfilesInit | Record<string, unknown>)[] }).data;
+      } else {
+        list = [];
+      }
+      const normalize = (p: ProfilesInit | Record<string, unknown>): ProfilesInit => {
+        const profile = { ...p } as ProfilesInit;
+        const rawP = p as Record<string, unknown>;
+        if (!profile.slackId && rawP.slackUserId != null) profile.slackId = String(rawP.slackUserId);
+        if (!profile.slackId && rawP.slack_user_id != null) profile.slackId = String(rawP.slack_user_id);
+        if (!profile.slackId && rawP.slackId != null) profile.slackId = String(rawP.slackId);
+        return profile;
+      };
+      const out = list.map(normalize);
+      if (import.meta.env.DEV && out.length > 0) {
+        const hasAnySlackId = out.some((pr) => !!pr.slackId);
+        if (!hasAnySlackId) {
+          const first = list[0] as Record<string, unknown>;
+          console.warn(
+            '[ProfileService] View in Slack: no profile has slackId. Backend must return slackId (or slack_user_id / slackUserId) per profile from getProfilesForUserAndCommunity. First profile keys:',
+            Object.keys(first)
+          );
+        }
+      }
+      return out;
     } catch (error) {
       console.error('[ProfileService] Failed to fetch profiles:', error);
       throw error; // Re-throw to allow caller to handle errors (e.g., expired secretId)

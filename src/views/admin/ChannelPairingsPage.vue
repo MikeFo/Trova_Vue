@@ -351,20 +351,11 @@ async function loadChannelPairings() {
 
   isLoading.value = true;
   try {
-    console.log('[ChannelPairingsPage] Loading channel pairings with:', {
-      communityId: communityId.value,
-      startDate: startDateISO.value,
-      endDate: endDateISO.value
-    });
-    
     const pairings = await adminService.getChannelPairingsByDate(
       communityId.value,
       startDateISO.value,
       endDateISO.value
     );
-    
-    console.log('[ChannelPairingsPage] Received channel pairings:', pairings);
-    
     // Ensure all values are properly set
     channelPairings.value = pairings.map(pairing => ({
       date: pairing.date,

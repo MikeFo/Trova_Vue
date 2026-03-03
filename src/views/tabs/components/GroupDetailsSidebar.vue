@@ -231,7 +231,6 @@ function toggleFavorite() {
 
 function editGroup() {
   // TODO: Navigate to edit group page
-  console.log('Edit group:', props.group.id);
 }
 </script>
 

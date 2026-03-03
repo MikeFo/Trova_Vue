@@ -326,20 +326,11 @@ async function loadUsers() {
   selectedUserId.value = null;
   selectedUserName.value = '';
   try {
-    console.log('[MentorMenteeMatchesPage] Loading users with mentor/mentee matches:', {
-      communityId: communityId.value,
-      startDate: startDateISO.value,
-      endDate: endDateISO.value
-    });
-    
     const result = await adminService.getMentorMenteeUsersWithMatches(
       communityId.value,
       startDateISO.value,
       endDateISO.value
     );
-    
-    console.log('[MentorMenteeMatchesPage] Received users:', result);
-    
     users.value = result;
   } catch (error) {
     console.error('Error loading users:', error);

@@ -332,36 +332,11 @@ async function loadMagicIntros() {
 
   isLoading.value = true;
   try {
-    console.log('[MagicIntrosPage] Loading magic intros with:', {
-      communityId: communityId.value,
-      startDate: startDateISO.value,
-      endDate: endDateISO.value
-    });
-    
     const intros = await adminService.getMagicIntrosByDate(
       communityId.value,
       startDateISO.value,
       endDateISO.value
     );
-    
-    console.log('[MagicIntrosPage] Received magic intros:', intros);
-    console.log('[MagicIntrosPage] Sample intro:', intros[0]);
-    
-    // Log all intros to see their values
-    intros.forEach((intro, index) => {
-      console.log(`[MagicIntrosPage] Intro ${index}:`, {
-        date: intro.date,
-        dateDisplay: intro.dateDisplay,
-        totalPairings: intro.totalPairings,
-        engagedPairings: intro.engagedPairings,
-        engagementRate: intro.engagementRate,
-        formattedTotal: formatNumber(intro.totalPairings ?? 0),
-        formattedEngaged: formatNumber(intro.engagedPairings ?? 0),
-        formattedRate: formatPercentage(intro.engagementRate ?? 0)
-      });
-    });
-    
-    // Ensure all values are properly set
     magicIntros.value = intros.map(intro => ({
       date: intro.date,
       dateDisplay: intro.dateDisplay,
@@ -369,9 +344,6 @@ async function loadMagicIntros() {
       engagedPairings: typeof intro.engagedPairings === 'number' ? intro.engagedPairings : 0,
       engagementRate: typeof intro.engagementRate === 'number' ? intro.engagementRate : 0,
     }));
-    
-    console.log('[MagicIntrosPage] Set magicIntros.value:', magicIntros.value);
-    console.log('[MagicIntrosPage] First item after mapping:', magicIntros.value[0]);
   } catch (error) {
     console.error('Error loading magic intros:', error);
     magicIntros.value = [];

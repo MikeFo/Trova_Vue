@@ -14,7 +14,7 @@ export const environment = {
   apiUrl: 'https://api.trovaus.com',
   siteUrl: 'https://www.trovaus.com',
   googleMapsApiFindPlaceUrl: 'https://maps.googleapis.com/maps/api/place',
-  googleMapsApiKey: 'AIzaSyByxzIDhPosaIwi_sHHXSmLWdltBVKemeI',
+  googleMapsApiKey: 'AIzaSyB6H_o_9iGrFIftKKa7zNJeqHeIR_eUZxw',
   googleAnalyticsTrackerId: 'UA-123516927-1',
   oktaDomain: 'dev-62292605.okta.com',
   oktaClientId: '0oa4q2hnylxAJfIHR5d7',

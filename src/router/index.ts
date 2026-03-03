@@ -12,7 +12,6 @@ const routes: Array<RouteRecordRaw> = [
     path: '/org',
     redirect: (to) => {
       // Preserve all query parameters when redirecting to org-chart
-      console.log('[Router] Redirecting /org to /tabs/org-chart with query:', to.query);
       return {
         path: '/tabs/org-chart',
         query: to.query

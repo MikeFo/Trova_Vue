@@ -167,6 +167,7 @@ import { useRouter, useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth.store';
 import { useCommunityStore } from '@/stores/community.store';
 import { adminService } from '@/services/admin.service';
+import { orgChartAuthService } from '@/services/org-chart-auth.service';
 import { slackSessionService } from '@/services/slack-session.service';
 import { toastController } from '@ionic/vue';
 import {
@@ -267,112 +268,163 @@ function getCommunityId(): number | null {
   // Priority 1: Query params (from Slack links)
   if (params.communityId) {
     const queryCommunityId = Number(params.communityId);
-    if (!isNaN(queryCommunityId)) {
-      console.log('[AdminConsole] Using communityId from query params:', queryCommunityId);
-      return queryCommunityId;
-    }
+    if (!isNaN(queryCommunityId)) return queryCommunityId;
   }
-  
-  // Priority 2: Validated Slack session
   const validatedSession = slackSessionService.getCurrentValidation();
-  if (validatedSession?.communityId) {
-    console.log('[AdminConsole] Using communityId from validated Slack session:', validatedSession.communityId);
-    return validatedSession.communityId;
-  }
-  
-  // Priority 3: Route params
+  if (validatedSession?.communityId) return validatedSession.communityId;
   if (route.params.communityId) {
     const paramCommunityId = Number(route.params.communityId);
-    if (!isNaN(paramCommunityId)) {
-      console.log('[AdminConsole] Using communityId from route params:', paramCommunityId);
-      return paramCommunityId;
-    }
+    if (!isNaN(paramCommunityId)) return paramCommunityId;
   }
-  
-  // Priority 4: User's selected community from store
-  if (communityStore.currentCommunityId) {
-    console.log('[AdminConsole] Using communityId from store:', communityStore.currentCommunityId);
-    return communityStore.currentCommunityId;
-  }
-  
-  console.warn('[AdminConsole] No communityId found in query params, session, route params, or store');
+  if (communityStore.currentCommunityId) return communityStore.currentCommunityId;
+  console.warn('[AdminConsole] No communityId found');
   return null;
 }
 
 async function checkManagerAccess() {
-  if (!authStore.user?.id) {
-    isManager.value = false;
-    isLoading.value = false;
-    return;
-  }
-
-  // Check if user is super admin first
-  isSuperAdminUser.value = adminService.isSuperAdmin(authStore.user.id);
-  
+  const hasSlackLinkParams =
+    !!route.query.s && !!route.query.communityId && !!route.query.slackUserId;
+  const authUserId = authStore.user?.id ?? null;
   const communityId = getCommunityId();
 
-  // For super admins, allow access even without a specific communityId
-  if (isSuperAdminUser.value) {
-    isManager.value = true;
-    await loadManagedCommunities();
-    // Set initial community if available, otherwise use first from list
-    if (communityId) {
-      selectedCommunityId.value = communityId;
-    } else if (managedCommunities.value.length > 0) {
-      selectedCommunityId.value = managedCommunities.value[0].id;
+  // Slack-link path: user may not be fully authenticated but has a validated secretId.
+  if (!authUserId && hasSlackLinkParams && communityId) {
+    const slackUserId = String(route.query.slackUserId);
+    const urlSecretId = typeof route.query.s === 'string' ? route.query.s : '';
+
+    // If session has expired, treat as no access (Slack link window closed).
+    if (slackSessionService.isSessionExpired()) {
+      isManager.value = false;
+      isLoading.value = false;
+      return;
     }
+
+    // Create a short-lived Firestore code (keyDocRefId) exactly like OrgChartPage.
+    const keyDocRefId = await orgChartAuthService.createSecretCode(
+      communityId,
+      slackUserId
+    );
+    const secretIdToSend: string | undefined = urlSecretId || undefined;
+
+    try {
+      const result = await adminService.getConsoleDataForCommunity(
+        communityId,
+        slackUserId,
+        keyDocRefId,
+        secretIdToSend
+      );
+      isManager.value = !!result?.isManager;
+
+      if (isManager.value) {
+        selectedCommunityId.value = communityId;
+
+        // Prefer the community returned from the backend if available.
+        const serverCommunity = (result as any).community as Community | undefined;
+        if (serverCommunity) {
+          managedCommunities.value = [serverCommunity];
+          communityStore.setCommunities([serverCommunity]);
+          communityStore.setCurrentCommunity(serverCommunity);
+        } else if (managedCommunities.value.length === 0) {
+          const params = route.query;
+          const name =
+            typeof params.communityName === 'string'
+              ? decodeURIComponent(params.communityName.replace(/\+/g, ' '))
+              : `Community ${communityId}`;
+          const minimalCommunity: Community = {
+            id: communityId,
+            name,
+            leaderId: 0,
+          };
+          managedCommunities.value = [minimalCommunity];
+          communityStore.setCommunities([minimalCommunity]);
+          communityStore.setCurrentCommunity(minimalCommunity);
+        }
+      } else {
+        setTimeout(() => {
+          router.push('/tabs/home');
+        }, 2000);
+      }
+    } catch (error) {
+      console.error(
+        'Error checking manager access via Slack console gate:',
+        error instanceof Error ? error.message : error
+      );
+      isManager.value = false;
+      setTimeout(() => {
+        router.push('/tabs/home');
+      }, 2000);
+    } finally {
+      isLoading.value = false;
+    }
+    return;
+  }
+
+  // Fully authenticated path (existing behavior)
+  if (!authUserId) {
+    isManager.value = false;
     isLoading.value = false;
     return;
   }
 
+  isSuperAdminUser.value = adminService.isSuperAdmin(authUserId);
+
   if (!communityId) {
-    isManager.value = false;
-    isLoading.value = false;
-    return;
+    // Super admins without communityId will still be able to load managed communities below.
+    if (!isSuperAdminUser.value) {
+      isManager.value = false;
+      isLoading.value = false;
+      return;
+    }
   }
 
   try {
-    // Get community to check leaderId
+    if (isSuperAdminUser.value) {
+      isManager.value = true;
+      await loadManagedCommunities();
+      if (communityId) {
+        selectedCommunityId.value = communityId;
+      } else if (managedCommunities.value.length > 0) {
+        selectedCommunityId.value = managedCommunities.value[0].id;
+      }
+      isLoading.value = false;
+      return;
+    }
+
+    if (!communityId) {
+      isManager.value = false;
+      isLoading.value = false;
+      return;
+    }
+
     let community = communityStore.getCommunityById(communityId);
     if (!community) {
-      // Try to load community if not in store
       const { communityService } = await import('@/services/community.service');
       community = await communityService.getCommunityById(communityId);
     }
 
-    // Check if user is admin (leader OR in communities_managers table)
-    isManager.value = await adminService.isManager(communityId, authStore.user.id, community || undefined);
-    
+    isManager.value = await adminService.isManager(communityId, authUserId, community || undefined);
+
     if (isManager.value) {
       selectedCommunityId.value = communityId;
-      
-      // Ensure the community is set in the store so backend middleware uses the correct community
-      // This matches the pattern used in other pages (MapPage, OrgChartPage, etc.)
-      const community = communityStore.getCommunityById(communityId);
-      if (community) {
-        communityStore.setCurrentCommunity(community);
-        console.log('[AdminConsole] Set community in store:', communityId, community.name);
+
+      const existing = communityStore.getCommunityById(communityId);
+      if (existing) {
+        communityStore.setCurrentCommunity(existing);
       } else {
-        // Try to load community if not in store
         const { communityService } = await import('@/services/community.service');
         const loadedCommunity = await communityService.getCommunityById(communityId);
-        if (loadedCommunity) {
-          communityStore.setCurrentCommunity(loadedCommunity);
-          console.log('[AdminConsole] Loaded and set community in store:', communityId, loadedCommunity.name);
-        }
+        if (loadedCommunity) communityStore.setCurrentCommunity(loadedCommunity);
       }
-      
+
       await loadManagedCommunities();
     } else {
-      // User is not an admin, redirect after a moment
       setTimeout(() => {
         router.push('/tabs/home');
       }, 2000);
     }
   } catch (error) {
-    console.error('Error checking manager access:', error);
+    console.error('Error checking manager access:', error instanceof Error ? error.message : error);
     isManager.value = false;
-    // Redirect on error
     setTimeout(() => {
       router.push('/tabs/home');
     }, 2000);
@@ -391,8 +443,6 @@ async function loadManagedCommunities() {
     try {
       const allCommunities = await adminService.getAllCommunitiesForSuperAdmin(authStore.user.id);
       managedCommunities.value = allCommunities;
-      console.log('[AdminConsole] Loaded all communities for super admin:', allCommunities.length);
-      
       // Set initial selected community if not already set
       if (!selectedCommunityId.value && allCommunities.length > 0) {
         selectedCommunityId.value = allCommunities[0].id;
@@ -439,8 +489,6 @@ function onCommunityChange() {
     const selectedCommunity = managedCommunities.value.find(c => c.id === selectedCommunityId.value);
     if (selectedCommunity) {
       communityStore.setCurrentCommunity(selectedCommunity);
-      console.log('[AdminConsole] Switched to community:', selectedCommunity.id, selectedCommunity.name);
-      // No need to call refreshData() - the prop change will trigger watchers in child components
     }
   }
 }

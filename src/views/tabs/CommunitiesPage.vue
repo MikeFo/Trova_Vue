@@ -135,12 +135,10 @@ let searchTimeout: ReturnType<typeof setTimeout> | null = null;
 async function loadCommunities(searchTerm?: string) {
   isLoading.value = true;
   try {
-    console.log('[CommunitiesPage] Loading public communities...', searchTerm ? `search: "${searchTerm}"` : '');
     const publicCommunities = await communityService.getPublicCommunities(searchTerm);
-    console.log('[CommunitiesPage] Loaded communities:', publicCommunities.length);
     communities.value = publicCommunities;
   } catch (error: any) {
-    console.error('[CommunitiesPage] Error loading communities:', error);
+    console.error('[CommunitiesPage] Error loading communities:', error?.message ?? error);
     const toast = await toastController.create({
       message: error.message || 'Failed to load communities. Please try again.',
       duration: 3000,
@@ -197,8 +195,7 @@ async function navigateToCommunity(community: Community) {
     let fullCommunityDetails: Community | null = null;
     try {
       fullCommunityDetails = await communityService.getCommunityById(community.id);
-      console.log('[CommunitiesPage] Fetched full community details:', fullCommunityDetails);
-    } catch (error) {
+    } catch {
       console.warn('[CommunitiesPage] Could not fetch full community details, using provided community data');
       fullCommunityDetails = community;
     }
@@ -241,16 +238,15 @@ async function navigateToCommunity(community: Community) {
           // Still update the store even if we can't find the specific community
           communityStore.setCommunities(userCommunities);
         }
-      } catch (error) {
-        console.error('[CommunitiesPage] Error selecting new community:', error);
+      } catch (error: any) {
+        console.error('[CommunitiesPage] Error selecting new community:', error?.message ?? error);
         // Even if selection fails, if we have the community details, add it manually
         if (fullCommunityDetails) {
-          const currentCommunities = communityStore.communities;
-          const exists = currentCommunities.find(c => c.id === fullCommunityDetails!.id);
-          if (!exists) {
+            const currentCommunities = communityStore.communities;
+            const exists = currentCommunities.find(c => c.id === fullCommunityDetails!.id);
+            if (!exists) {
             communityStore.setCommunities([...currentCommunities, fullCommunityDetails]);
             communityStore.setCurrentCommunity(fullCommunityDetails);
-            console.log('[CommunitiesPage] Manually added community to store after error');
           }
         }
       }
@@ -261,7 +257,7 @@ async function navigateToCommunity(community: Community) {
     // Navigate to home page
     router.push('/tabs/home');
   } catch (error: any) {
-    console.error('[CommunitiesPage] Error joining community:', error);
+    console.error('[CommunitiesPage] Error joining community:', error?.message ?? error);
     const toast = await toastController.create({
       message: error.message || 'Failed to join community. Please try again.',
       duration: 3000,
@@ -275,7 +271,6 @@ async function navigateToCommunity(community: Community) {
 
 function createCommunity() {
   // TODO: Navigate to create community page when implemented
-  console.log('Create community');
 }
 
 onMounted(() => {

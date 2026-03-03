@@ -49,22 +49,9 @@ export class ApiService {
               const token = await firebaseAuth.auth.currentUser.getIdToken();
               if (token && config.headers) {
                 config.headers.Authorization = token;
-                // Log for debugging (only for org chart endpoint)
-                if (config.url?.includes('getOrgDataForCommunity')) {
-                  console.log('[ApiService] Added Firebase auth token to org chart request');
-                }
-              } else {
-                if (config.url?.includes('getOrgDataForCommunity')) {
-                  console.warn('[ApiService] No Firebase token available for org chart request');
-                }
               }
             } catch (tokenError) {
-              console.warn('Failed to get Firebase token:', tokenError);
               // Continue without token - backend might handle auth differently
-            }
-          } else {
-            if (config.url?.includes('getOrgDataForCommunity')) {
-              console.warn('[ApiService] No Firebase currentUser for org chart request');
             }
           }
         } catch (error) {
@@ -96,11 +83,8 @@ export class ApiService {
       const response = await this.api.get<T>(url, config);
       return response.data;
     } catch (error: any) {
-      // Only log non-404 errors to reduce console noise for unimplemented endpoints
       if (error.response?.status !== 404) {
-        console.error(`API GET Error for ${url}:`, error);
-        console.error('Response:', error.response?.data);
-        console.error('Status:', error.response?.status);
+        console.error(`API GET ${url}:`, error.response?.data?.message ?? error.message);
       }
       // Re-throw with more context
       const enhancedError = new Error(error.response?.data?.message || error.message || 'Request failed');
@@ -112,27 +96,11 @@ export class ApiService {
 
   async post<T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> {
     try {
-      // Log the full URL being requested (helps verify endpoint)
-      const fullUrl = `${this.api.defaults.baseURL}${url}`;
-      console.log(`[API] POST Request to: ${fullUrl}`);
-      
       const response = await this.api.post<T>(url, data, config);
       return response.data;
     } catch (error: any) {
-      // Log the full URL that failed (helps verify endpoint)
       const fullUrl = `${this.api.defaults.baseURL}${url}`;
-      console.error(`[API] POST Error for: ${fullUrl}`);
-      console.error('[API] Response status:', error.response?.status);
-      
-      if (error.response?.status === 404) {
-        console.error(`[API] Endpoint not found. Please verify the endpoint exists: ${fullUrl}`);
-      }
-      
-      // Only log response data if it doesn't contain sensitive info
-      if (error.response?.data && typeof error.response.data === 'object') {
-        const sanitizedResponse = this.sanitizeForLogging(error.response.data);
-        console.error('[API] Response data:', sanitizedResponse);
-      }
+      console.error(`[API] POST ${fullUrl}:`, error.response?.data?.message ?? error.message);
       
       // Extract error message from various possible response formats
       let errorMessage = 'Request failed';
@@ -172,9 +140,7 @@ export class ApiService {
       const response = await this.api.patch<T>(url, data, config);
       return response.data;
     } catch (error: any) {
-      console.error(`API PATCH Error for ${url}:`, error);
-      console.error('Response:', error.response?.data);
-      console.error('Status:', error.response?.status);
+      console.error(`API PATCH ${url}:`, error.response?.data?.message ?? error.message);
       throw new Error(error.response?.data?.message || error.message || 'Request failed');
     }
   }

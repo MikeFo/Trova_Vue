@@ -106,9 +106,9 @@
                   fill="outline"
                   size="small"
                   class="view-profile-btn"
-                  @click="viewProfile(profile.userId || profile.id)"
+                  @click="viewProfileInSlack(profile)"
                 >
-                  View Profile
+                  View in Slack
                 </ion-button>
               </div>
             </div>
@@ -139,6 +139,8 @@ import { useRouter, useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth.store';
 import { useCommunityStore } from '@/stores/community.store';
 import { profileService, type ProfilesInit } from '@/services/profile.service';
+import { communityService, type Community } from '@/services/community.service';
+import { environment } from '@/environments/environment';
 import { useGooglePlaces } from '@/composables/useGooglePlaces';
 import { MarkerClusterer } from '@googlemaps/markerclusterer';
 import { slackSessionService } from '@/services/slack-session.service';
@@ -893,9 +895,6 @@ async function centerMapOnUser(profile: ProfilesInit) {
 function handleMessageSelected() {
   if (selectedUserIds.value.length === 1) {
     router.push(`/tabs/messages?userId=${selectedUserIds.value[0]}`);
-  } else {
-    // TODO: Implement group message functionality
-    console.log('Group message not yet implemented for:', selectedUserIds.value);
   }
 }
 
@@ -921,46 +920,52 @@ async function extractAndSetCommunityFromUrl() {
       // Check if this community exists in the store
       const community = communityStore.getCommunityById(communityIdNum);
       if (community) {
-        // Set it as the current community
         communityStore.setCurrentCommunity(community);
-        console.log(`[MapPage] Set community from URL: ${communityIdNum} (${community.name})`);
-        hasExtractedFromUrl = true; // Mark as extracted so we don't do it again
+        hasExtractedFromUrl = true;
         return true; // Successfully set
       } else {
-        // Community not in store yet - wait for communities to load
-        console.log(`[MapPage] Community ${communityIdNum} from URL not in store yet, will set after communities load`);
-        
-        // Only set up watch once
+        // Community not in store yet - for Slack link users we may not have user ID so communities never load.
+        // Set a minimal community from URL so loadProfiles can run with this communityId.
+        const params = route.query;
+        const hasSlackLinkParams = params.s && params.communityId && params.slackUserId;
+        if (hasSlackLinkParams) {
+          const name = typeof params.communityName === 'string'
+            ? decodeURIComponent(params.communityName.replace(/\+/g, ' '))
+            : `Community ${communityIdNum}`;
+          const minimalCommunity: Community = {
+            id: communityIdNum,
+            name,
+            leaderId: 0,
+          };
+          communityStore.setCommunities([minimalCommunity]);
+          communityStore.setCurrentCommunity(minimalCommunity);
+          hasExtractedFromUrl = true;
+          return true;
+        }
         if (!communityWatchSetup) {
           communityWatchSetup = true;
-          
-          // Check immediately if communities are already loaded
           if (communityStore.communities.length > 0) {
             const foundCommunity = communityStore.getCommunityById(communityIdNum);
             if (foundCommunity) {
               communityStore.setCurrentCommunity(foundCommunity);
-              console.log(`[MapPage] Set community from URL (communities already loaded): ${communityIdNum} (${foundCommunity.name})`);
-              hasExtractedFromUrl = true; // Mark as extracted so we don't do it again
+              hasExtractedFromUrl = true;
               communityWatchSetup = false;
               return true;
             }
           }
-          
-          // Watch for communities to be loaded
           const unwatch = watch(() => communityStore.communities, (communities) => {
             if (communities.length > 0) {
               const foundCommunity = communityStore.getCommunityById(communityIdNum);
               if (foundCommunity) {
                 communityStore.setCurrentCommunity(foundCommunity);
-                console.log(`[MapPage] Set community from URL after load: ${communityIdNum} (${foundCommunity.name})`);
-                hasExtractedFromUrl = true; // Mark as extracted so we don't do it again
+                hasExtractedFromUrl = true;
                 unwatch();
                 communityWatchSetup = false;
               }
             }
           }, { immediate: true });
         }
-        return false; // Not set yet, waiting for communities
+        return false;
       }
     }
   }
@@ -1025,8 +1030,6 @@ async function loadProfiles() {
       // Check if already validated in this session
       const isValidated = slackSessionService.isSecretIdValidated(urlSecretId);
       if (isValidated) {
-        console.log('[MapPage] SecretId already validated for this session, not sending in request');
-        // Don't send secretId - session is established
         secretIdToSend = undefined;
       } else {
         // Not yet validated, send it (will be validated by backend)
@@ -1034,8 +1037,6 @@ async function loadProfiles() {
         secretIdToSend = urlSecretId;
       }
     } else if (isFullyAuthenticated) {
-      // Fully authenticated user - no secretId needed
-      console.log('[MapPage] User is fully authenticated, not sending secretId');
       secretIdToSend = undefined;
     }
     
@@ -1054,7 +1055,7 @@ async function loadProfiles() {
     });
     await updateMapMarkers();
   } catch (error: any) {
-    console.error('[MapPage] Error loading profiles:', error);
+    console.error('[MapPage] Error loading profiles:', error?.message ?? error);
     
     // Check if error is due to expired secretId
     const errorMessage = error.message || error.response?.data?.message || '';
@@ -1117,10 +1118,8 @@ function refreshClusters(immediate = false) {
       } else {
         isRefreshing = false;
       }
-    } catch (error) {
+        } catch {
       isRefreshing = false;
-      // Silently fail - clusters will update on next automatic refresh
-      console.debug('[MapPage] Could not refresh clusters:', error);
     }
   } else {
     // Debounce for non-immediate refreshes (panning)
@@ -1145,9 +1144,8 @@ function refreshClusters(immediate = false) {
         } else {
           isRefreshing = false;
         }
-      } catch (error) {
+      } catch {
         isRefreshing = false;
-        console.debug('[MapPage] Could not refresh clusters:', error);
       }
     }, 150); // Shorter debounce for better responsiveness
   }
@@ -1212,7 +1210,6 @@ function updateVisibleUsers() {
   });
   
   visibleUserIds.value = newVisibleIds;
-  console.log(`[MapPage] Updated visible users: ${newVisibleIds.size} users in view (${markers.value.length} total markers, ${filteredProfiles.value.length} total profiles)`);
 }
 
 async function initializeMap() {
@@ -1259,7 +1256,7 @@ async function initializeMap() {
     // Update visible users after markers are created
     updateVisibleUsers();
   } catch (error) {
-    console.error('[MapPage] Error initializing map:', error);
+    console.error('[MapPage] Error initializing map:', error instanceof Error ? error.message : error);
   }
 }
 
@@ -1280,8 +1277,6 @@ async function updateMapMarkers() {
   const newMarkers: google.maps.Marker[] = [];
   const jitteredPositions = buildJitteredPositions(filteredProfiles.value);
 
-  console.log(`[MapPage] Processing ${filteredProfiles.value.length} filtered profiles`);
-  
   for (const profile of filteredProfiles.value) {
     if (!profile.currentLat || !profile.currentLong) {
       continue;
@@ -1325,11 +1320,7 @@ async function updateMapMarkers() {
     markers.value.push(marker);
   }
 
-  // Initialize marker clusterer with custom renderer
-  // Use algorithm options to prevent clustering of small groups
   if (newMarkers.length > 0 && map.value) {
-    console.log(`[MapPage] Creating ${newMarkers.length} markers`);
-    
     try {
       // Import SuperClusterAlgorithm from the main package
       const { SuperClusterAlgorithm } = await import('@googlemaps/markerclusterer');
@@ -1387,7 +1378,6 @@ async function updateMapMarkers() {
       updateVisibleUsers();
     }, 500);
   } else {
-    console.log('[MapPage] No markers to display');
     // Don't change the map center if we have no profiles - keep current view
     // Only update if we actually have profiles but they just don't have coordinates
     if (profiles.value.length > 0) {
@@ -1405,6 +1395,30 @@ async function handleSearch() {
 
 function viewProfile(userId: number) {
   router.push(`/tabs/profile/${userId}`);
+}
+
+/**
+ * "View in Slack": match Ionic. Fire POST (fire-and-forget), then immediately open Trova's Slack app.
+ * POST /public/slack/publishViewProfileFromMap with { userSlackId, otherUserSlackId };
+ * then slack://app?team=<team>&id=<trovaSlackAppId>&tab=home. No user id in link; do not wait for POST.
+ */
+function viewProfileInSlack(profile: ProfilesInit) {
+  const viewerSlackId = (route.query.slackUserId as string) || (authStore.user as any)?.slackId;
+  const otherUserSlackId = profile.slackId;
+  const slackTeamId = (route.query.slackTeamId as string) || '';
+  const slackAppId = environment.slackAppId;
+
+  if (!otherUserSlackId && import.meta.env.DEV) {
+    console.warn('[ViewInSlack] profile.slackId is missing');
+  }
+  if (viewerSlackId && otherUserSlackId) {
+    communityService.viewSlackProfileFromMap(viewerSlackId, otherUserSlackId);
+  }
+  if (slackTeamId && slackAppId) {
+    window.location.href = `slack://app?team=${slackTeamId}&id=${slackAppId}&tab=home`;
+  } else {
+    window.location.href = 'slack://open';
+  }
 }
 
 watch(() => communityStore.currentCommunityId, (newCommunityId) => {
