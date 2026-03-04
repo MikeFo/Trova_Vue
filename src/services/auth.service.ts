@@ -1,4 +1,4 @@
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, User as FirebaseUser, type Auth } from 'firebase/auth';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, signInWithCustomToken as firebaseSignInWithCustomToken, User as FirebaseUser, type Auth } from 'firebase/auth';
 import { useFirebase } from '../composables/useFirebase';
 import { apiService } from './api.service';
 import { useAuthStore } from '../stores/auth.store';
@@ -322,6 +322,24 @@ export class AuthService {
       this.authStore.isLoading = false;
       console.error('Google sign in error:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Sign in with a Firebase custom token (e.g. from Slack user-signin flow).
+   * Updates auth state and fetches user profile.
+   */
+  async signInWithCustomToken(idToken: string): Promise<void> {
+    const { auth } = useFirebase();
+    if (!auth) throw new Error('Firebase auth not initialized');
+
+    this.authStore.isLoading = true;
+    try {
+      await firebaseSignInWithCustomToken(auth, idToken);
+      await this.getUserProfile();
+      slackSessionService.clearValidation();
+    } finally {
+      this.authStore.isLoading = false;
     }
   }
 }

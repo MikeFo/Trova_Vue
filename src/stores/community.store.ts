@@ -43,8 +43,6 @@ export const useCommunityStore = defineStore('community', () => {
     if (currentCommunity.value) {
       const stillExists = newCommunities.find(c => c.id === currentCommunity.value!.id);
       if (!stillExists) {
-        // Current community no longer exists, need to select a new one
-        console.log('[CommunityStore] Current community no longer exists, selecting new one');
         currentCommunity.value = null;
       } else {
         // Update the current community object to ensure it has the latest data
@@ -77,11 +75,6 @@ export const useCommunityStore = defineStore('community', () => {
       if (newCommunities.length > 0) {
         setCurrentCommunity(newCommunities[0]);
       }
-    }
-    
-    // Log if communities were added
-    if (newCommunities.length > previousCount) {
-      console.log(`[CommunityStore] Communities updated: ${previousCount} -> ${newCommunities.length}`);
     }
   }
 

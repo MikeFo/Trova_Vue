@@ -324,18 +324,6 @@ async function handleCreate() {
       }
     }
 
-    // Log the data being sent for debugging
-    console.log('Creating group with data:', JSON.stringify(groupData, null, 2));
-    console.log('Data types:', {
-      name: typeof groupData.name,
-      bio: typeof groupData.bio,
-      leaderId: typeof groupData.leaderId,
-      communityId: typeof groupData.communityId,
-      isPrivate: typeof groupData.isPrivate,
-      tags: Array.isArray(groupData.tags),
-      logo: groupData.logo ? typeof groupData.logo : 'undefined',
-    });
-
     // Retry logic for intermittent backend errors
     let newGroup = null;
     let retries = 0;
@@ -394,15 +382,8 @@ async function handleCreate() {
     // This ensures the new group appears in the list
     router.push('/tabs/groups');
   } catch (error: any) {
-    console.error('Error creating group:', error);
-    console.error('Error details:', {
-      message: error.message,
-      stack: error.stack,
-      response: error.response || error.originalError?.response,
-      status: error.status || error.originalError?.response?.status,
-      responseData: error.response?.data || error.originalError?.response?.data,
-    });
-    
+    console.error('Error creating group:', error?.message ?? error);
+
     // Show more detailed error message
     let errorMessage = 'Failed to create group. Please try again.';
     

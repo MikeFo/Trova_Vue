@@ -6,6 +6,7 @@
   >
     <div
       class="org-user-popup"
+      :class="{ 'org-user-popup-positioned': !!position }"
       @click.stop
       :style="popupStyle"
     >
@@ -69,16 +70,25 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, type CSSProperties } from 'vue';
+import { computed, type CSSProperties } from 'vue';
+import { useRoute } from 'vue-router';
 import { close as closeIcon } from 'ionicons/icons';
 import { IonIcon } from '@ionic/vue';
 import type { OrgUser } from '@/models/org-chart';
+import { useAuthStore } from '@/stores/auth.store';
+import { environment } from '@/environments/environment';
+import { communityService } from '@/services/community.service';
+
+const route = useRoute();
+const authStore = useAuthStore();
 
 const props = defineProps<{
   isOpen: boolean;
   user: OrgUser | null;
   position?: { x: number; y: number };
 }>();
+
+const position = computed(() => props.position);
 
 const emit = defineEmits<{
   (e: 'close'): void;
@@ -104,19 +114,27 @@ function handleOverlayClick() {
   close();
 }
 
+/**
+ * "View Trova Profile in Slack": same as map page. Notify backend (fire-and-forget),
+ * then open Trova's Slack app. Backend shows the selected user's profile inside the app.
+ */
 function viewProfileInSlack() {
   const user = props.user;
-  if (!user?.slackId) return;
-  
-  // Deep link to Slack profile
-  const slackUrl = `slack://user?team=${getSlackTeamId()}&id=${user.slackId}`;
-  window.location.href = slackUrl;
-  
-  // Fallback to web if app doesn't open
-  setTimeout(() => {
-    const webUrl = `https://app.slack.com/client/${getSlackTeamId()}/user/${user.slackId}`;
-    window.open(webUrl, '_blank');
-  }, 1000);
+  const otherUserSlackId = user?.slackId;
+  if (!otherUserSlackId) return;
+
+  const viewerSlackId = (route.query.slackUserId as string) || (authStore.user as { slackId?: string })?.slackId;
+  const slackTeamId = (route.query.slackTeamId as string) || getSlackTeamId();
+  const slackAppId = environment.slackAppId;
+
+  if (viewerSlackId && otherUserSlackId) {
+    communityService.viewSlackProfileFromMap(viewerSlackId, otherUserSlackId);
+  }
+  if (slackTeamId && slackAppId) {
+    window.location.href = `slack://app?team=${slackTeamId}&id=${slackAppId}&tab=home`;
+  } else {
+    window.location.href = 'slack://open';
+  }
 }
 
 function messageInSlack() {
@@ -177,6 +195,22 @@ function getSlackTeamId(): string {
   to {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+/* When positioned with fixed left/top, keep translate(-50%, -50%) during animation so modal stays centered */
+.org-user-popup-positioned {
+  animation: popupFadeInCentered 0.2s ease;
+}
+
+@keyframes popupFadeInCentered {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
   }
 }
 

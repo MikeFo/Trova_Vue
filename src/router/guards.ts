@@ -1,19 +1,28 @@
 import { RouteLocationNormalized, NavigationGuardNext } from 'vue-router';
 import { useAuthStore } from '../stores/auth.store';
 
+/** True if this navigation has Slack link params (s, communityId, slackUserId) so we allow through without auth and let the page validate secretId. */
+function hasSlackLinkParams(to: RouteLocationNormalized): boolean {
+  const q = to.query;
+  return Boolean(q.s && q.communityId && q.slackUserId);
+}
+
 export async function requireAuth(
   to: RouteLocationNormalized,
   from: RouteLocationNormalized,
   next: NavigationGuardNext
 ) {
   const authStore = useAuthStore();
-  
-  // Always check Firebase auth to ensure token is available for API calls
-  // Even if isAuthenticated is persisted, Firebase auth state needs to be restored
+
+  if (hasSlackLinkParams(to)) {
+    next();
+    return;
+  }
+
   try {
     const { authService } = await import('../services/auth.service');
     const isAuthenticated = await authService.checkAuth();
-    
+
     if (!isAuthenticated) {
       next({
         path: '/login',
@@ -37,13 +46,16 @@ export async function requireSetupComplete(
   next: NavigationGuardNext
 ) {
   const authStore = useAuthStore();
-  
-  // Always check Firebase auth to ensure token is available for API calls
-  // Even if isAuthenticated is persisted, Firebase auth state needs to be restored
+
+  if (hasSlackLinkParams(to)) {
+    next();
+    return;
+  }
+
   try {
     const { authService } = await import('../services/auth.service');
     const isAuthenticated = await authService.checkAuth();
-    
+
     if (!isAuthenticated) {
       next({
         path: '/login',

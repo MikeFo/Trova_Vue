@@ -29,10 +29,7 @@ class CommunityService {
       const url = searchTerm 
         ? `/communities/all/no_restrict?term=${encodeURIComponent(searchTerm)}`
         : '/communities/all/no_restrict';
-      
-      console.log('[CommunityService] Fetching public communities from:', url);
       const communities = await apiService.get<Community[]>(url);
-      console.log('[CommunityService] Received communities:', communities?.length || 0);
       return communities || [];
     } catch (error) {
       console.error('[CommunityService] Failed to fetch public communities:', error);
@@ -53,10 +50,7 @@ class CommunityService {
         throw new Error('User not authenticated');
       }
       
-      console.log('[CommunityService] Joining community:', communityId, 'for user:', userId);
       const response = await apiService.post(`/communities/${communityId}/assign`, { userId });
-      console.log('[CommunityService] Assign response:', response);
-      console.log('[CommunityService] Successfully joined community:', communityId);
       return response;
     } catch (error) {
       console.error('[CommunityService] Failed to join community:', error);
@@ -137,14 +131,26 @@ class CommunityService {
         isInitialPageLoad,
         s: secretId,
       };
-      
-      console.log('[CommunityService] getOrgDataForCommunity request body:', JSON.stringify(requestBody, null, 2));
-      
       const response = await apiService.post('/communities/getOrgDataForCommunity', requestBody);
       return response;
     } catch (error) {
       console.error('[CommunityService] Failed to fetch org chart data:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Notify backend that viewer viewed a user's profile from the map (fire-and-forget).
+   * Backend: POST /public/slack/publishViewProfileFromMap
+   */
+  async viewSlackProfileFromMap(userSlackId: string, otherUserSlackId: string): Promise<void> {
+    try {
+      await apiService.post('/public/slack/publishViewProfileFromMap', {
+        userSlackId,
+        otherUserSlackId,
+      });
+    } catch (error) {
+      console.warn('[CommunityService] viewSlackProfileFromMap failed (non-blocking):', error);
     }
   }
 }

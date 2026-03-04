@@ -267,8 +267,6 @@ async function loadSkills() {
       const hasOther = consolidated.some(s => s.name?.toLowerCase() === 'other');
       
       if (hasOther) {
-        // Expand "Other" by getting all individual skills from profiles
-        console.log('[SkillsListPage] Expanding "Other" category to show all individual skills');
         allSkills = await adminService.getAllIndividualSkills(communityId.value);
       } else {
         allSkills = consolidated;

@@ -168,10 +168,8 @@ function openPhotoUpload() {
   isPhotoUploadOpen.value = true;
 }
 
-function handlePhotoUpdated(photoUrl: string) {
+function handlePhotoUpdated(_photoUrl: string) {
   // Photo is already updated in auth store by the modal
-  // This is just for any additional handling if needed
-  console.log('Profile photo updated:', photoUrl);
 }
 
 async function loadViewedUser() {

@@ -1,8 +1,8 @@
 export const environment = {
   production: false,
   env: 'local',
-  // Point at staging API so login/auth work without a local backend. For a local API, use apiUrl: '/api' and set VITE_API_TARGET in vite proxy.
-  apiUrl: 'https://trova-api-staging.herokuapp.com',
+  // Use VITE_API_URL when set (e.g. '/api') so requests go through Vite proxy → no CORS. Set VITE_API_TARGET in vite.config to the real API (e.g. https://trova-api-staging.herokuapp.com).
+  apiUrl: import.meta.env.VITE_API_URL || 'https://trova-api-staging.herokuapp.com',
   oidcConfig: {
     client_id: '0oa4q2hnylxAJfIHR5d7',
     server_host: 'https://dev-62292605.okta.com/oauth2/default',
@@ -13,9 +13,9 @@ export const environment = {
     audience: 'api://default',
   },
   scheme: 'com.okta.dev-62292605:/',
-  siteUrl: 'http://localhost:5173',
+  siteUrl: import.meta.env.VITE_APP_BASE_URL || 'http://localhost:5173',
   googleMapsApiFindPlaceUrl: 'https://maps.googleapis.com/maps/api/place',
-  googleMapsApiKey: 'AIzaSyByxzIDhPosaIwi_sHHXSmLWdltBVKemeI',
+  googleMapsApiKey: 'AIzaSyB6H_o_9iGrFIftKKa7zNJeqHeIR_eUZxw',
   googleAnalyticsTrackerId: 'UA-123516927-1',
   oktaDomain: 'dev-62292605.okta.com',
   oktaClientId: '0oa4q2hnylxAJfIHR5d7',

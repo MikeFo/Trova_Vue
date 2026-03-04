@@ -982,7 +982,6 @@ function ensureCustomFieldDataLoaded() {
   
   // Remove bad keys and add fixed keys
   if (badKeys.length > 0) {
-    console.log(`[AnalyticsDashboard] Fixing ${badKeys.length} bad custom field keys:`, badKeys);
     badKeys.forEach(badKey => {
       const index = visibleDashboards.value.indexOf(badKey);
       if (index > -1) {
@@ -1057,8 +1056,6 @@ async function fetchCustomFieldChartData(customFieldId: number) {
       const newMap = new Map(customFieldNames.value);
       newMap.set(customFieldId, fieldName);
       customFieldNames.value = newMap;
-      console.log(`[AnalyticsDashboard] Custom field ${customFieldId} fieldName stored:`, fieldName);
-      console.log(`[AnalyticsDashboard] customFieldNames Map now has:`, Array.from(customFieldNames.value.entries()));
     } else {
       console.warn(`[AnalyticsDashboard] Could not extract fieldName for custom field ${customFieldId} from responses:`, { consolidatedResponse, rawResponse });
     }
@@ -1166,7 +1163,6 @@ function getDashboardData(dashboard: string): AttributeModel[] {
     if (!isNaN(customFieldId)) {
       // Debug logging for custom fields
       if (!data || data.length === 0) {
-        console.log(`[AnalyticsDashboard] getDashboardData('${dashboard}') returning empty - data exists:`, !!dashboardData.value[dashboard], 'length:', dashboardData.value[dashboard]?.length);
       }
     }
   }
@@ -1201,17 +1197,14 @@ function getDashboardTitle(dashboard: string): string {
     // Priority 1: Use fieldName from chart response (most reliable, from backend)
     const chartFieldName = customFieldNames.value.get(customFieldId);
     if (chartFieldName) {
-      console.log(`[AnalyticsDashboard] getDashboardTitle('${dashboard}') using chartFieldName: ${chartFieldName}`);
       return chartFieldName;
     }
     // Priority 2: Try to find the field in the customFields array (from custom-fields-for-charts endpoint)
     const field = customFields.value.find(f => f.id === customFieldId);
     if (field?.name) {
-      console.log(`[AnalyticsDashboard] getDashboardTitle('${dashboard}') using field.name: ${field.name}`);
       return field.name;
     }
     if (field?.label) {
-      console.log(`[AnalyticsDashboard] getDashboardTitle('${dashboard}') using field.label: ${field.label}`);
       return field.label;
     }
     // Fallback: use generic name if field not found
@@ -1777,14 +1770,6 @@ async function openUserModal(dashboard: string, value: string) {
                 userIds.add(uid);
               } else {
                 // Log for debugging
-                console.log(`[AnalyticsDashboard] ⚠️ Matched row but no user ID found:`, {
-                  keys: Object.keys(row),
-                  hasUser: !!row?.user,
-                  hasProfile: !!row?.profile,
-                  hasMember: !!row?.member,
-                  hasUsers: Array.isArray(row?.users),
-                  stringified: JSON.stringify(row).substring(0, 500),
-                });
               }
             }
             
@@ -1810,7 +1795,6 @@ async function openUserModal(dashboard: string, value: string) {
                   enabled: p.enabled ?? true,
                 }));
               
-              console.log(`[AnalyticsDashboard] ✅ Fresh unconsolidated endpoint recovered ${users.length} users for ${dashboard}: "${value}"`);
             }
           } catch (error) {
             console.error(`[AnalyticsDashboard] Error fetching fresh unconsolidated data for ${dashboard}:`, error);

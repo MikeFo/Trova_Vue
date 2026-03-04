@@ -95,10 +95,9 @@
         </OrgChartContainer>
       </div>
 
-      <!-- Empty State (for testing when API is not available) -->
+      <!-- Empty State -->
       <div v-else-if="!loading && !error" class="org-chart-empty">
         <p>Org chart will appear here once data is loaded.</p>
-        <p class="org-chart-empty-note">Note: During testing, the API endpoint may not be available.</p>
       </div>
 
       <!-- User Popup -->
@@ -198,16 +197,12 @@ function extractQueryParams() {
     if (validatedSession) {
       if (!communityId.value) {
         communityId.value = validatedSession.communityId;
-        console.log('[OrgChartPage] Using communityId from validated session:', validatedSession.communityId);
       }
       if (!slackUserId.value) {
         slackUserId.value = validatedSession.slackUserId;
-        console.log('[OrgChartPage] Using slackUserId from validated session:', validatedSession.slackUserId);
       }
-      // Also get secretId from validated session if not in URL
       if (!secretId.value) {
         secretId.value = validatedSession.secretId;
-        console.log('[OrgChartPage] Using secretId from validated session');
       }
     }
   }
@@ -226,53 +221,22 @@ function extractQueryParams() {
   
   // For authenticated users without Slack ID, use user ID as fallback
   if (isFullyAuthenticated && !slackUserId.value && authStore.user?.id) {
-    // Use user ID as slackUserId fallback for authenticated users
     slackUserId.value = String(authStore.user.id);
-    console.log('[OrgChartPage] Authenticated user without Slack ID, using user ID as fallback:', slackUserId.value);
   }
-
-  console.log('[OrgChartPage] Extracted query params:', {
-    communityId: communityId.value,
-    slackUserId: slackUserId.value,
-    otherSlackUserId: otherSlackUserId.value,
-    secretId: secretId.value,
-    hasQueryParams: Object.keys(params).length > 0,
-    queryParams: params,
-    isFullyAuthenticated
-  });
-  console.log('[OrgChartPage] Raw route.query:', JSON.stringify(route.query, null, 2));
 
   // Validate required parameters
   // For authenticated users, slackUserId is optional (we'll use user ID as fallback)
   // For Slack link users, slackUserId is required
   if (!communityId.value) {
     error.value = 'Missing required parameters: communityId';
-    console.error('[OrgChartPage] Missing required parameters:', {
-      communityId: communityId.value,
-      slackUserId: slackUserId.value,
-      secretId: secretId.value,
-      queryParams: params,
-      userSlackId: authStore.user?.slackId,
-      currentCommunityId: communityStore.currentCommunityId,
-      hasValidatedSession: !!slackSessionService.getCurrentValidation(),
-      isFullyAuthenticated
-    });
+    console.error('[OrgChartPage] Missing required parameters: communityId');
     loading.value = false;
     return false;
   }
-  
-  // Only require slackUserId if user is not fully authenticated (i.e., coming from Slack link)
+
   if (!isFullyAuthenticated && !slackUserId.value) {
     error.value = 'Missing required parameters: slackUserId';
-    console.error('[OrgChartPage] Missing required parameters (not authenticated):', {
-      communityId: communityId.value,
-      slackUserId: slackUserId.value,
-      secretId: secretId.value,
-      queryParams: params,
-      userSlackId: authStore.user?.slackId,
-      currentCommunityId: communityStore.currentCommunityId,
-      hasValidatedSession: !!slackSessionService.getCurrentValidation()
-    });
+    console.error('[OrgChartPage] Missing required parameters: slackUserId');
     loading.value = false;
     return false;
   }
@@ -330,84 +294,53 @@ async function initOrg(isInitialPageLoad: boolean = true) {
   }
 
   try {
-    // ALWAYS create a Firebase document for keyDocRefId (even when coming from Slack)
-    // This matches the Angular implementation which always creates a Firestore document
-    // The backend validates this document exists and is recent (< 3 seconds old)
-    console.log('[OrgChartPage] Creating Firebase document for keyDocRefId...');
     const keyDocRefId = await orgChartAuthService.createSecretCode(
       communityId.value!,
       slackUserId.value
     );
-    console.log('[OrgChartPage] Created keyDocRefId:', keyDocRefId);
-    
-    // The secretId from URL (s parameter) is separate - it's validated against slack_user_outbound table
-    // Only check secretId if user came from Slack link
-    // Fully authenticated users don't need secretId
+
     const slackSecretId = secretId.value || '';
     let secretIdToSend = '';
-    
     if (isFullyAuthenticated) {
-      // Fully authenticated user - no secretId needed
-      console.log('[OrgChartPage] User is fully authenticated, not sending secretId');
       secretIdToSend = '';
     } else if (slackSecretId) {
-      // User came from Slack link - check if already validated
       const isValidated = slackSessionService.isSecretIdValidated(slackSecretId);
-      if (isValidated) {
-        console.log('[OrgChartPage] SecretId already validated for this session, not sending in request');
-        // Don't send secretId - session is established
-        secretIdToSend = '';
-      } else {
-        // Not yet validated, send it (will be validated by backend)
-        // This handles the case where App.vue validation didn't run yet
-        console.log('[OrgChartPage] Using secretId from Slack URL (s parameter):', slackSecretId);
-        secretIdToSend = slackSecretId;
-      }
+      secretIdToSend = isValidated ? '' : slackSecretId;
     } else {
-      // No secretId in URL - check if we have a validated session
-      const hasSession = slackSessionService.hasValidatedSession();
-      if (hasSession) {
-        console.log('[OrgChartPage] No secretId in URL but session is validated, not sending secretId');
-        secretIdToSend = '';
-      } else {
-        console.log('[OrgChartPage] No secretId in URL (direct access, not from Slack)');
-        secretIdToSend = '';
-      }
+      secretIdToSend = slackSessionService.hasValidatedSession() ? '' : '';
     }
     
+    // When coming from Slack directory, otherSlackUserId is the clicked user. When missing, focus on viewer (self).
+    const otherSlackUserIdToSend = otherSlackUserId.value || slackUserId.value;
+
     const apiCallParams = {
       communityId: communityId.value,
       slackUserId: slackUserId.value,
-      otherSlackUserId: otherSlackUserId.value,
+      otherSlackUserId: otherSlackUserIdToSend,
       keyDocRefId: keyDocRefId, // Firebase document ID (always created)
       searchStrings: [],
       isInitialPageLoad,
       s: secretIdToSend // Secret ID from Slack URL (if present and not yet validated)
     };
-    
-    console.log('[OrgChartPage] Making API call with:', apiCallParams);
-    console.log('[OrgChartPage] Full API request body:', JSON.stringify(apiCallParams, null, 2));
-    
+
     const response = await communityService.getOrgDataForCommunity(
       communityId.value!,
       slackUserId.value,
-      otherSlackUserId.value,
+      otherSlackUserIdToSend,
       keyDocRefId,
       [],
       isInitialPageLoad,
       secretIdToSend
     );
 
-    console.log('[OrgChartPage] API response received:', response);
-    
     // If API response doesn't have profile pictures, try to fetch them
     // This is a fallback for when the API doesn't include profile pictures
     await enrichWithProfilePictures(response);
     
     handleOrgDataResponse(response);
   } catch (err: any) {
-    console.error('[OrgChartPage] Failed to load org chart:', err);
-    
+    console.error('[OrgChartPage] Failed to load org chart:', err?.message ?? err);
+
     const errorMessage = err.message || err.response?.data?.message || '';
     const status = err.status || err.response?.status;
     
@@ -428,10 +361,6 @@ async function initOrg(isInitialPageLoad: boolean = true) {
 }
 
 function handleOrgDataResponse(response: OrgChartResponse) {
-  console.log('[OrgChartPage] Received org chart response:', response);
-  console.log('[OrgChartPage] Root node:', response.dataSource);
-  console.log('[OrgChartPage] Root node children:', response.dataSource?.children?.length || 0);
-  
   allUsers.value = response.users || [];
   slackIdsInChain.value = response.slackIdsInChain || [];
   
@@ -443,29 +372,19 @@ function handleOrgDataResponse(response: OrgChartResponse) {
     showTeam: response.showTeam ?? true,
   };
 
-  // If viewing a specific user, restructure the tree to show full context
-  // (manager, teammates/siblings, and direct reports)
-  if (otherSlackUserId.value) {
-    orgChartData.value = restructureTreeForUser(response.dataSource, otherSlackUserId.value);
-    console.log('[OrgChartPage] Restructured tree for user:', otherSlackUserId.value);
-  } else {
-    orgChartData.value = response.dataSource;
-  }
+  // Focus user: from Slack directory (otherSlackUserId) or viewer (slackUserId) when no other specified
+  const focusSlackId = otherSlackUserId.value || slackUserId.value;
+
+  // Restructure the tree to show full context around the focus user
+  // (manager, teammates/siblings, and direct reports). API already expanded path via slackIdsInChain.
+  orgChartData.value = restructureTreeForUser(response.dataSource, focusSlackId);
 
   loading.value = false;
-  console.log('[OrgChartPage] Org chart data set, loading complete');
-  
-  // Center the chart after data loads
-  // Wait for DOM to update, then center
+
+  // Center the chart on the focus user and highlight that node
   setTimeout(() => {
-    if (otherSlackUserId.value) {
-      // Center on specific user from Slack
-      centerOnUser(otherSlackUserId.value);
-      highlightedSlackId.value = otherSlackUserId.value;
-    } else {
-      // Center on root node by default
-      centerOnRoot();
-    }
+    centerOnUser(focusSlackId);
+    highlightedSlackId.value = focusSlackId;
   }, 200);
 }
 
@@ -527,10 +446,8 @@ function restructureTreeForUser(rootNode: OrgNode, targetSlackId: string): OrgNo
 
   const parentNode = findParent(clonedRoot, targetSlackId);
   
-  // If target user is the root, ensure all their children are visible
   if (!parentNode) {
-    console.log('[OrgChartPage] Target user is root, showing all direct reports');
-    // Clear expandedChildrenSlackIds to show all children
+    // Target is root: show all direct reports
     if (targetNode.expandedChildrenSlackIds) {
       delete targetNode.expandedChildrenSlackIds;
     }
@@ -541,29 +458,18 @@ function restructureTreeForUser(rootNode: OrgNode, targetSlackId: string): OrgNo
     return clonedRoot;
   }
 
-  // Clear expandedChildrenSlackIds on parent to show ALL siblings (teammates)
-  // This is the key - we want to see all people who report to the same manager
   if (parentNode.expandedChildrenSlackIds) {
-    console.log('[OrgChartPage] Clearing expandedChildrenSlackIds on parent to show all siblings');
     delete parentNode.expandedChildrenSlackIds;
   }
-
-  // Restore all siblings (teammates) from originalChildren if they were filtered
   if (parentNode.originalChildren && parentNode.originalChildren.length > 0) {
     parentNode.children = parentNode.originalChildren.map(cloneNode);
-    console.log('[OrgChartPage] Restored', parentNode.children.length, 'siblings (teammates) for', parentNode.name);
   }
 
-  // Ensure target user's direct reports are all visible
-  // Clear expandedChildrenSlackIds on target node
   if (targetNode.expandedChildrenSlackIds) {
     delete targetNode.expandedChildrenSlackIds;
   }
-  
-  // Restore from originalChildren if available
   if (targetNode.originalChildren && targetNode.originalChildren.length > 0) {
     targetNode.children = targetNode.originalChildren.map(cloneNode);
-    console.log('[OrgChartPage] Restored', targetNode.children.length, 'direct reports for', targetNode.name);
   }
 
   // Return the restructured tree
@@ -582,10 +488,7 @@ function centerOnUser(slackId: string) {
     const nodeElement = document.querySelector(`[data-slack-id="${slackId}"]`) as HTMLElement;
     if (nodeElement && chartContainerRef.value) {
       chartContainerRef.value.centerOnNode(nodeElement);
-      console.log('[OrgChartPage] Centered on user:', slackId);
     } else {
-      // If user node not found, center on root
-      console.warn('[OrgChartPage] User node not found, centering on root');
       centerOnRoot();
     }
   }, 300);
@@ -720,12 +623,14 @@ function selectSearchResult(user: OrgUser) {
 }
 
 function handleNodeClick(node: OrgNode) {
+  // Move green highlight to the clicked tile
+  highlightedSlackId.value = node.slackId ?? null;
+
   // Find user in allUsers
   const user = allUsers.value.find(u => u.slackId === node.slackId || u.id === node.id);
-  
+
   if (user) {
     selectedUser.value = user;
-    // Position popup near click (simplified - would calculate from node position)
     popupPosition.value = {
       x: window.innerWidth / 2,
       y: window.innerHeight / 2,
@@ -775,114 +680,14 @@ async function enrichWithProfilePictures(response: OrgChartResponse) {
   addPicturesToNode(response.dataSource);
 }
 
-// SECURITY: Mock data function for testing - remove in production
-function createMockOrgChartData(): OrgChartResponse {
-  // Use placeholder images for testing - in production, these come from the API
-  const mikeProfilePic = 'https://i.pravatar.cc/150?img=12';
-  const jonathonProfilePic = 'https://i.pravatar.cc/150?img=33';
-  const mattProfilePic = 'https://i.pravatar.cc/150?img=47';
-  
-  return {
-    dataSource: {
-      id: '1',
-      name: 'Mike Fodera',
-      title: 'CEO',
-      slackId: 'U12345',
-      profilePicture: mikeProfilePic,
-      department: 'Operations',
-      location: 'Belfast',
-      role: 'CEO',
-      children: [
-        {
-          id: '2',
-          name: 'Jonathon Parsons',
-          title: 'Engineer',
-          slackId: 'U23456',
-          profilePicture: jonathonProfilePic,
-          department: 'Sandwiches!',
-          location: 'Belfast',
-          role: 'engineer',
-          children: [],
-        },
-        {
-          id: '3',
-          name: 'Matt Bailey',
-          title: 'Business Analyst',
-          slackId: 'U34567',
-          profilePicture: mattProfilePic,
-          department: 'Research & Development',
-          location: 'Belfast',
-          role: 'Business Analyst',
-          children: [],
-        },
-      ],
-      expandedChildrenSlackIds: ['U23456', 'U34567'],
-    },
-    users: [
-      {
-        id: '1',
-        name: 'Mike Fodera',
-        title: 'CEO',
-        slackId: 'U12345',
-        profilePicture: mikeProfilePic,
-        department: 'Operations',
-        location: 'Belfast',
-        role: 'CEO',
-        email: 'mfodera@example.com',
-      },
-      {
-        id: '2',
-        name: 'Jonathon Parsons',
-        title: 'Engineer',
-        slackId: 'U23456',
-        profilePicture: jonathonProfilePic,
-        department: 'Sandwiches!',
-        location: 'Belfast',
-        role: 'engineer',
-        email: 'jparsons@example.com',
-      },
-      {
-        id: '3',
-        name: 'Matt Bailey',
-        title: 'Business Analyst',
-        slackId: 'U34567',
-        profilePicture: mattProfilePic,
-        department: 'Research & Development',
-        location: 'Belfast',
-        role: 'Business Analyst',
-        email: 'mbailey@example.com',
-      },
-    ],
-    slackIdsInChain: ['U12345', 'U23456'],
-    showTitle: true,
-    showLocation: true,
-    showRole: true,
-    showDepartment: true,
-    showTeam: true,
-  };
-}
-
 onMounted(async () => {
-  // Wait a bit for auth to be ready if needed
   if (!authStore.isAuthenticated) {
-    console.log('[OrgChartPage] Waiting for authentication...');
-    // Wait up to 2 seconds for auth to initialize
     let attempts = 0;
     while (!authStore.isAuthenticated && attempts < 20) {
       await new Promise(resolve => setTimeout(resolve, 100));
       attempts++;
     }
   }
-  
-  console.log('[OrgChartPage] Route query params:', route.query);
-  console.log('[OrgChartPage] Auth state:', {
-    isAuthenticated: authStore.isAuthenticated,
-    userId: authStore.user?.id,
-    slackId: authStore.user?.slackId,
-    slackUserId: authStore.user?.slackUserId,
-    communityId: communityStore.currentCommunityId,
-  });
-  
   initOrg(true);
 });
 
@@ -1088,13 +893,6 @@ watch(() => route.query, () => {
   padding: 60px 20px;
   text-align: center;
   color: #6b7280;
-}
-
-.org-chart-empty-note {
-  margin-top: 12px;
-  font-size: 12px;
-  color: #9ca3af;
-  font-style: italic;
 }
 
 @media (max-width: 768px) {

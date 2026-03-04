@@ -83,13 +83,10 @@ export class GroupService {
       
       // If the main endpoint fails (e.g., 500 error), try the alternative endpoint
       if (error.status === 500 || error.response?.status === 500) {
-        console.log('[GroupService] Main endpoint returned 500, trying alternative endpoint...');
         try {
-          // Try alternative endpoint: /communities/{communityId}/groups (no userId needed)
           const groups = await apiService.get<Group[]>(
             `/communities/${communityId}/groups`
           );
-          console.log('[GroupService] Successfully fetched groups via alternative endpoint');
           return groups || [];
         } catch (altError: any) {
           const altErrorMessage = altError.response?.data?.error?.message || 
@@ -135,38 +132,24 @@ export class GroupService {
    */
   async joinGroup(userId: number, groupId: number): Promise<Group> {
     try {
-      console.log('[GroupService] Joining group:', groupId, 'for user:', userId);
-      
-      // Try pattern 1: /groups/:id/assign (similar to communities)
       try {
-        const group = await apiService.post<Group>(
+        return await apiService.post<Group>(
           `/groups/${groupId}/assign`,
           { userId }
         );
-        console.log('[GroupService] Successfully joined group (via /assign):', groupId);
-        return group;
       } catch (assignError: any) {
-        // If 404, try alternative endpoint
         if (assignError.status === 404 || assignError.response?.status === 404) {
-          console.log('[GroupService] /assign endpoint not found, trying /join endpoint...');
-          // Try pattern 2: /groups/join with body
           try {
-            const group = await apiService.post<Group>(
+            return await apiService.post<Group>(
               `/groups/join`,
               { userId, groupId }
             );
-            console.log('[GroupService] Successfully joined group (via /join):', groupId);
-            return group;
           } catch (joinError: any) {
-            // If that also fails, try pattern 3: /groups/:id/join
             if (joinError.status === 404 || joinError.response?.status === 404) {
-              console.log('[GroupService] /join endpoint not found, trying /groups/:id/join...');
-              const group = await apiService.post<Group>(
+              return await apiService.post<Group>(
                 `/groups/${groupId}/join`,
                 { userId }
               );
-              console.log('[GroupService] Successfully joined group (via /groups/:id/join):', groupId);
-              return group;
             }
             throw joinError;
           }
