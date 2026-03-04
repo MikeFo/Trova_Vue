@@ -3,6 +3,10 @@
 
 [build]
   publish = "dist"
+  command = "npm run build:prod"
+
+# Use the staging build when deploying the `staging` branch (for vue.trova-staging.com).
+[context."branch:staging"]
   command = "npm run build:staging"
 
 # SPA fallback: serve index.html for all paths so Vue Router can handle them.
