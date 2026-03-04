@@ -1,0 +1,13 @@
+# Netlify config so SPA routes (e.g. /communities/:id/console) are served correctly.
+# Without this, direct requests to those paths return Netlify's 404.
+
+[build]
+  publish = "dist"
+  command = "npm run build:staging"
+
+# SPA fallback: serve index.html for all paths so Vue Router can handle them.
+# Status 200 = rewrite (URL stays the same), not a redirect.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
