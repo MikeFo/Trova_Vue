@@ -308,8 +308,11 @@ async function initOrg(isInitialPageLoad: boolean = true) {
       // The "validated" flag only tracks initial handshake; the backend
       // still needs `s` on every request for Slack-only users.
       secretIdToSend = slackSecretId;
+      if (communityId.value != null) {
+        slackSessionService.setValidatedContext(slackSecretId, communityId.value, slackUserId.value);
+      }
     }
-    
+
     // When coming from Slack directory, otherSlackUserId is the clicked user. When missing, focus on viewer (self).
     const otherSlackUserIdToSend = otherSlackUserId.value || slackUserId.value;
 

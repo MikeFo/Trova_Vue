@@ -1014,11 +1014,16 @@ async function loadProfiles() {
     // Only check secretId if user came from Slack link
     // Fully authenticated users don't need secretId
     const urlSecretId = (route.query.s as string) || '';
+    const slackUserIdFromUrl = (route.query.slackUserId as string) || '';
     let secretIdToSend: string | undefined = undefined;
-    
+
     // Check if user is fully authenticated (has Firebase auth + user profile)
     const isFullyAuthenticated = authStore.isAuthenticated && authStore.user?.id;
-    
+
+    if (urlSecretId && !isFullyAuthenticated && communityId && slackUserIdFromUrl) {
+      slackSessionService.setValidatedContext(urlSecretId, communityId, slackUserIdFromUrl);
+    }
+
     if (urlSecretId && !isFullyAuthenticated) {
       // User came from Slack link - check if session expired
       if (slackSessionService.isSessionExpired()) {

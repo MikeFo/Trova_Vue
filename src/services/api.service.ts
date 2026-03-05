@@ -37,7 +37,7 @@ export class ApiService {
   }
 
   private setupInterceptors(): void {
-    // Request interceptor - add auth token
+    // Request interceptor - add auth token or Slack context
     this.api.interceptors.request.use(
       async (config) => {
         try {
@@ -52,6 +52,21 @@ export class ApiService {
               }
             } catch (tokenError) {
               // Continue without token - backend might handle auth differently
+            }
+          } else {
+            // No Firebase user - if we have a valid Slack link session, attach it to every request
+            // so the backend can authorize Slack-only users (console, map, org chart).
+            const { slackSessionService } = await import('./slack-session.service');
+            const slack = slackSessionService.getCurrentValidation();
+            if (slack && slack.secretId) {
+              const params = { s: slack.secretId, communityId: String(slack.communityId), slackUserId: slack.slackUserId };
+              if (config.method === 'get' || config.method === 'GET') {
+                config.params = { ...config.params, ...params };
+              } else if (config.data != null && typeof config.data === 'object' && !Array.isArray(config.data)) {
+                config.data = { ...params, ...config.data };
+              } else if (config.data == null) {
+                config.data = params;
+              }
             }
           }
         } catch (error) {

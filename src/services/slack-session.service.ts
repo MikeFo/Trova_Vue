@@ -174,6 +174,22 @@ export class SlackSessionService {
   }
 
   /**
+   * Record that the given Slack context was successfully used (e.g. console gate or map/org load).
+   * Call this after a successful API call that used the secret so the API interceptor
+   * can attach it to all subsequent requests in this session.
+   */
+  setValidatedContext(secretId: string, communityId: number, slackUserId: string): void {
+    const validation: SlackSessionValidation = {
+      isValid: true,
+      validatedAt: Date.now(),
+      secretId,
+      communityId,
+      slackUserId,
+    };
+    this.cacheValidation(validation);
+  }
+
+  /**
    * Get current validation state
    */
   getCurrentValidation(): SlackSessionValidation | null {

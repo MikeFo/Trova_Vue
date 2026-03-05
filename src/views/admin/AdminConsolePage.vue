@@ -316,6 +316,7 @@ async function checkManagerAccess() {
       isManager.value = !!result?.isManager;
 
       if (isManager.value) {
+        slackSessionService.setValidatedContext(urlSecretId, communityId, slackUserId);
         selectedCommunityId.value = communityId;
 
         // Prefer the community returned from the backend if available.
