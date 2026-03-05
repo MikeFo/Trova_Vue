@@ -1821,23 +1821,30 @@ async function loadStats() {
         
         updatedStats.trovaChatsStarted = totalMessages;
       } else if (conversationsStarted.status === 'rejected') {
-        // Fallback: try old method if new endpoint fails (async, but we'll handle it separately)
+        // Fallback: conversations-started failed. Try backend /stats/messages first (works with Slack auth);
+        // then Firestore-based getMessagesFromMatches (fails for Slack-only users).
         console.warn('[UserStatsSection] Conversations started endpoint failed, will try fallback method');
-        // Set to 0 for now, fallback will update it asynchronously
         updatedStats.trovaChatsStarted = 0;
-        
-        // Try fallback asynchronously (non-blocking)
+
         if (props.communityId !== null) {
-            adminService.getMessagesFromMatches(props.communityId, start, end)
+          adminService
+            .getMessageStats(props.communityId, start, end)
+            .then((messageStats) => {
+              if (messageStats?.totalMessagesSent != null && stats.value) {
+                stats.value.trovaChatsStarted = messageStats.totalMessagesSent;
+                return;
+              }
+              return adminService.getMessagesFromMatches(props.communityId!, start, end);
+            })
             .then((fallback) => {
-              if (fallback && stats.value) {
+              if (fallback && stats.value && (stats.value.trovaChatsStarted === 0 || stats.value.trovaChatsStarted === undefined)) {
                 stats.value.trovaChatsStarted = fallback.totalMessagesSent || 0;
               }
             })
             .catch((error) => {
-              console.warn('[UserStatsSection] Fallback method also failed:', error);
+              console.warn('[UserStatsSection] Message stats fallback failed:', error);
             });
-          }
+        }
       }
       // Merge active user stats
       if (activeUsers.status === 'fulfilled' && activeUsers.value) {
