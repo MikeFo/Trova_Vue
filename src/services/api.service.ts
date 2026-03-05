@@ -54,12 +54,23 @@ export class ApiService {
               // Continue without token - backend might handle auth differently
             }
           } else {
-            // No Firebase user - if we have a valid Slack link session, attach it to every request
-            // so the backend can authorize Slack-only users (console, map, org chart).
+            // No Firebase user - attach Slack context so backend can authorize (console, map, org chart).
+            // Prefer cached validation; fallback to current URL query so we send s even if cache expired or wasn't set.
             const { slackSessionService } = await import('./slack-session.service');
+            let params: { s: string; communityId: string; slackUserId: string } | null = null;
             const slack = slackSessionService.getCurrentValidation();
-            if (slack && slack.secretId) {
-              const params = { s: slack.secretId, communityId: String(slack.communityId), slackUserId: slack.slackUserId };
+            if (slack?.secretId) {
+              params = { s: slack.secretId, communityId: String(slack.communityId), slackUserId: slack.slackUserId };
+            } else if (typeof window !== 'undefined' && window.location?.search) {
+              const q = new URLSearchParams(window.location.search);
+              const s = q.get('s');
+              const communityId = q.get('communityId');
+              const slackUserId = q.get('slackUserId');
+              if (s && communityId && slackUserId) {
+                params = { s, communityId, slackUserId };
+              }
+            }
+            if (params) {
               if (config.method === 'get' || config.method === 'GET') {
                 config.params = { ...config.params, ...params };
               } else if (config.data != null && typeof config.data === 'object' && !Array.isArray(config.data)) {
