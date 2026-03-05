@@ -71,12 +71,29 @@ export class ApiService {
               }
             }
             if (params) {
+              // Only add each param if not already present (avoids duplicate query keys that can break backends)
+              const existingParams = (config.params || {}) as Record<string, unknown>;
+              const urlQuery =
+                typeof config.url === 'string' && config.url.includes('?')
+                  ? config.url.slice(config.url.indexOf('?') + 1)
+                  : '';
+              const inUrl = new URLSearchParams(urlQuery);
+              const add = (key: 's' | 'communityId' | 'slackUserId') =>
+                existingParams[key] === undefined && !inUrl.has(key);
+              const slackParams: Record<string, string> = {};
+              if (add('s')) slackParams.s = params.s;
+              if (add('communityId')) slackParams.communityId = params.communityId;
+              if (add('slackUserId')) slackParams.slackUserId = params.slackUserId;
               if (config.method === 'get' || config.method === 'GET') {
-                config.params = { ...config.params, ...params };
+                config.params = { ...config.params, ...slackParams };
               } else if (config.data != null && typeof config.data === 'object' && !Array.isArray(config.data)) {
-                config.data = { ...params, ...config.data };
+                const body = config.data as Record<string, unknown>;
+                if (body.s === undefined) body.s = params.s;
+                if (body.communityId === undefined) body.communityId = params.communityId;
+                if (body.slackUserId === undefined) body.slackUserId = params.slackUserId;
+                config.data = body;
               } else if (config.data == null) {
-                config.data = params;
+                config.data = { s: params.s, communityId: params.communityId, slackUserId: params.slackUserId };
               }
             }
           }
