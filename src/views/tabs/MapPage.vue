@@ -1027,15 +1027,10 @@ async function loadProfiles() {
         return;
       }
       
-      // Check if already validated in this session
-      const isValidated = slackSessionService.isSecretIdValidated(urlSecretId);
-      if (isValidated) {
-        secretIdToSend = undefined;
-      } else {
-        // Not yet validated, send it (will be validated by backend)
-        // This handles the case where App.vue validation didn't run yet
-        secretIdToSend = urlSecretId;
-      }
+      // Always send the secret so the backend can identify the caller.
+      // The "validated" flag only tracks whether the initial handshake passed;
+      // the backend still needs `s` on every request for Slack-only users.
+      secretIdToSend = urlSecretId;
     } else if (isFullyAuthenticated) {
       secretIdToSend = undefined;
     }

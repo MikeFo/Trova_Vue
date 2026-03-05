@@ -304,10 +304,10 @@ async function initOrg(isInitialPageLoad: boolean = true) {
     if (isFullyAuthenticated) {
       secretIdToSend = '';
     } else if (slackSecretId) {
-      const isValidated = slackSessionService.isSecretIdValidated(slackSecretId);
-      secretIdToSend = isValidated ? '' : slackSecretId;
-    } else {
-      secretIdToSend = slackSessionService.hasValidatedSession() ? '' : '';
+      // Always send the secret so the backend can identify the caller.
+      // The "validated" flag only tracks initial handshake; the backend
+      // still needs `s` on every request for Slack-only users.
+      secretIdToSend = slackSecretId;
     }
     
     // When coming from Slack directory, otherSlackUserId is the clicked user. When missing, focus on viewer (self).
