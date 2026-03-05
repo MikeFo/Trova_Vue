@@ -185,6 +185,7 @@ const markerToProfileMap = new Map<google.maps.Marker, number>();
 const userIdToMarkerMap = new Map<number, google.maps.Marker>();
 const userCardRefs = new Map<number, HTMLElement>();
 const visibleUserIds = ref<Set<number>>(new Set());
+let loadRequestId = 0;
 
 // Clustering thresholds
 const CLUSTER_MIN_POINTS = 2; // cluster as soon as 2 markers are close
@@ -1000,50 +1001,40 @@ async function showSlackSessionExpiredAlert() {
 }
 
 async function loadProfiles() {
+  const thisRequest = ++loadRequestId;
   isLoading.value = true;
   try {
-    // Only extract communityId from URL on initial load (handled in onMounted)
-    // Don't extract here to avoid overriding user's manual community selection
-    
     const communityId = communityStore.currentCommunityId;
     if (!communityId) {
-      profiles.value = [];
+      if (thisRequest === loadRequestId) profiles.value = [];
       return;
     }
     
-    // Only check secretId if user came from Slack link
-    // Fully authenticated users don't need secretId
     const urlSecretId = (route.query.s as string) || '';
     let secretIdToSend: string | undefined = undefined;
     
-    // Check if user is fully authenticated (has Firebase auth + user profile)
     const isFullyAuthenticated = authStore.isAuthenticated && authStore.user?.id;
     
     if (urlSecretId && !isFullyAuthenticated) {
-      // User came from Slack link - check if session expired
       if (slackSessionService.isSessionExpired()) {
         await showSlackSessionExpiredAlert();
-        profiles.value = [];
+        if (thisRequest === loadRequestId) profiles.value = [];
         return;
       }
       
-      // Check if already validated in this session
       const isValidated = slackSessionService.isSecretIdValidated(urlSecretId);
-      if (isValidated) {
-        secretIdToSend = undefined;
-      } else {
-        // Not yet validated, send it (will be validated by backend)
-        // This handles the case where App.vue validation didn't run yet
+      if (!isValidated) {
         secretIdToSend = urlSecretId;
       }
-    } else if (isFullyAuthenticated) {
-      secretIdToSend = undefined;
     }
     
     const fetchedProfiles = await profileService.getProfilesForUserAndCommunity(
       communityId,
       secretIdToSend
     );
+    
+    // A newer request was fired while we were awaiting — discard this result silently.
+    if (thisRequest !== loadRequestId) return;
     
     profiles.value = fetchedProfiles.filter(profile => {
       return profile.currentLat !== undefined && 
@@ -1055,19 +1046,18 @@ async function loadProfiles() {
     });
     await updateMapMarkers();
   } catch (error: any) {
+    // Stale request — a newer one is in flight, so don't touch state or show errors.
+    if (thisRequest !== loadRequestId) return;
+
     console.error('[MapPage] Error loading profiles:', error?.message ?? error);
     
-    // Check if error is due to expired secretId
     const errorMessage = error.message || error.response?.data?.message || '';
     const status = error.status || error.response?.status;
     
-    // Backend returns 401 or specific error for expired secretId
-    // Only show Slack expiration message if user came from Slack link
     if ((status === 401 || errorMessage.toLowerCase().includes('expired') || errorMessage.toLowerCase().includes('invalid') || errorMessage.toLowerCase().includes('secret')) 
         && slackSessionService.isSlackLinkUser()) {
       await showSlackSessionExpiredAlert();
     } else {
-      // Other errors - show generic message
       const toast = await toastController.create({
         message: errorMessage || 'Failed to load map data. Please try again.',
         duration: 4000,
@@ -1078,7 +1068,7 @@ async function loadProfiles() {
     
     profiles.value = [];
   } finally {
-    isLoading.value = false;
+    if (thisRequest === loadRequestId) isLoading.value = false;
   }
 }
 
