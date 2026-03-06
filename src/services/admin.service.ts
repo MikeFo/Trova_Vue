@@ -4610,27 +4610,25 @@ export class AdminService {
         matchEngagementRate: 0,
       };
 
-      // Use daily breakdown for both total and engaged, excluding dates with >1000 pairings (data issues)
-      // This ensures consistency and accuracy - total should be sum of all valid daily pairings
+      // Trova Magic: prefer backend API for engaged count (works for Slack-only; avoids Firestore)
       let trovaMagicTotal = 0;
       let trovaMagicEngaged = 0;
       let trovaMagicSessions = 0;
       try {
+        const apiEngaged = await this.getTrovaMagicEngagedFromApi(communityId, startDate, endDate);
+        if (apiEngaged !== null) {
+          trovaMagicEngaged = apiEngaged;
+          devLog(`[AdminService] 🔗 Trova Magic engaged from API: ${trovaMagicEngaged}`);
+        }
         const magicIntrosByDate = await this.getMagicIntrosByDate(communityId, startDate, endDate);
-        // Filter out dates with >1000 pairings (data issues like June 24, 2025 with 17,005)
         const validDates = magicIntrosByDate.filter(day => day.totalPairings <= 1000);
-        
-        // Sum total pairings from valid dates (this matches what user sees in the list: 2+2+5+2+4+5+...)
         trovaMagicTotal = validDates.reduce((sum, day) => sum + day.totalPairings, 0);
-        
-        // Sum engaged pairings from valid dates
-        trovaMagicEngaged = validDates.reduce((sum, day) => sum + day.engagedPairings, 0);
-        
-        // Get total sessions (match records) by fetching all matches
+        if (apiEngaged === null) {
+          trovaMagicEngaged = validDates.reduce((sum, day) => sum + day.engagedPairings, 0);
+        }
         const trovaMagicMatchRecords = await this.getMatchesForCommunity(communityId, startDate, endDate, 'trova_magic');
         trovaMagicSessions = trovaMagicMatchRecords?.length || 0;
-        
-        devLog(`[AdminService] 🔗 Trova Magic: ${trovaMagicSessions} sessions → ${trovaMagicTotal} unique pairs, ${trovaMagicEngaged} engaged (${validDates.length} valid dates, ${magicIntrosByDate.length - validDates.length} dates excluded)`);
+        devLog(`[AdminService] 🔗 Trova Magic: ${trovaMagicSessions} sessions → ${trovaMagicTotal} unique pairs, ${trovaMagicEngaged} engaged`);
       } catch (error) {
         console.warn('[AdminService] Could not fetch Trova Magic from daily breakdown:', error);
       }
@@ -4666,20 +4664,21 @@ export class AdminService {
 
       stats.channelPairingMatches = channelPairingGroups.size;
       stats.channelPairingSessions = channelPairingMatches?.length || 0;
-      
-      // Calculate engagement for Channel Pairing matches
-      // A match is "engaged" if any users in that match group have a conversation
+
+      // Channel Pairing engaged: prefer backend API (works for Slack-only; avoids Firestore)
       let channelPairingEngaged = 0;
-      if (channelPairingGroups.size > 0) {
-        try {
-          // Check if any users in each group have conversations
+      try {
+        const channelStats = await this.getChannelPairingStats(communityId, startDate, endDate);
+        if (channelStats?.channelPairingEngagements != null) {
+          channelPairingEngaged = channelStats.channelPairingEngagements;
+          devLog(`[AdminService] 🔗 Channel Pairing engaged from API: ${channelPairingEngaged}`);
+        } else if (channelPairingGroups.size > 0) {
           channelPairingEngaged = await this.countEngagedMatchesByGroup(communityId, channelPairingMatches, channelPairingGroups);
-        } catch (error) {
-          console.warn('[AdminService] Could not calculate channel pairing engagement:', error);
         }
+      } catch (error) {
+        console.warn('[AdminService] Could not calculate channel pairing engagement:', error);
       }
-      
-      // Store channel pairing engagements for display
+
       stats.channelPairingEngagements = channelPairingEngaged;
       
       // Get Mentor/Mentee matches - count total matches and unique pairs
@@ -4730,6 +4729,35 @@ export class AdminService {
       return stats;
     } catch (error) {
       console.warn('[AdminService] Error calculating match engagement stats:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get Trova Magic engaged count from backend (no Firestore).
+   * Use for Slack-only users and to avoid client-side Firestore permission errors.
+   * GET /communities/:id/stats/trova-magic-engaged
+   */
+  async getTrovaMagicEngagedFromApi(
+    communityId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<number | null> {
+    try {
+      let url = `/communities/${communityId}/stats/trova-magic-engaged`;
+      const params = new URLSearchParams();
+      if (startDate) params.set('startDate', startDate);
+      if (endDate) params.set('endDate', endDate);
+      const qs = params.toString();
+      if (qs) url += `?${qs}`;
+      const response = await apiService.get<number | { engaged?: number }>(url);
+      if (typeof response === 'number') return response;
+      if (response && typeof response === 'object' && typeof (response as { engaged?: number }).engaged === 'number') {
+        return (response as { engaged: number }).engaged;
+      }
+      return null;
+    } catch (error: any) {
+      if (error?.response?.status === 404) devLog('[AdminService] trova-magic-engaged endpoint not found');
       return null;
     }
   }
@@ -5460,20 +5488,23 @@ export class AdminService {
   }
 
   /**
-   * Get cached conversation pairs for a community
+   * Get cached conversation pairs for a community.
+   * Returns empty set when no Firebase user (Slack-only) to avoid Firestore permission errors.
    */
   private async getConversationPairs(communityId: number): Promise<Set<string>> {
     const cacheKey = `conversationPairs_${communityId}`;
     const cached = this.conversationsCache.get(cacheKey);
-    
     if (cached && this.isCacheValid(cached.timestamp, this.FIREBASE_CACHE_TTL)) {
       devLog(`[AdminService] ✅ Using cached conversation pairs for community ${communityId}`);
       return cached.data as Set<string>;
     }
 
     const firebase = useFirebase();
+    if (!firebase.auth?.currentUser) {
+      devLog(`[AdminService] No Firebase user (e.g. Slack-only); skipping Firestore conversation pairs for community ${communityId}`);
+      return new Set<string>();
+    }
     const firestore = firebase.firestore;
-    
     if (!firestore) {
       return new Set<string>();
     }
@@ -5558,19 +5589,22 @@ export class AdminService {
 
   /**
    * Count engaged matches by group_id (for multi-user matches)
-   * A match group is "engaged" if any users in that group have a conversation
+   * A match group is "engaged" if any users in that group have a conversation.
+   * Returns 0 when no Firebase user (Slack-only) to avoid Firestore permission errors.
    */
   private async countEngagedMatchesByGroup(
-    communityId: number, 
-    allMatches: any[], 
+    communityId: number,
+    allMatches: any[],
     uniqueGroups: Set<number>
   ): Promise<number> {
     try {
       if (!allMatches || allMatches.length === 0 || uniqueGroups.size === 0) {
         return 0;
       }
-
-      // Get cached conversation pairs
+      if (!useFirebase().auth?.currentUser) {
+        devLog(`[AdminService] No Firebase user; skipping Firestore for countEngagedMatchesByGroup (community ${communityId})`);
+        return 0;
+      }
       const conversationPairs = await this.getConversationPairs(communityId);
 
       // Group matches by group_id and collect all user pairs in each group
