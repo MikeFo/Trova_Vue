@@ -141,6 +141,8 @@ export class AdminService {
   private matchesCache = new Map<string, { data: any[]; timestamp: number }>();
   private conversationsCache = new Map<string, { data: any; timestamp: number }>();
   private profilesCache = new Map<number, { data: any[]; timestamp: number }>();
+  private magicIntrosByDateCache = new Map<string, { data: Array<{ date: string; dateDisplay: string; totalPairings: number; engagedPairings: number; engagementRate: number }>; timestamp: number }>();
+  private magicIntroPairingsCache = new Map<string, { data: any[]; timestamp: number }>();
   private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
   private readonly FIREBASE_CACHE_TTL = 10 * 60 * 1000; // 10 minutes for Firebase queries
   
@@ -186,6 +188,16 @@ export class AdminService {
     for (const [key, value] of this.profilesCache.entries()) {
       if (!this.isCacheValid(value.timestamp)) {
         this.profilesCache.delete(key);
+      }
+    }
+    for (const [key, value] of this.magicIntrosByDateCache.entries()) {
+      if (!this.isCacheValid(value.timestamp)) {
+        this.magicIntrosByDateCache.delete(key);
+      }
+    }
+    for (const [key, value] of this.magicIntroPairingsCache.entries()) {
+      if (!this.isCacheValid(value.timestamp)) {
+        this.magicIntroPairingsCache.delete(key);
       }
     }
   }
@@ -5876,10 +5888,14 @@ export class AdminService {
     engagedPairings: number;
     engagementRate: number;
   }>> {
+    const cacheKey = `magicIntrosByDate_${communityId}_${startDate || ''}_${endDate || ''}`;
+    const cached = this.magicIntrosByDateCache.get(cacheKey);
+    if (cached && this.isCacheValid(cached.timestamp)) {
+      devLog(`[AdminService] ✨ Using cached magic intros by date for community ${communityId}`);
+      return cached.data;
+    }
     try {
       devLog(`[AdminService] ✨ Fetching magic intros by date for community ${communityId}`);
-      
-      // Get all Trova Magic matches
       const matches = await this.getMatchesForCommunity(communityId, startDate, endDate, 'trova_magic');
       
       if (!matches || matches.length === 0) {
@@ -6062,6 +6078,7 @@ export class AdminService {
       }
 
       devLog(`[AdminService] ✨ Found ${result.length} magic intro dates, total pairings: ${result.reduce((sum, r) => sum + r.totalPairings, 0)}`);
+      this.magicIntrosByDateCache.set(cacheKey, { data: result, timestamp: Date.now() });
       return result;
     } catch (error: any) {
       console.error('[AdminService] Error fetching magic intros by date:', error);
@@ -6075,15 +6092,19 @@ export class AdminService {
    * Deduplicates pairings (normalizes user pairs) and fetches user names
    */
   async getMagicIntroPairings(
-    communityId: number, 
-    date: string, 
-    startDate?: string, 
+    communityId: number,
+    date: string,
+    startDate?: string,
     endDate?: string
   ): Promise<any[]> {
+    const pairingsCacheKey = `magicIntroPairings_${communityId}_${date}_${startDate || ''}_${endDate || ''}`;
+    const cached = this.magicIntroPairingsCache.get(pairingsCacheKey);
+    if (cached && this.isCacheValid(cached.timestamp)) {
+      devLog(`[AdminService] ✨ Using cached pairings for community ${communityId} date ${date}`);
+      return cached.data;
+    }
     try {
       devLog(`[AdminService] ✨ Fetching pairings for magic intro date ${date}`);
-      
-      // Get all Trova Magic matches for the date range
       const matches = await this.getMatchesForCommunity(communityId, startDate, endDate, 'trova_magic');
       
       if (!matches || matches.length === 0) {
@@ -6195,6 +6216,7 @@ export class AdminService {
       });
 
       devLog(`[AdminService] ✨ Found ${enrichedPairings.length} unique pairings for date ${date} (deduplicated from ${dateMatches.length} matches)`);
+      this.magicIntroPairingsCache.set(pairingsCacheKey, { data: enrichedPairings, timestamp: Date.now() });
       return enrichedPairings;
     } catch (error: any) {
       console.error('[AdminService] Error fetching magic intro pairings:', error);

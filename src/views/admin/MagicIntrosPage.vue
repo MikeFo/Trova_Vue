@@ -42,15 +42,15 @@
             <div class="stats-summary">
               <div class="stat-item">
                 <span class="stat-label">Total Pairings:</span>
-                <span class="stat-value">{{ formatNumber(filteredPairings.length) }}</span>
+                <span class="stat-value">{{ formatNumber(displayTotalPairings) }}</span>
               </div>
               <div class="stat-item">
                 <span class="stat-label">Engaged:</span>
-                <span class="stat-value engaged">{{ formatNumber(filteredEngagedCount) }}</span>
+                <span class="stat-value engaged">{{ formatNumber(displayEngagedCount) }}</span>
               </div>
               <div class="stat-item">
                 <span class="stat-label">Engagement Rate:</span>
-                <span class="stat-value">{{ formatPercentage(filteredEngagementRate) }}</span>
+                <span class="stat-value">{{ formatPercentage(displayEngagementRate) }}</span>
               </div>
             </div>
           </div>
@@ -237,6 +237,7 @@ const endDate = computed(() => props.endDate);
 
 // View state - using selectedDate to determine if we're showing list or detail
 const selectedDate = ref<string>('');
+const selectedDateStats = ref<{ totalPairings: number; engagedPairings: number; engagementRate: number } | null>(null);
 const isPairingsLoading = ref(false);
 const pairings = ref<any[]>([]);
 const searchQuery = ref('');
@@ -248,6 +249,20 @@ const engagedCount = computed(() => {
 const engagementRate = computed(() => {
   if (pairings.value.length === 0) return 0;
   return (engagedCount.value / pairings.value.length) * 100;
+});
+
+// Use date-level stats from the list when available (correct for Slack-only when pair-level isEngaged is missing)
+const displayTotalPairings = computed(() => {
+  if (selectedDateStats.value) return selectedDateStats.value.totalPairings;
+  return filteredPairings.value.length;
+});
+const displayEngagedCount = computed(() => {
+  if (selectedDateStats.value) return selectedDateStats.value.engagedPairings;
+  return filteredEngagedCount.value;
+});
+const displayEngagementRate = computed(() => {
+  if (selectedDateStats.value) return selectedDateStats.value.engagementRate;
+  return filteredEngagementRate.value;
 });
 
 const filteredPairings = computed(() => {
@@ -354,7 +369,10 @@ async function loadMagicIntros() {
 
 function navigateToDetail(date: string) {
   if (!communityId.value) return;
-  
+  const row = magicIntros.value.find((i) => i.date === date);
+  selectedDateStats.value = row
+    ? { totalPairings: row.totalPairings, engagedPairings: row.engagedPairings, engagementRate: row.engagementRate }
+    : null;
   selectedDate.value = date;
   loadPairings();
 }
@@ -381,6 +399,7 @@ async function loadPairings() {
 
 function goBackToList() {
   selectedDate.value = '';
+  selectedDateStats.value = null;
   pairings.value = [];
   searchQuery.value = ''; // Clear search when going back
 }
@@ -394,10 +413,10 @@ function getUserName(user: any): string {
 }
 
 function handleDismiss() {
-  // Reset to list view when modal closes
   selectedDate.value = '';
+  selectedDateStats.value = null;
   pairings.value = [];
-  searchQuery.value = ''; // Clear search when modal closes
+  searchQuery.value = '';
   emit('didDismiss');
 }
 
