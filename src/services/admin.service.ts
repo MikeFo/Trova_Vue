@@ -4665,15 +4665,23 @@ export class AdminService {
       stats.channelPairingMatches = channelPairingGroups.size;
       stats.channelPairingSessions = channelPairingMatches?.length || 0;
 
-      // Channel Pairing engaged: prefer backend API (works for Slack-only; avoids Firestore)
+      // Channel Pairing engaged: prefer backend API, then slack-user-stats (on-demand + cadence), then Firestore
       let channelPairingEngaged = 0;
       try {
         const channelStats = await this.getChannelPairingStats(communityId, startDate, endDate);
         if (channelStats?.channelPairingEngagements != null) {
           channelPairingEngaged = channelStats.channelPairingEngagements;
           devLog(`[AdminService] 🔗 Channel Pairing engaged from API: ${channelPairingEngaged}`);
-        } else if (channelPairingGroups.size > 0) {
-          channelPairingEngaged = await this.countEngagedMatchesByGroup(communityId, channelPairingMatches, channelPairingGroups);
+        } else {
+          const userActions = await this.getUserActionsStats(communityId, startDate, endDate);
+          const onDemand = userActions?.channelPairingOnDemand ?? 0;
+          const cadence = userActions?.channelPairingCadence ?? 0;
+          if (onDemand > 0 || cadence > 0) {
+            channelPairingEngaged = onDemand + cadence;
+            devLog(`[AdminService] 🔗 Channel Pairing engaged from slack-user-stats: ${channelPairingEngaged} (onDemand=${onDemand}, cadence=${cadence})`);
+          } else if (channelPairingGroups.size > 0) {
+            channelPairingEngaged = await this.countEngagedMatchesByGroup(communityId, channelPairingMatches, channelPairingGroups);
+          }
         }
       } catch (error) {
         console.warn('[AdminService] Could not calculate channel pairing engagement:', error);
@@ -4735,8 +4743,7 @@ export class AdminService {
 
   /**
    * Get Trova Magic engaged count from backend (no Firestore).
-   * Use for Slack-only users and to avoid client-side Firestore permission errors.
-   * GET /communities/:id/stats/trova-magic-engaged
+   * Tries: 1) GET stats/trova-magic-engaged, 2) slack-user-stats aggregated introsAttributedToTrovaMagic.
    */
   async getTrovaMagicEngagedFromApi(
     communityId: number,
@@ -4750,16 +4757,24 @@ export class AdminService {
       if (endDate) params.set('endDate', endDate);
       const qs = params.toString();
       if (qs) url += `?${qs}`;
-      const response = await apiService.get<number | { engaged?: number }>(url);
+      const response = await apiService.get<number | Record<string, unknown>>(url);
       if (typeof response === 'number') return response;
-      if (response && typeof response === 'object' && typeof (response as { engaged?: number }).engaged === 'number') {
-        return (response as { engaged: number }).engaged;
+      if (response && typeof response === 'object') {
+        const n = (response as Record<string, unknown>).engaged ?? (response as Record<string, unknown>).count
+          ?? (response as Record<string, unknown>).engagedCount ?? (response as Record<string, unknown>).totalEngaged;
+        if (typeof n === 'number') return n;
       }
-      return null;
     } catch (error: any) {
-      if (error?.response?.status === 404) devLog('[AdminService] trova-magic-engaged endpoint not found');
-      return null;
+      if (error?.response?.status !== 404) devLog('[AdminService] trova-magic-engaged request failed:', error?.response?.status);
     }
+    // Fallback: slack-user-stats already works with Slack auth and aggregates introsAttributedToTrovaMagic
+    try {
+      const userActions = await this.getUserActionsStats(communityId, startDate, endDate);
+      if (userActions?.trovaMagicEngagements != null) return userActions.trovaMagicEngagements;
+    } catch (_) {
+      // ignore
+    }
+    return null;
   }
 
   /**
