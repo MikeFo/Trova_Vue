@@ -13,7 +13,7 @@
             <ion-icon :icon="arrowBack"></ion-icon>
           </ion-button>
         </ion-buttons>
-        <ion-title>{{ selectedDate ? 'Channel Pairing Pairings' : 'Channel Pairings' }}</ion-title>
+        <ion-title>{{ selectedDate ? 'Channel Pairing Groups' : 'Channel Pairings' }}</ion-title>
         <ion-buttons slot="end">
           <ion-button fill="clear" @click="handleDismiss">
             <ion-icon :icon="close"></ion-icon>
@@ -35,82 +35,71 @@
           <p>Loading pairings...</p>
         </div>
 
-        <!-- Pairings List -->
-        <div v-else-if="pairings.length > 0" class="pairings-container">
+        <!-- Groups List (2-, 3-, or 5-way with engaged vs unresponsive) -->
+        <div v-else-if="groups.length > 0" class="pairings-container">
           <div class="header-section">
             <h2>{{ formattedSelectedDate }}</h2>
             <div class="stats-summary">
               <div class="stat-item">
-                <span class="stat-label">Total Pairings:</span>
-                <span class="stat-value">{{ formatNumber(filteredPairings.length) }}</span>
+                <span class="stat-label">Total Groups:</span>
+                <span class="stat-value">{{ formatNumber(displayTotalPairings) }}</span>
               </div>
               <div class="stat-item">
                 <span class="stat-label">Engaged:</span>
-                <span class="stat-value engaged">{{ formatNumber(filteredEngagedCount) }}</span>
+                <span class="stat-value engaged">{{ formatNumber(displayEngagedCount) }}</span>
               </div>
               <div class="stat-item">
                 <span class="stat-label">Engagement Rate:</span>
-                <span class="stat-value">{{ formatPercentage(filteredEngagementRate) }}</span>
+                <span class="stat-value">{{ formatPercentage(displayEngagementRate) }}</span>
               </div>
             </div>
           </div>
 
-          <!-- Search Bar -->
           <div class="search-container">
             <ion-searchbar
               v-model="searchQuery"
-              placeholder="Search by user names or match reasons..."
+              placeholder="Search by channel or member names..."
               :debounce="300"
               class="pairings-searchbar"
             ></ion-searchbar>
           </div>
 
-          <!-- No Results Message -->
-          <div v-if="searchQuery && filteredPairings.length === 0" class="no-results">
-            <p>No pairings found matching "{{ searchQuery }}"</p>
+          <div v-if="searchQuery && filteredGroups.length === 0" class="no-results">
+            <p>No groups found matching "{{ searchQuery }}"</p>
           </div>
 
           <ion-list v-else class="pairings-list">
             <ion-item
-              v-for="(pairing, index) in filteredPairings"
-              :key="pairing.id || index"
-              class="pairing-item"
-              :class="{ 'engaged': pairing.isEngaged }"
+              v-for="(group, index) in filteredGroups"
+              :key="group.groupId ?? index"
+              class="pairing-item group-item"
+              :class="{ 'engaged': group.isEngaged }"
             >
               <ion-icon 
-                :icon="pairing.isEngaged ? checkmarkCircle : personCircleOutline" 
+                :icon="group.isEngaged ? checkmarkCircle : personCircleOutline" 
                 slot="start"
-                :class="pairing.isEngaged ? 'icon-engaged' : 'icon-default'"
+                :class="group.isEngaged ? 'icon-engaged' : 'icon-default'"
               ></ion-icon>
               <ion-label>
-                <h2>
-                  <span v-if="pairing.user?.fullName || pairing.user?.fname">
-                    {{ getUserName(pairing.user) }}
-                  </span>
-                  <span v-else-if="pairing.userId">
-                    User {{ pairing.userId }}
-                  </span>
-                  <span v-else>Unknown User</span>
-                  <span class="separator">↔</span>
-                  <span v-if="pairing.matchedUser?.fullName || pairing.matchedUser?.fname">
-                    {{ getUserName(pairing.matchedUser) }}
-                  </span>
-                  <span v-else-if="pairing.matchedUserId">
-                    User {{ pairing.matchedUserId }}
-                  </span>
-                  <span v-else>Unknown User</span>
-                </h2>
-                <p v-if="pairing.reasons && pairing.reasons.length > 0">
-                  <span class="reasons-label">Match reasons:</span>
-                  {{ pairing.reasons.join(', ') }}
+                <h2 v-if="group.channelName">{{ group.channelName }}</h2>
+                <h2 v-else>Group {{ index + 1 }}</h2>
+                <p v-if="group.members && group.members.length > 0" class="group-members">
+                  <template v-if="group.isEngaged">
+                    <span v-if="group.unresponsiveUserIds.length > 0" class="member-line">
+                      <span class="member-label">Engaged:</span>
+                      {{ group.members.filter(m => m.isEngaged).map(m => m.displayName).join(', ') }}
+                    </span>
+                    <span v-if="group.unresponsiveUserIds.length > 0" class="member-line">
+                      <span class="member-label">Unresponsive:</span>
+                      {{ group.members.filter(m => !m.isEngaged).map(m => m.displayName).join(', ') }}
+                    </span>
+                    <span v-else class="member-line"><span class="member-label">All engaged</span></span>
+                  </template>
+                  <span v-else class="member-line"><span class="member-label">None engaged</span></span>
                 </p>
-                <p v-if="pairing.score !== undefined">
-                  <span class="score-label">Score:</span>
-                  <span class="score-value">{{ pairing.score.toFixed(2) }}</span>
-                </p>
-                <p v-if="pairing.isEngaged" class="engaged-badge">
+                <p v-if="group.isEngaged && group.messageCount" class="engaged-badge">
                   <ion-icon :icon="chatbubblesOutline"></ion-icon>
-                  Conversation started
+                  Conversation started ({{ group.messageCount }} msg{{ group.messageCount === 1 ? '' : 's' }})
                 </p>
               </ion-label>
             </ion-item>
@@ -120,8 +109,8 @@
         <!-- Empty State -->
         <div v-else class="empty-state">
           <ion-icon :icon="peopleOutline" class="empty-icon"></ion-icon>
-          <h2>No Pairings Found</h2>
-          <p>No pairings were found for this channel pairing date.</p>
+          <h2>No Groups Found</h2>
+          <p>No channel pairing groups were found for this date.</p>
         </div>
       </div>
 
@@ -145,7 +134,7 @@
               v-for="channelPairing in channelPairings"
               :key="channelPairing.date"
               button
-              @click="navigateToDetail(channelPairing.date)"
+              @click="navigateToDetail(channelPairing)"
               class="channel-pairing-item"
             >
               <ion-icon :icon="linkOutline" slot="start" class="channel-icon"></ion-icon>
@@ -242,7 +231,33 @@ const endDate = computed(() => props.endDate);
 const selectedDate = ref<string>('');
 const isPairingsLoading = ref(false);
 const pairings = ref<any[]>([]);
+const groups = ref<Array<{
+  groupId: number | null;
+  channelName: string | null;
+  userIds: number[];
+  engagedUserIds: number[];
+  unresponsiveUserIds: number[];
+  isEngaged: boolean;
+  messageCount: number;
+  members: Array<{ userId: number; displayName: string; isEngaged: boolean }>;
+}>>([]);
 const searchQuery = ref('');
+
+const selectedDateStats = ref<{ totalPairings: number; engagedPairings: number; engagementRate: number } | null>(null);
+
+const displayTotalPairings = computed(() => {
+  if (selectedDateStats.value) return selectedDateStats.value.totalPairings;
+  return groups.value.length;
+});
+const displayEngagedCount = computed(() => {
+  if (selectedDateStats.value) return selectedDateStats.value.engagedPairings;
+  return groups.value.filter(g => g.isEngaged).length;
+});
+const displayEngagementRate = computed(() => {
+  if (selectedDateStats.value) return selectedDateStats.value.engagementRate;
+  if (groups.value.length === 0) return 0;
+  return (displayEngagedCount.value / groups.value.length) * 100;
+});
 
 const engagedCount = computed(() => {
   return pairings.value.filter(p => p.isEngaged).length;
@@ -251,6 +266,16 @@ const engagedCount = computed(() => {
 const engagementRate = computed(() => {
   if (pairings.value.length === 0) return 0;
   return (engagedCount.value / pairings.value.length) * 100;
+});
+
+const filteredGroups = computed(() => {
+  if (!searchQuery.value.trim()) return groups.value;
+  const query = searchQuery.value.toLowerCase().trim();
+  return groups.value.filter(group => {
+    const channel = (group.channelName || '').toLowerCase();
+    const memberNames = (group.members || []).map(m => m.displayName.toLowerCase()).join(' ');
+    return channel.includes(query) || memberNames.includes(query);
+  });
 });
 
 const filteredPairings = computed(() => {
@@ -373,10 +398,21 @@ async function loadChannelPairings() {
   }
 }
 
-function navigateToDetail(date: string) {
+function navigateToDetail(channelPairing: {
+  date: string;
+  dateDisplay: string;
+  channelName?: string | null;
+  totalPairings: number;
+  engagedPairings: number;
+  engagementRate: number;
+}) {
   if (!communityId.value) return;
-  
-  selectedDate.value = date;
+  selectedDateStats.value = {
+    totalPairings: channelPairing.totalPairings,
+    engagedPairings: channelPairing.engagedPairings,
+    engagementRate: channelPairing.engagementRate,
+  };
+  selectedDate.value = channelPairing.date;
   loadPairings();
 }
 
@@ -385,15 +421,17 @@ async function loadPairings() {
 
   isPairingsLoading.value = true;
   try {
-    const results = await adminService.getChannelPairingPairings(
+    const groupResults = await adminService.getChannelPairingGroupsForDate(
       communityId.value,
       selectedDate.value,
       startDateISO.value,
       endDateISO.value
     );
-    pairings.value = results;
+    groups.value = groupResults;
+    pairings.value = []; // No longer used in detail view; groups are primary
   } catch (error) {
-    console.error('Error loading pairings:', error);
+    console.error('Error loading channel pairing groups:', error);
+    groups.value = [];
     pairings.value = [];
   } finally {
     isPairingsLoading.value = false;
@@ -402,8 +440,10 @@ async function loadPairings() {
 
 function goBackToList() {
   selectedDate.value = '';
+  selectedDateStats.value = null;
   pairings.value = [];
-  searchQuery.value = ''; // Clear search when going back
+  groups.value = [];
+  searchQuery.value = '';
 }
 
 function getUserName(user: any): string {
@@ -415,10 +455,11 @@ function getUserName(user: any): string {
 }
 
 function handleDismiss() {
-  // Reset to list view when modal closes
   selectedDate.value = '';
+  selectedDateStats.value = null;
   pairings.value = [];
-  searchQuery.value = ''; // Clear search when modal closes
+  groups.value = [];
+  searchQuery.value = '';
   emit('didDismiss');
 }
 
@@ -523,6 +564,16 @@ function formatPercentage(value: number | undefined | null): string {
 .stat-label {
   font-weight: 500;
   color: #64748b;
+}
+
+.group-members .member-line {
+  display: block;
+  margin-top: 4px;
+}
+.group-members .member-label {
+  font-weight: 500;
+  color: #64748b;
+  margin-right: 4px;
 }
 
 .stat-value {

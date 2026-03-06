@@ -143,6 +143,7 @@ export class AdminService {
   private profilesCache = new Map<number, { data: any[]; timestamp: number }>();
   private magicIntrosByDateCache = new Map<string, { data: Array<{ date: string; dateDisplay: string; totalPairings: number; engagedPairings: number; engagementRate: number }>; timestamp: number }>();
   private magicIntroPairingsCache = new Map<string, { data: any[]; timestamp: number }>();
+  private conversationsStartedCache = new Map<string, { data: ConversationsStartedResponse; timestamp: number }>();
   private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
   private readonly FIREBASE_CACHE_TTL = 10 * 60 * 1000; // 10 minutes for Firebase queries
   
@@ -161,6 +162,35 @@ export class AdminService {
    */
   private getConversationsCacheKey(communityId: number): string {
     return `conversations_${communityId}`;
+  }
+
+  private getConversationsStartedCacheKey(communityId: number, startDate?: string, endDate?: string): string {
+    return `conversationsStarted_${communityId}_${startDate || 'all'}_${endDate || 'all'}`;
+  }
+
+  private parseParticipantIds(participants: unknown): number[] {
+    if (typeof participants !== 'string') return [];
+    const matches = participants.match(/\d+/g);
+    if (!matches) return [];
+    return matches.map((s) => Number(s)).filter((n) => Number.isFinite(n));
+  }
+
+  private async getConversationsStartedCached(
+    communityId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<ConversationsStartedResponse | null> {
+    const cacheKey = this.getConversationsStartedCacheKey(communityId, startDate, endDate);
+    const cached = this.conversationsStartedCache.get(cacheKey);
+    if (cached && this.isCacheValid(cached.timestamp)) {
+      devLog(`[AdminService] ✅ Using cached conversations-started for community ${communityId}`);
+      return cached.data;
+    }
+    const data = await this.getConversationsStarted(communityId, startDate, endDate);
+    if (data) {
+      this.conversationsStartedCache.set(cacheKey, { data, timestamp: Date.now() });
+    }
+    return data;
   }
 
   /**
@@ -198,6 +228,11 @@ export class AdminService {
     for (const [key, value] of this.magicIntroPairingsCache.entries()) {
       if (!this.isCacheValid(value.timestamp)) {
         this.magicIntroPairingsCache.delete(key);
+      }
+    }
+    for (const [key, value] of this.conversationsStartedCache.entries()) {
+      if (!this.isCacheValid(value.timestamp)) {
+        this.conversationsStartedCache.delete(key);
       }
     }
   }
@@ -6134,8 +6169,27 @@ export class AdminService {
         return matchDateStr === targetDateStr;
       });
 
-      // Get conversation pairs to mark which pairings are engaged
-      const conversationPairs = await this.getConversationPairs(communityId);
+      // Determine engagement without Firestore when Slack-only
+      const firebase = useFirebase();
+      const hasFirebaseUser = !!firebase.auth?.currentUser;
+      let conversationPairs: Set<string> = new Set<string>();
+      const messageCountByPairKey = new Map<string, number>();
+      if (hasFirebaseUser) {
+        conversationPairs = await this.getConversationPairs(communityId);
+      } else {
+        const conversations = await this.getConversationsStartedCached(communityId, startDate, endDate);
+        const convos = conversations?.conversations || [];
+        convos
+          .filter((c) => c?.conversationType === 'magic_intro')
+          .forEach((c) => {
+            const ids = this.parseParticipantIds(c.participants);
+            if (ids.length < 2) return;
+            const pairKey = ids.slice(0, 2).sort((a, b) => a - b).join('-');
+            conversationPairs.add(pairKey);
+            const prev = messageCountByPairKey.get(pairKey) || 0;
+            messageCountByPairKey.set(pairKey, Math.max(prev, c.messageCount || 0));
+          });
+      }
 
       // Deduplicate by unique user pairs - iterate through all matches and only keep first occurrence of each pair
       const seenPairs = new Map<string, any>(); // pairKey -> pairing object
@@ -6161,6 +6215,7 @@ export class AdminService {
           
           // Check if this pair is engaged
           const isEngaged = conversationPairs.has(pairKey);
+          const messageCount = messageCountByPairKey.get(pairKey) || 0;
           
           seenPairs.set(pairKey, {
             ...match,
@@ -6169,6 +6224,7 @@ export class AdminService {
             userId: userId,
             matchedUserId: matchedUserId,
             isEngaged,
+            messageCount,
           });
         } else {
           devLog(`[AdminService] Skipping duplicate pair ${pairKey} (users ${userId} and ${matchedUserId})`);
@@ -6313,8 +6369,43 @@ export class AdminService {
         devLog(`[AdminService] 🔗 Filtered ${matches.length} channel pairing matches: ${skippedInvalid} invalid dates, ${skippedOutOfRange} out of range`);
       }
 
-      // Get conversation pairs for engagement calculation
       const conversationPairs = await this.getConversationPairs(communityId);
+      const firebase = useFirebase();
+      const hasFirebaseUser = !!firebase.auth?.currentUser;
+      let groupEngagedByDate: Map<string, number> | null = null;
+      if (!hasFirebaseUser) {
+        const channelConvos = await this.getConversationsStartedCached(communityId, startDate, endDate);
+        const convos = (channelConvos?.conversations ?? []).filter(
+          (c: ConversationStarted) => (c as ConversationStarted).conversationType === 'channel_pairing'
+        );
+        const toDateStr = (createdAt: string) => {
+          const d = new Date(createdAt);
+          return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+        };
+        groupEngagedByDate = new Map<string, number>();
+        for (const [dateStr, dateMatches] of matchesByDate.entries()) {
+          const convosOnDate = convos.filter((c: ConversationStarted) => toDateStr(c.createdAt) === dateStr);
+          const convParticipantSetsOnDate = convosOnDate.map((c: ConversationStarted) => new Set(this.parseParticipantIds(c.participants)));
+          const groupMap = new Map<number | string, Set<number>>();
+          for (const match of dateMatches) {
+            const groupId = match.groupId ?? match.group_id ?? (match.matchIndicesId && match.matchIndicesId !== 0 ? match.matchIndicesId : null);
+            const uid = match.userId ?? match.user_id;
+            const mid = match.matchedUserId ?? match.matched_user_id;
+            const key = groupId ?? `single-${uid}-${mid}`;
+            if (!groupMap.has(key)) groupMap.set(key, new Set<number>());
+            const g = groupMap.get(key)!;
+            if (uid) g.add(Number(uid));
+            if (mid) g.add(Number(mid));
+          }
+          let engaged = 0;
+          for (const groupUserIds of groupMap.values()) {
+            const userIds = Array.from(groupUserIds);
+            const hasEngaged = convParticipantSetsOnDate.some((convIds) => userIds.filter((id) => convIds.has(id)).length >= 2);
+            if (hasEngaged) engaged++;
+          }
+          groupEngagedByDate.set(dateStr, engaged);
+        }
+      }
 
       // Build result array with stats for each date
       const result: Array<{
@@ -6352,66 +6443,54 @@ export class AdminService {
         // If all matches have the same channel name, use it; otherwise null
         const channelName = channelNames.size === 1 ? Array.from(channelNames)[0] : null;
 
-        // Count unique user pairs (same logic as getChannelPairingPairings)
-        // Deduplicate by unique user pairs - iterate through all matches and only keep first occurrence of each pair
-        const uniquePairs = new Set<string>(); // Set of pair keys
-        const pairEngagement = new Map<string, boolean>(); // pairKey -> isEngaged
-        
-        let skippedWrongCommunity = 0;
-        
-        // First, filter by communityId to ensure we only process matches for this community
-        const communityFilteredMatches = dateMatches.filter((match) => {
-          const matchCommunityId = match.communityId || match.community_id;
-          if (matchCommunityId && matchCommunityId !== communityId) {
-            skippedWrongCommunity++;
-            return false;
+        let totalPairings: number;
+        let engagedCount: number;
+        if (!hasFirebaseUser && groupEngagedByDate) {
+          const groupMap = new Map<number | string, Set<number>>();
+          for (const match of dateMatches) {
+            const matchCommunityId = match.communityId || match.community_id;
+            if (matchCommunityId && matchCommunityId !== communityId) continue;
+            const groupId = match.groupId ?? match.group_id ?? (match.matchIndicesId && match.matchIndicesId !== 0 ? match.matchIndicesId : null);
+            const uid = match.userId ?? match.user_id;
+            const mid = match.matchedUserId ?? match.matched_user_id;
+            const key = groupId ?? `single-${uid}-${mid}`;
+            if (!groupMap.has(key)) groupMap.set(key, new Set<number>());
+            const g = groupMap.get(key)!;
+            if (uid) g.add(Number(uid));
+            if (mid) g.add(Number(mid));
           }
-          return true;
-        });
-        
-        if (skippedWrongCommunity > 0) {
-          console.warn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} channel pairing matches with wrong communityId (expected ${communityId}) for date ${dateStr}`);
+          totalPairings = groupMap.size;
+          engagedCount = groupEngagedByDate.get(dateStr) ?? 0;
+        } else {
+          const uniquePairs = new Set<string>();
+          const pairEngagement = new Map<string, boolean>();
+          const communityFilteredMatches = dateMatches.filter((match) => {
+            const matchCommunityId = match.communityId || match.community_id;
+            if (matchCommunityId && matchCommunityId !== communityId) return false;
+            return true;
+          });
+          for (const match of communityFilteredMatches) {
+            const userId = match.userId || match.user_id;
+            const matchedUserId = match.matchedUserId || match.matched_user_id;
+            if (!userId || !matchedUserId) continue;
+            const pairKey = [userId, matchedUserId].sort((a, b) => a - b).join('-');
+            if (!uniquePairs.has(pairKey)) {
+              uniquePairs.add(pairKey);
+              pairEngagement.set(pairKey, conversationPairs.has(pairKey));
+            }
+          }
+          totalPairings = uniquePairs.size;
+          engagedCount = Array.from(pairEngagement.values()).filter(Boolean).length;
         }
-        
-        devLog(`[AdminService] After community filter for ${dateStr}: ${communityFilteredMatches.length} matches (from ${dateMatches.length} total)`);
-        
-        for (const match of communityFilteredMatches) {
-          const userId = match.userId || match.user_id;
-          const matchedUserId = match.matchedUserId || match.matched_user_id;
-          
-          if (!userId || !matchedUserId) {
-            continue;
-          }
-          
-          // Create normalized pair key (sorted IDs to handle A-B and B-A as same pair)
-          const pairKey = [userId, matchedUserId].sort((a, b) => a - b).join('-');
-          
-          // Only count each unique pair once
-          if (!uniquePairs.has(pairKey)) {
-            uniquePairs.add(pairKey);
-            
-            // Check if this pair is engaged
-            const isEngaged = conversationPairs.has(pairKey);
-            pairEngagement.set(pairKey, isEngaged);
-          }
-        }
-        
 
-        // Count engaged pairs
-        const engagedCount = Array.from(pairEngagement.values()).filter(engaged => engaged).length;
-
-        const engagementRate = uniquePairs.size > 0 
-          ? (engagedCount / uniquePairs.size) * 100 
-          : 0;
-
-
+        const engagementRate = totalPairings > 0 ? (engagedCount / totalPairings) * 100 : 0;
         result.push({
           date: dateStr,
           dateDisplay,
-          channelName: channelName, // Add channel name to result
-          totalPairings: uniquePairs.size, // Count unique user pairs (matches detail view)
+          channelName,
+          totalPairings,
           engagedPairings: engagedCount,
-          engagementRate: Math.round(engagementRate * 10) / 10, // Round to 1 decimal place
+          engagementRate: Math.round(engagementRate * 10) / 10,
         });
       }
 
@@ -6429,6 +6508,129 @@ export class AdminService {
       return result;
     } catch (error: any) {
       console.error('[AdminService] Error fetching channel pairings by date:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Channel pairing group with engaged vs unresponsive members (for 2-, 3-, or 5-way pairings).
+   * A group counts as "engaged" when 2+ members participated in a conversation.
+   */
+  async getChannelPairingGroupsForDate(
+    communityId: number,
+    date: string,
+    startDate?: string,
+    endDate?: string
+  ): Promise<Array<{
+    groupId: number | null;
+    channelName: string | null;
+    userIds: number[];
+    engagedUserIds: number[];
+    unresponsiveUserIds: number[];
+    isEngaged: boolean;
+    messageCount: number;
+    members: Array<{ userId: number; displayName: string; isEngaged: boolean }>;
+  }>> {
+    try {
+      const matches = await this.getMatchesForCommunity(communityId, startDate, endDate, 'channel_pairing');
+      if (!matches || matches.length === 0) return [];
+
+      const targetDateStr = date.includes('T') ? date.split('T')[0] : date;
+      const dateMatches = matches.filter((match) => {
+        const createdAt = match.createdAt || match.created_at;
+        if (!createdAt) return false;
+        const d = typeof createdAt === 'string' ? new Date(createdAt) : (createdAt.toDate ? createdAt.toDate() : new Date((createdAt as { seconds: number }).seconds * 1000));
+        return d.toISOString().split('T')[0] === targetDateStr;
+      });
+      if (dateMatches.length === 0) return [];
+
+      // Build groups by groupId: { groupId, userIds: Set<number>, channelName }
+      const groupMap = new Map<number | string, { userIds: Set<number>; channelName: string | null }>();
+      for (const match of dateMatches) {
+        const groupId = match.groupId ?? match.group_id ?? (match.matchIndicesId && match.matchIndicesId !== 0 ? match.matchIndicesId : null);
+        const uid = match.userId ?? match.user_id;
+        const mid = match.matchedUserId ?? match.matched_user_id;
+        const key = groupId ?? `single-${uid}-${mid}`;
+        if (!groupMap.has(key)) {
+          groupMap.set(key, {
+            userIds: new Set<number>(),
+            channelName: match.channelName ?? match.channel_name ?? match.slackChannelName ?? match.slack_channel_name ?? match.channel?.name ?? match.slackChannel?.name ?? null,
+          });
+        }
+        const g = groupMap.get(key)!;
+        if (uid) g.userIds.add(Number(uid));
+        if (mid) g.userIds.add(Number(mid));
+      }
+
+      const channelConvos = await this.getConversationsStartedCached(communityId, startDate, endDate);
+      const allConvos = (channelConvos?.conversations ?? []).filter(
+        (c: ConversationStarted) => (c as ConversationStarted).conversationType === 'channel_pairing'
+      );
+      const toConvDateStr = (createdAt: string) => {
+        const d = new Date(createdAt);
+        return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+      };
+      const convos = allConvos.filter((c: ConversationStarted) => toConvDateStr(c.createdAt) === targetDateStr);
+      const convParticipantSets = convos.map((c: ConversationStarted) => ({
+        ids: new Set(this.parseParticipantIds(c.participants)),
+        messageCount: c.messageCount ?? 0,
+      }));
+
+      const groupsOut: Array<{
+        groupId: number | null;
+        channelName: string | null;
+        userIds: number[];
+        engagedUserIds: number[];
+        unresponsiveUserIds: number[];
+        isEngaged: boolean;
+        messageCount: number;
+      }> = [];
+
+      for (const [key, { userIds: groupUserIds, channelName }] of groupMap.entries()) {
+        const userIds = Array.from(groupUserIds);
+        const engagedSet = new Set<number>();
+        let messageCount = 0;
+        for (const { ids: convIds, messageCount: mc } of convParticipantSets) {
+          const overlap = userIds.filter((id) => convIds.has(id));
+          if (overlap.length >= 2) {
+            overlap.forEach((id) => engagedSet.add(id));
+            messageCount = Math.max(messageCount, mc);
+          }
+        }
+        const engagedUserIds = Array.from(engagedSet);
+        const unresponsiveUserIds = userIds.filter((id) => !engagedSet.has(id));
+        const isEngaged = engagedUserIds.length >= 2;
+        groupsOut.push({
+          groupId: typeof key === 'number' ? key : null,
+          channelName,
+          userIds,
+          engagedUserIds,
+          unresponsiveUserIds,
+          isEngaged,
+          messageCount,
+        });
+      }
+
+      const allUserIds = new Set<number>();
+      groupsOut.forEach((g) => g.userIds.forEach((id) => allUserIds.add(id)));
+      const { userService } = await import('./user.service');
+      const usersMap = await userService.getUsersByIds(Array.from(allUserIds));
+      const displayName = (uid: number) => {
+        const u = usersMap.get(uid);
+        if (!u) return `User ${uid}`;
+        return u.fullName || [u.fname, u.lname].filter(Boolean).join(' ') || `User ${uid}`;
+      };
+
+      return groupsOut.map((g) => ({
+        ...g,
+        members: g.userIds.map((userId) => ({
+          userId,
+          displayName: displayName(userId),
+          isEngaged: g.engagedUserIds.includes(userId),
+        })),
+      }));
+    } catch (error: any) {
+      console.error('[AdminService] Error fetching channel pairing groups:', error);
       return [];
     }
   }

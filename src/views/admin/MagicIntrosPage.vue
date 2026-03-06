@@ -110,7 +110,7 @@
                 </p>
                 <p v-if="pairing.isEngaged" class="engaged-badge">
                   <ion-icon :icon="chatbubblesOutline"></ion-icon>
-                  Conversation started
+                  Conversation started<span v-if="pairing.messageCount"> ({{ pairing.messageCount }} msg{{ pairing.messageCount === 1 ? '' : 's' }})</span>
                 </p>
               </ion-label>
             </ion-item>
