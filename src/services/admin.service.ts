@@ -169,6 +169,9 @@ export class AdminService {
   }
 
   private parseParticipantIds(participants: unknown): number[] {
+    if (Array.isArray(participants)) {
+      return participants.map((p) => (typeof p === 'number' ? p : Number(p))).filter((n) => Number.isFinite(n));
+    }
     if (typeof participants !== 'string') return [];
     const matches = participants.match(/\d+/g);
     if (!matches) return [];
@@ -2055,14 +2058,33 @@ export class AdminService {
         backendPromise,
         calculatedPromise,
       ]);
-      
+
+      let result: UserStats | null = null;
       if (backendStats.status === 'fulfilled' && backendStats.value) {
-        // Note: calculatedStats should still have run in parallel, so matches fetch should have happened
-        return backendStats.value;
+        result = backendStats.value;
+      } else if (calculatedStats.status === 'fulfilled' && calculatedStats.value) {
+        result = calculatedStats.value;
       }
 
-      if (calculatedStats.status === 'fulfilled' && calculatedStats.value) {
-        return calculatedStats.value;
+      if (result) {
+        // Always merge Trova Opens (and related fields) from user-actions/slack-user-stats so the
+        // dashboard shows correct values when backend engagement endpoint omits them or when
+        // Slack-only users rely on slack-user-stats (openedTrova was broken when we skipped
+        // calculateUserActionsStats for non-Firebase users).
+        try {
+          const userActions = await this.getUserActionsStats(communityId, startDate, endDate);
+          if (userActions) {
+            if (typeof userActions.openedTrova === 'number') result.openedTrova = userActions.openedTrova;
+            if (typeof userActions.generalActions === 'number') result.generalActions = userActions.generalActions;
+            if (typeof userActions.spotlightsCreated === 'number') result.spotlightsCreated = userActions.spotlightsCreated;
+            if (typeof userActions.recWallsGiven === 'number') result.recWallsGiven = userActions.recWallsGiven;
+            if (typeof userActions.recWallsReceived === 'number') result.recWallsReceived = userActions.recWallsReceived;
+            if (typeof userActions.introsLedToConvos === 'number') result.introsLedToConvos = userActions.introsLedToConvos;
+          }
+        } catch (_) {
+          // Non-fatal: keep result as-is if user-actions fetch fails
+        }
+        return result;
       }
 
       return null;
@@ -2070,7 +2092,24 @@ export class AdminService {
       console.error('[AdminService] Error getting engagement stats:', error);
       // Fallback to calculated stats
       try {
-        return await this.calculateEngagementStatsFromData(communityId, startDate, endDate);
+        const result = await this.calculateEngagementStatsFromData(communityId, startDate, endDate);
+        if (result) {
+          try {
+            const userActions = await this.getUserActionsStats(communityId, startDate, endDate);
+            if (userActions) {
+              if (typeof userActions.openedTrova === 'number') result.openedTrova = userActions.openedTrova;
+              if (typeof userActions.generalActions === 'number') result.generalActions = userActions.generalActions;
+              if (typeof userActions.spotlightsCreated === 'number') result.spotlightsCreated = userActions.spotlightsCreated;
+              if (typeof userActions.recWallsGiven === 'number') result.recWallsGiven = userActions.recWallsGiven;
+              if (typeof userActions.recWallsReceived === 'number') result.recWallsReceived = userActions.recWallsReceived;
+              if (typeof userActions.introsLedToConvos === 'number') result.introsLedToConvos = userActions.introsLedToConvos;
+            }
+          } catch (_) {
+            // keep result as-is
+          }
+          return result;
+        }
+        return null;
       } catch (calcError) {
         console.error('[AdminService] Error calculating stats:', calcError);
         return null;
@@ -6173,26 +6212,28 @@ export class AdminService {
         return matchDateStr === targetDateStr;
       });
 
-      // Determine engagement without Firestore when Slack-only
-      const firebase = useFirebase();
-      const hasFirebaseUser = !!firebase.auth?.currentUser;
+      // Prefer API (conversations-started) for engagement so Slack-only and Firebase users both get
+      // per-pairing isEngaged; only fall back to Firestore when API returns no magic_intro convos.
       let conversationPairs: Set<string> = new Set<string>();
       const messageCountByPairKey = new Map<string, number>();
-      if (hasFirebaseUser) {
+      const conversations = await this.getConversationsStartedCached(communityId, startDate, endDate);
+      const convos = conversations?.conversations || [];
+      const magicIntroConvos = convos.filter((c) => {
+        const t = (c as any)?.conversationType ?? '';
+        return t === 'magic_intro' || t === 'trova_magic' || t === 'magic-intro';
+      });
+      magicIntroConvos.forEach((c) => {
+        const ids = this.parseParticipantIds(c.participants);
+        if (ids.length < 2) return;
+        const pairKey = ids.slice(0, 2).sort((a, b) => a - b).join('-');
+        conversationPairs.add(pairKey);
+        const prev = messageCountByPairKey.get(pairKey) || 0;
+        messageCountByPairKey.set(pairKey, Math.max(prev, c.messageCount || 0));
+      });
+      const firebase = useFirebase();
+      const hasFirebaseUser = !!firebase.auth?.currentUser;
+      if (conversationPairs.size === 0 && hasFirebaseUser) {
         conversationPairs = await this.getConversationPairs(communityId);
-      } else {
-        const conversations = await this.getConversationsStartedCached(communityId, startDate, endDate);
-        const convos = conversations?.conversations || [];
-        convos
-          .filter((c) => c?.conversationType === 'magic_intro')
-          .forEach((c) => {
-            const ids = this.parseParticipantIds(c.participants);
-            if (ids.length < 2) return;
-            const pairKey = ids.slice(0, 2).sort((a, b) => a - b).join('-');
-            conversationPairs.add(pairKey);
-            const prev = messageCountByPairKey.get(pairKey) || 0;
-            messageCountByPairKey.set(pairKey, Math.max(prev, c.messageCount || 0));
-          });
       }
 
       // Deduplicate by unique user pairs - iterate through all matches and only keep first occurrence of each pair
