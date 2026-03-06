@@ -2656,6 +2656,7 @@ export class AdminService {
       { url: `/matches`, name: `/matches (middleware - user's session community)`, useHeader: true },
     ];
     
+    let stoppedDueTo401 = false;
     for (const endpoint of endpointsToTry) {
       try {
         devLog(`[AdminService] 📡 Trying GET ${endpoint.name}...`);
@@ -2705,19 +2706,25 @@ export class AdminService {
         }
         return result;
       } catch (error: any) {
-        // 404 means endpoint doesn't exist, try next one
-        if (error.response?.status === 404) {
+        const status = error.response?.status;
+        if (status === 404) {
           devLog(`[AdminService] ⚠️ ${endpoint.name} returned 404, trying next endpoint...`);
           continue;
         }
-        // Other errors - log and try next
-        console.warn(`[AdminService] ⚠️ ${endpoint.name} failed:`, error.response?.status || error.message);
+        // 401: auth failed (e.g. Slack link); session-based fallback endpoints will also 401, so stop
+        if (status === 401) {
+          stoppedDueTo401 = true;
+          devLog(`[AdminService] ⚠️ ${endpoint.name} returned 401 (auth), skipping remaining endpoints`);
+          break;
+        }
+        console.warn(`[AdminService] ⚠️ ${endpoint.name} failed:`, status || error.message);
         continue;
       }
     }
-    
-    // If all endpoints failed or returned 0, return empty array
-    console.warn('[AdminService] ❌ All match endpoints failed or returned 0 matches');
+
+    if (!stoppedDueTo401) {
+      console.warn('[AdminService] ❌ All match endpoints failed or returned 0 matches');
+    }
     const emptyResult: any[] = [];
     if (cacheKey) {
       this.matchesCache.set(cacheKey, { data: emptyResult, timestamp: Date.now() });
@@ -5300,12 +5307,13 @@ export class AdminService {
       }
 
       // 4. Get users from messages (Firebase) - use conversation updatedAt for activity
-      // Use cached conversation IDs to avoid redundant queries
+      // Skip when no Firebase user (e.g. Slack-only) to avoid Firestore permission errors
       try {
         const firebase = useFirebase();
+        const hasFirebaseUser = !!firebase.auth?.currentUser;
         const firestore = firebase.firestore;
-        
-        if (firestore) {
+
+        if (firestore && hasFirebaseUser) {
           const conversationIds = await this.getConversationsForCommunity(communityId);
           devLog(`[AdminService] 👥 Found ${conversationIds.size} conversations for active user calculation`);
           
@@ -5346,8 +5354,13 @@ export class AdminService {
           }
         }
         devLog(`[AdminService] 👥 After messages: ${dailyActiveUsers.size} daily, ${weeklyActiveUsers.size} weekly`);
-      } catch (error) {
-        console.warn('[AdminService] Could not get messages for active users:', error);
+      } catch (error: any) {
+        const isPermissionError = error?.code === 'permission-denied' || error?.message?.includes('insufficient permissions');
+        if (isPermissionError) {
+          devLog('[AdminService] Skipping message-based active users (Firestore not available for this session)');
+        } else {
+          console.warn('[AdminService] Could not get messages for active users:', error);
+        }
       }
 
       const stats = {
