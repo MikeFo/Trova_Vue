@@ -2881,9 +2881,13 @@ export class AdminService {
       }
     }
 
-    // If all endpoints fail, try to calculate from available data
-    const calculatedStats = await this.calculateUserActionsStats(communityId, startDate, endDate);
-    
+    // If all endpoints fail, try to calculate from available data.
+    // Skip events/user for Slack-only users (no Firebase) — that endpoint returns 401 for console.
+    let calculatedStats: Partial<UserStats> | null = null;
+    if (useFirebase().auth?.currentUser) {
+      calculatedStats = await this.calculateUserActionsStats(communityId, startDate, endDate);
+    }
+
     // Calculate introsLedToConvos from matches only if backend didn't provide it
     // Backend now provides accurate per-user introsLedToConvos, so prefer that
     if (calculatedStats) {

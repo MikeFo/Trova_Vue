@@ -7,6 +7,8 @@
           <ion-label class="time-period-label-inline">Time Period</ion-label>
           <ion-select v-model="selectedPeriod" @ionChange="onPeriodChange" class="time-period-select-inline">
             <ion-select-option value="all-time">All Time</ion-select-option>
+            <ion-select-option value="2-years">Past 2 Years</ion-select-option>
+            <ion-select-option value="18-months">Past 18 Months</ion-select-option>
             <ion-select-option value="12-months">Past 12 Months</ion-select-option>
             <ion-select-option value="6-months">Past 6 Months</ion-select-option>
             <ion-select-option value="3-months">Past 3 Months</ion-select-option>
@@ -709,7 +711,7 @@ const isLoading = ref(false);
 const stats = ref<Partial<UserStats> | null>(null);
 const skillsStats = ref<Array<{ name: string; count: number }>>([]);
 const isSlackCommunity = ref(false); // TODO: Determine from community data
-const selectedPeriod = ref<'all-time' | '12-months' | '6-months' | '3-months' | '1-month'>('12-months'); // Default to past 12 months
+const selectedPeriod = ref<'all-time' | '2-years' | '18-months' | '12-months' | '6-months' | '3-months' | '1-month'>('6-months'); // Default to past 6 months
 const isProfileModalOpen = ref(false);
 const isLoadingProfiles = ref(false);
 const profileRows = ref<Array<{
@@ -1643,8 +1645,14 @@ function getDateRangeForPeriod(period: string): { start: string | undefined; end
   
   // Start date: N months ago from today
   // Calculate months to subtract
-  let monthsToSubtract = 12;
+  let monthsToSubtract = 6;
   switch (period) {
+    case '2-years':
+      monthsToSubtract = 24;
+      break;
+    case '18-months':
+      monthsToSubtract = 18;
+      break;
     case '12-months':
       monthsToSubtract = 12;
       break;
@@ -1658,7 +1666,7 @@ function getDateRangeForPeriod(period: string): { start: string | undefined; end
       monthsToSubtract = 1;
       break;
     default:
-      monthsToSubtract = 12;
+      monthsToSubtract = 6;
   }
   
   // Get current UTC date components
