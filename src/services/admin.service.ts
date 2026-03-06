@@ -5953,7 +5953,7 @@ export class AdminService {
         devLog(`[AdminService] ✨ Filtered ${matches.length} matches: ${skippedInvalid} invalid dates, ${skippedOutOfRange} out of range`);
       }
 
-      // Get conversation pairs for engagement calculation
+      // Get conversation pairs for engagement calculation (may be empty for Slack-only)
       const conversationPairs = await this.getConversationPairs(communityId);
 
       // Build result array with stats for each date
@@ -5964,6 +5964,10 @@ export class AdminService {
         engagedPairings: number;
         engagementRate: number;
       }> = [];
+
+      // First pass: compute unique pairs and (when available) precise engagement from conversationPairs
+      // We also accumulate total unique pairs so we can approximate engagement per date when Firestore is unavailable.
+      let totalUniquePairsAcrossDates = 0;
 
       for (const [dateStr, dateMatches] of matchesByDate.entries()) {
         const date = new Date(dateStr);
@@ -5977,7 +5981,7 @@ export class AdminService {
         // Deduplicate by unique user pairs - iterate through all matches and only keep first occurrence of each pair
         const uniquePairs = new Set<string>(); // Set of pair keys
         const pairEngagement = new Map<string, boolean>(); // pairKey -> isEngaged
-        
+
         for (const match of dateMatches) {
           const userId = match.userId || match.user_id;
           const matchedUserId = match.matchedUserId || match.matched_user_id;
@@ -5992,29 +5996,59 @@ export class AdminService {
           // Only count each unique pair once
           if (!uniquePairs.has(pairKey)) {
             uniquePairs.add(pairKey);
-            
-            // Check if this pair is engaged
+
+            // Check if this pair is engaged (when conversationPairs is available)
             const isEngaged = conversationPairs.has(pairKey);
             pairEngagement.set(pairKey, isEngaged);
           }
         }
 
-        // Count engaged pairs
+        const totalPairsForDate = uniquePairs.size;
+        totalUniquePairsAcrossDates += totalPairsForDate;
+
+        // Count engaged pairs from conversationPairs (may be 0 when Firestore not available)
         const engagedCount = Array.from(pairEngagement.values()).filter(engaged => engaged).length;
 
-        const engagementRate = uniquePairs.size > 0 
-          ? (engagedCount / uniquePairs.size) * 100 
+        const engagementRate = totalPairsForDate > 0 
+          ? (engagedCount / totalPairsForDate) * 100 
           : 0;
 
-        devLog(`[AdminService] Date ${dateStr}: ${uniquePairs.size} unique pairs, ${engagedCount} engaged (from ${dateMatches.length} matches)`);
+        devLog(`[AdminService] Date ${dateStr}: ${totalPairsForDate} unique pairs, ${engagedCount} engaged (from ${dateMatches.length} matches)`);
 
         result.push({
           date: dateStr,
           dateDisplay,
-          totalPairings: uniquePairs.size, // Count unique user pairs (matches detail view)
+          totalPairings: totalPairsForDate, // Count unique user pairs (matches detail view)
           engagedPairings: engagedCount,
           engagementRate: Math.round(engagementRate * 10) / 10, // Round to 1 decimal place
         });
+      }
+
+      // If we have no conversation-based engagement (e.g. Slack-only, Firestore unavailable)
+      // but we do have an aggregate engaged count from the backend, distribute it across dates
+      // proportionally to their totalPairings so drill-down is consistent with the main card.
+      const hasAnyEngagementFromConversations = result.some((r) => r.engagedPairings > 0);
+      if (!hasAnyEngagementFromConversations && totalUniquePairsAcrossDates > 0) {
+        try {
+          const aggregateEngaged = await this.getTrovaMagicEngagedFromApi(communityId, startDate, endDate);
+          if (aggregateEngaged && aggregateEngaged > 0) {
+            let remaining = aggregateEngaged;
+            const lastIndex = result.length - 1;
+            result.forEach((row, index) => {
+              const share = index === lastIndex
+                ? remaining
+                : Math.round((aggregateEngaged * row.totalPairings) / totalUniquePairsAcrossDates);
+              const clampedShare = Math.max(0, Math.min(share, row.totalPairings));
+              row.engagedPairings = clampedShare;
+              row.engagementRate = row.totalPairings > 0
+                ? Math.round(((clampedShare / row.totalPairings) * 100) * 10) / 10
+                : 0;
+              remaining -= clampedShare;
+            });
+          }
+        } catch (error) {
+          devLog('[AdminService] Failed to distribute Trova Magic engagement across dates:', error);
+        }
       }
 
       // Sort by date descending (most recent first)
