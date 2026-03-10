@@ -73,6 +73,7 @@
           <div v-if="activeTab === 'stats'" class="tab-panel">
             <UserStatsSection
               :community-id="selectedCommunityId"
+              :community-name="currentCommunityName"
               @open-magic-intros="openMagicIntrosModal"
               @open-channel-pairings="openChannelPairingsModal"
               @open-mentor-mentee-matches="openMentorMenteeMatchesModal"
@@ -215,6 +216,14 @@ const isSuperAdminUser = ref(false);
 const activeTab = ref('stats');
 const managedCommunities = ref<Community[]>([]);
 const selectedCommunityId = ref<number | null>(null);
+
+const currentCommunityName = computed<string | null>(() => {
+  if (selectedCommunityId.value != null) {
+    const match = managedCommunities.value.find(c => c.id === selectedCommunityId.value);
+    if (match) return match.name;
+  }
+  return communityStore.currentCommunity?.name ?? null;
+});
 
 // Magic Intros Modal state
 const isMagicIntrosModalOpen = ref(false);

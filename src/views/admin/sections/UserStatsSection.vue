@@ -1,7 +1,14 @@
 <template>
   <div class="user-stats-section">
     <div class="section-header">
-      <h2 class="section-title">Engagement Dashboard</h2>
+      <h2 class="section-title">
+        <span v-if="props.communityName && props.communityName.trim().length">
+          {{ props.communityName }} – Engagement Dashboard
+        </span>
+        <span v-else>
+          Engagement Dashboard
+        </span>
+      </h2>
       <div class="header-actions">
         <div class="time-period-wrapper">
           <ion-label class="time-period-label-inline">Time Period</ion-label>
@@ -37,7 +44,6 @@
           <div
             class="primary-metric-card clickable"
             @click="openProfilesList"
-            :title="metricTooltips.profileCompletion"
           >
             <div class="metric-icon">
               <ion-icon :icon="checkmarkCircleOutline"></ion-icon>
@@ -49,20 +55,33 @@
                 </span>
                 <span v-else>{{ formatPercentage(stats?.profileCompletionRate) }}</span>
               </div>
-              <div class="metric-label">Profile Completion (Completed / Eligible)</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label">Profile Completion (Completed / Eligible)</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.profileCompletion"
+                ></ion-icon>
+              </div>
             </div>
           </div>
           <div
             class="primary-metric-card clickable"
             @click="navigateToConnections"
-            :title="metricTooltips.introductionsCreated"
           >
             <div class="metric-icon">
               <ion-icon :icon="peopleOutline"></ion-icon>
             </div>
             <div class="metric-content">
               <div class="metric-value">{{ formatNumber(stats?.connectionsMade || 0) }}</div>
-              <div class="metric-label">Introductions Created</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label">Introductions Created</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.introductionsCreated"
+                ></ion-icon>
+              </div>
               <div v-if="stats?.connectionsMadeTrend" class="metric-trend" :class="getTrendClass(stats.connectionsMadeTrend)">
                 <ion-icon :icon="stats.connectionsMadeTrend > 0 ? trendingUpOutline : trendingDownOutline"></ion-icon>
                 <span>{{ Math.abs(stats.connectionsMadeTrend).toFixed(1) }}%</span>
@@ -72,14 +91,20 @@
           <div
             class="primary-metric-card primary-metric-card-highlight clickable"
             @click="openConversationsStartedList"
-            :title="metricTooltips.messagesExchanged"
           >
             <div class="metric-icon">
               <ion-icon :icon="chatbubblesOutline"></ion-icon>
             </div>
             <div class="metric-content">
               <div class="metric-value">{{ formatNumber(stats?.trovaChatsStarted || 0) }}</div>
-              <div class="metric-label">Messages Exchanged</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label">Messages Exchanged</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.messagesExchanged"
+                ></ion-icon>
+              </div>
               <div v-if="stats?.trovaChatsStartedTrend" class="metric-trend" :class="getTrendClass(stats.trovaChatsStartedTrend)">
                 <ion-icon :icon="stats.trovaChatsStartedTrend > 0 ? trendingUpOutline : trendingDownOutline"></ion-icon>
                 <span>{{ Math.abs(stats.trovaChatsStartedTrend).toFixed(1) }}%</span>
@@ -97,55 +122,79 @@
             class="engagement-metric-card clickable"
             v-if="stats?.openedTrova !== undefined"
             @click="openOpenedTrovaList"
-            :title="metricTooltips.trovaOpens"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="openOutline"></ion-icon>
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">{{ formatNumber(stats.openedTrova) }}</div>
-              <div class="metric-label-small">Trova Opens</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Trova Opens</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.trovaOpens"
+                ></ion-icon>
+              </div>
             </div>
           </div>
           <div
             class="engagement-metric-card"
             v-if="stats?.profileScore !== undefined"
-            :title="metricTooltips.avgProfileScore"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="starOutline"></ion-icon>
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">{{ formatNumber(stats.profileScore, 1) }}</div>
-              <div class="metric-label-small">Avg Profile Score</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Avg Profile Score</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.avgProfileScore"
+                ></ion-icon>
+              </div>
             </div>
           </div>
           <div 
             class="engagement-metric-card clickable"
             v-if="stats?.userOnboardingIntros !== undefined && stats.userOnboardingIntros > 0"
             @click="openOnboardingIntrosList"
-            :title="metricTooltips.onboardingIntros"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="peopleOutline"></ion-icon>
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">{{ formatNumber(stats.userOnboardingIntros) }}</div>
-              <div class="metric-label-small">Automated Onboarding Introductions</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Automated Onboarding Introductions</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.onboardingIntros"
+                ></ion-icon>
+              </div>
             </div>
           </div>
           <div 
             class="engagement-metric-card clickable"
             v-if="stats?.selfIntroduced !== undefined"
             @click="openSelfIntroducedList"
-            :title="metricTooltips.selfIntroductions"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="starOutline"></ion-icon>
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">{{ formatNumber(stats.selfIntroduced) }}</div>
-              <div class="metric-label-small">Self-Introductions Posted</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Self-Introductions Posted</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.selfIntroductions"
+                ></ion-icon>
+              </div>
             </div>
           </div>
         </div>
@@ -159,7 +208,6 @@
             class="engagement-metric-card clickable" 
             v-if="stats?.trovaMagicEngagements !== undefined || stats?.trovaMagicMatches !== undefined"
             @click="navigateToMagicIntros"
-            :title="metricTooltips.magicIntros"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="sparklesOutline"></ion-icon>
@@ -174,14 +222,20 @@
                 </span>
                 <span v-else>{{ formatNumber(stats.trovaMagicEngagements || 0) }}</span>
               </div>
-              <div class="metric-label-small">Magic Intros (Engaged / Total)</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Magic Intros (Engaged / Total)</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.magicIntros"
+                ></ion-icon>
+              </div>
             </div>
           </div>
           <div 
             class="engagement-metric-card clickable" 
             v-if="stats?.channelPairingEngagements !== undefined || stats?.channelPairingMatches !== undefined"
             @click="navigateToChannelPairings"
-            :title="metricTooltips.channelPairings"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="linkOutline"></ion-icon>
@@ -196,14 +250,20 @@
                 </span>
                 <span v-else>{{ formatNumber(stats.channelPairingEngagements || 0) }}</span>
               </div>
-              <div class="metric-label-small">Channel Pairings (Engaged / Total)</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Channel Pairings (Engaged / Total)</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.channelPairings"
+                ></ion-icon>
+              </div>
             </div>
           </div>
           <div 
             class="engagement-metric-card clickable" 
             v-if="stats?.mentorMenteeEngagements !== undefined || stats?.mentorMenteeMatches !== undefined"
             @click="navigateToMentorMenteeMatches"
-            :title="metricTooltips.mentorMatches"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="schoolOutline"></ion-icon>
@@ -218,7 +278,14 @@
                 </span>
                 <span v-else>0</span>
               </div>
-              <div class="metric-label-small">Mentor Matches (Unique / Total)</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Mentor Matches (Unique / Total)</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.mentorMatches"
+                ></ion-icon>
+              </div>
             </div>
           </div>
         </div>
@@ -232,42 +299,60 @@
             class="engagement-metric-card clickable" 
             v-if="stats?.totalSkills !== undefined"
             @click="navigateToSkillsList"
-            :title="metricTooltips.skillsAdded"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="libraryOutline"></ion-icon>
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">{{ formatNumber(stats.totalSkills) }}</div>
-              <div class="metric-label-small">Skills Added to Profiles</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Skills Added to Profiles</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.skillsAdded"
+                ></ion-icon>
+              </div>
             </div>
           </div>
           <div 
             class="engagement-metric-card clickable" 
             v-if="stats?.usersCanMentor !== undefined"
             @click="navigateToMentorList('can')"
-            :title="metricTooltips.usersCanMentor"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="schoolOutline"></ion-icon>
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">{{ formatNumber(stats.usersCanMentor) }}</div>
-              <div class="metric-label-small">Users Available to Mentor</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Users Available to Mentor</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.usersCanMentor"
+                ></ion-icon>
+              </div>
             </div>
           </div>
           <div 
             class="engagement-metric-card clickable" 
             v-if="stats?.usersWantMentor !== undefined"
             @click="navigateToMentorList('want')"
-            :title="metricTooltips.usersWantMentor"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="bookOutline"></ion-icon>
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">{{ formatNumber(stats.usersWantMentor) }}</div>
-              <div class="metric-label-small">Users Seeking Mentorship</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Users Seeking Mentorship</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.usersWantMentor"
+                ></ion-icon>
+              </div>
             </div>
           </div>
         </div>
@@ -715,10 +800,12 @@ import {
   bookOutline,
   checkmarkDoneOutline,
   closeOutline,
+  informationCircleOutline,
 } from 'ionicons/icons';
 
 interface Props {
   communityId: number | null;
+  communityName?: string | null;
 }
 
 const props = defineProps<Props>();
@@ -2184,6 +2271,23 @@ async function exportStats() {
   font-size: 13px;
   color: #64748b;
   font-weight: 500;
+}
+
+.metric-label-with-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.metric-info-icon {
+  font-size: 16px;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
+.metric-info-icon:hover {
+  color: var(--color-primary);
 }
 
 .metric-trend {
