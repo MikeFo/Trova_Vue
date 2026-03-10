@@ -1143,6 +1143,12 @@ async function loadOpenedTrovaUsers() {
         // Only include users who have opened Trova at least once
         return user.openedCount > 0;
       });
+
+    // Sync aggregate on the main card from the same data so "Trova Opens" matches the drill-down
+    const totalOpened = openedTrovaRows.value.reduce((sum, r) => sum + r.openedCount, 0);
+    if (totalOpened > 0 && stats.value) {
+      stats.value.openedTrova = totalOpened;
+    }
   } catch (error: any) {
     console.error('[UserStatsSection] Failed to load opened Trova users:', error);
     openedTrovaError.value = error?.message || 'Failed to load user data. Please try again later.';

@@ -2067,19 +2067,19 @@ export class AdminService {
       }
 
       if (result) {
-        // Always merge Trova Opens (and related fields) from user-actions/slack-user-stats so the
-        // dashboard shows correct values when backend engagement endpoint omits them or when
-        // Slack-only users rely on slack-user-stats (openedTrova was broken when we skipped
-        // calculateUserActionsStats for non-Firebase users).
+        // Merge Trova Opens (and related fields) from user-actions/slack-user-stats when we get
+        // real data. Only overwrite when value > 0 so we don't replace with fallback zeros when
+        // getUserActionsStats fails (e.g. 500) while the drill-down's getSlackUserStats can still
+        // succeed when the user opens the modal.
         try {
           const userActions = await this.getUserActionsStats(communityId, startDate, endDate);
           if (userActions) {
-            if (typeof userActions.openedTrova === 'number') result.openedTrova = userActions.openedTrova;
-            if (typeof userActions.generalActions === 'number') result.generalActions = userActions.generalActions;
-            if (typeof userActions.spotlightsCreated === 'number') result.spotlightsCreated = userActions.spotlightsCreated;
-            if (typeof userActions.recWallsGiven === 'number') result.recWallsGiven = userActions.recWallsGiven;
-            if (typeof userActions.recWallsReceived === 'number') result.recWallsReceived = userActions.recWallsReceived;
-            if (typeof userActions.introsLedToConvos === 'number') result.introsLedToConvos = userActions.introsLedToConvos;
+            if (typeof userActions.openedTrova === 'number' && userActions.openedTrova > 0) result.openedTrova = userActions.openedTrova;
+            if (typeof userActions.generalActions === 'number' && userActions.generalActions > 0) result.generalActions = userActions.generalActions;
+            if (typeof userActions.spotlightsCreated === 'number' && userActions.spotlightsCreated > 0) result.spotlightsCreated = userActions.spotlightsCreated;
+            if (typeof userActions.recWallsGiven === 'number' && userActions.recWallsGiven > 0) result.recWallsGiven = userActions.recWallsGiven;
+            if (typeof userActions.recWallsReceived === 'number' && userActions.recWallsReceived > 0) result.recWallsReceived = userActions.recWallsReceived;
+            if (typeof userActions.introsLedToConvos === 'number' && userActions.introsLedToConvos > 0) result.introsLedToConvos = userActions.introsLedToConvos;
           }
         } catch (_) {
           // Non-fatal: keep result as-is if user-actions fetch fails
@@ -2097,12 +2097,12 @@ export class AdminService {
           try {
             const userActions = await this.getUserActionsStats(communityId, startDate, endDate);
             if (userActions) {
-              if (typeof userActions.openedTrova === 'number') result.openedTrova = userActions.openedTrova;
-              if (typeof userActions.generalActions === 'number') result.generalActions = userActions.generalActions;
-              if (typeof userActions.spotlightsCreated === 'number') result.spotlightsCreated = userActions.spotlightsCreated;
-              if (typeof userActions.recWallsGiven === 'number') result.recWallsGiven = userActions.recWallsGiven;
-              if (typeof userActions.recWallsReceived === 'number') result.recWallsReceived = userActions.recWallsReceived;
-              if (typeof userActions.introsLedToConvos === 'number') result.introsLedToConvos = userActions.introsLedToConvos;
+              if (typeof userActions.openedTrova === 'number' && userActions.openedTrova > 0) result.openedTrova = userActions.openedTrova;
+              if (typeof userActions.generalActions === 'number' && userActions.generalActions > 0) result.generalActions = userActions.generalActions;
+              if (typeof userActions.spotlightsCreated === 'number' && userActions.spotlightsCreated > 0) result.spotlightsCreated = userActions.spotlightsCreated;
+              if (typeof userActions.recWallsGiven === 'number' && userActions.recWallsGiven > 0) result.recWallsGiven = userActions.recWallsGiven;
+              if (typeof userActions.recWallsReceived === 'number' && userActions.recWallsReceived > 0) result.recWallsReceived = userActions.recWallsReceived;
+              if (typeof userActions.introsLedToConvos === 'number' && userActions.introsLedToConvos > 0) result.introsLedToConvos = userActions.introsLedToConvos;
             }
           } catch (_) {
             // keep result as-is
