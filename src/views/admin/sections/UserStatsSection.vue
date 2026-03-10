@@ -34,7 +34,11 @@
       <div class="primary-metrics-section">
         <h3 class="section-subtitle">Primary Metrics</h3>
         <div class="primary-metrics-grid">
-          <div class="primary-metric-card clickable" @click="openProfilesList">
+          <div
+            class="primary-metric-card clickable"
+            @click="openProfilesList"
+            :title="metricTooltips.profileCompletion"
+          >
             <div class="metric-icon">
               <ion-icon :icon="checkmarkCircleOutline"></ion-icon>
             </div>
@@ -48,9 +52,10 @@
               <div class="metric-label">Profile Completion (Completed / Eligible)</div>
             </div>
           </div>
-          <div 
-            class="primary-metric-card clickable" 
+          <div
+            class="primary-metric-card clickable"
             @click="navigateToConnections"
+            :title="metricTooltips.introductionsCreated"
           >
             <div class="metric-icon">
               <ion-icon :icon="peopleOutline"></ion-icon>
@@ -64,7 +69,11 @@
               </div>
             </div>
           </div>
-          <div class="primary-metric-card primary-metric-card-highlight clickable" @click="openConversationsStartedList">
+          <div
+            class="primary-metric-card primary-metric-card-highlight clickable"
+            @click="openConversationsStartedList"
+            :title="metricTooltips.messagesExchanged"
+          >
             <div class="metric-icon">
               <ion-icon :icon="chatbubblesOutline"></ion-icon>
             </div>
@@ -84,7 +93,12 @@
       <div v-if="hasUserActionsData" class="engagement-metrics-section">
         <h3 class="section-subtitle">General Actions</h3>
         <div class="engagement-metrics-grid">
-          <div class="engagement-metric-card clickable" v-if="stats?.openedTrova !== undefined" @click="openOpenedTrovaList">
+          <div
+            class="engagement-metric-card clickable"
+            v-if="stats?.openedTrova !== undefined"
+            @click="openOpenedTrovaList"
+            :title="metricTooltips.trovaOpens"
+          >
             <div class="metric-icon-small">
               <ion-icon :icon="openOutline"></ion-icon>
             </div>
@@ -93,7 +107,11 @@
               <div class="metric-label-small">Trova Opens</div>
             </div>
           </div>
-          <div class="engagement-metric-card" v-if="stats?.profileScore !== undefined">
+          <div
+            class="engagement-metric-card"
+            v-if="stats?.profileScore !== undefined"
+            :title="metricTooltips.avgProfileScore"
+          >
             <div class="metric-icon-small">
               <ion-icon :icon="starOutline"></ion-icon>
             </div>
@@ -106,6 +124,7 @@
             class="engagement-metric-card clickable"
             v-if="stats?.userOnboardingIntros !== undefined && stats.userOnboardingIntros > 0"
             @click="openOnboardingIntrosList"
+            :title="metricTooltips.onboardingIntros"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="peopleOutline"></ion-icon>
@@ -119,6 +138,7 @@
             class="engagement-metric-card clickable"
             v-if="stats?.selfIntroduced !== undefined"
             @click="openSelfIntroducedList"
+            :title="metricTooltips.selfIntroductions"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="starOutline"></ion-icon>
@@ -139,6 +159,7 @@
             class="engagement-metric-card clickable" 
             v-if="stats?.trovaMagicEngagements !== undefined || stats?.trovaMagicMatches !== undefined"
             @click="navigateToMagicIntros"
+            :title="metricTooltips.magicIntros"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="sparklesOutline"></ion-icon>
@@ -160,6 +181,7 @@
             class="engagement-metric-card clickable" 
             v-if="stats?.channelPairingEngagements !== undefined || stats?.channelPairingMatches !== undefined"
             @click="navigateToChannelPairings"
+            :title="metricTooltips.channelPairings"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="linkOutline"></ion-icon>
@@ -181,6 +203,7 @@
             class="engagement-metric-card clickable" 
             v-if="stats?.mentorMenteeEngagements !== undefined || stats?.mentorMenteeMatches !== undefined"
             @click="navigateToMentorMenteeMatches"
+            :title="metricTooltips.mentorMatches"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="schoolOutline"></ion-icon>
@@ -209,6 +232,7 @@
             class="engagement-metric-card clickable" 
             v-if="stats?.totalSkills !== undefined"
             @click="navigateToSkillsList"
+            :title="metricTooltips.skillsAdded"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="libraryOutline"></ion-icon>
@@ -222,6 +246,7 @@
             class="engagement-metric-card clickable" 
             v-if="stats?.usersCanMentor !== undefined"
             @click="navigateToMentorList('can')"
+            :title="metricTooltips.usersCanMentor"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="schoolOutline"></ion-icon>
@@ -235,6 +260,7 @@
             class="engagement-metric-card clickable" 
             v-if="stats?.usersWantMentor !== undefined"
             @click="navigateToMentorList('want')"
+            :title="metricTooltips.usersWantMentor"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="bookOutline"></ion-icon>
@@ -835,6 +861,35 @@ const hasChannelPairingData = computed(() => {
     stats.value.channelPairingUsers !== undefined
   );
 });
+
+const metricTooltips: Record<string, string> = {
+  profileCompletion:
+    'Share of users with key profile fields filled in (bio, interests, location, photo, etc.). Calculated from profile data for the selected time period.',
+  introductionsCreated:
+    'Unique introduction groups created (Trova Magic, Channel Pairing, Mentor/Mentee) in the selected time period. Groups are de-duplicated so the same set of people only counts once.',
+  messagesExchanged:
+    'Total messages sent across all Trova conversations (Magic Intros, Channel Pairings, Mentor Matches) in the selected time period, based on the conversations-started endpoint.',
+  trovaOpens:
+    'Total times users opened the Trova home experience in the selected time period, aggregated from the slack-user-stats “homepage views / Trova opens” column.',
+  avgProfileScore:
+    'Average profile completeness score across users (0–100), based on how many core profile fields each user has filled out.',
+  onboardingIntros:
+    'Automated welcome introductions sent to new users via the Weekly Introductions workflow during the selected time period.',
+  selfIntroductions:
+    'Number of self-introduction posts (intro messages users wrote about themselves) created in the selected time period.',
+  magicIntros:
+    'Magic Intro groups that led to at least one conversation vs. total Magic Intro groups created in the selected time period.',
+  channelPairings:
+    'Channel pairing groups (2–5 people) that had an engaged conversation (2+ members sending messages) vs. total channel pairing groups created.',
+  mentorMatches:
+    'Unique mentor/mentee pairs vs. total mentor sessions created in the selected time period.',
+  skillsAdded:
+    'Distinct skills that have been added to at least one profile in this community.',
+  usersCanMentor:
+    'Users who have indicated they are available to mentor, based on profile and skills settings.',
+  usersWantMentor:
+    'Users who have indicated they are seeking mentorship, based on profile and skills settings.',
+};
 
 function formatNumber(value: number | undefined | null, decimals: number = 0): string {
   if (value === undefined || value === null) return '0';
