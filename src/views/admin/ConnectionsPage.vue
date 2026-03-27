@@ -42,7 +42,7 @@
             <div class="stats-summary">
               <div class="stat-item">
                 <span class="stat-label">Total Connections:</span>
-                <span class="stat-value">{{ formatNumber(userConnections.length) }}</span>
+                <span class="stat-value-accent">{{ formatNumber(userConnections.length) }}</span>
               </div>
             </div>
           </div>
@@ -470,7 +470,12 @@ function formatMatchType(matchType: string | undefined | null): string {
 
 .stat-value {
   font-weight: 600;
-  color: #2d7a4e !important;
+  color: #0f172a;
+}
+
+.stat-value-accent {
+  font-weight: 700;
+  color: #2d7a4e;
 }
 
 .empty-state {

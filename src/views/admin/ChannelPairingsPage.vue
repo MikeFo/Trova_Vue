@@ -172,6 +172,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import { adminService } from '@/services/admin.service';
+import { formatIsoDateLabel } from '@/utils/iso-date';
 import {
   IonHeader,
   IonToolbar,
@@ -307,14 +308,7 @@ const filteredEngagementRate = computed(() => {
 
 const formattedSelectedDate = computed(() => {
   if (!selectedDate.value) return 'Channel Pairing Pairings';
-  // Parse date string (YYYY-MM-DD) and create date in UTC to avoid timezone shifts
-  const [year, month, day] = selectedDate.value.split('-').map(Number);
-  const d = new Date(Date.UTC(year, month - 1, day));
-  const dateStr = d.toLocaleDateString('en-US', { 
-    year: 'numeric', 
-    month: 'long', 
-    day: 'numeric' 
-  });
+  const dateStr = formatIsoDateLabel(selectedDate.value);
   
   // Get unique channel names from pairings
   const channelNames = new Set<string>();
@@ -337,24 +331,12 @@ const formattedSelectedDate = computed(() => {
 // Computed properties to ensure ISO format dates
 const startDateISO = computed(() => {
   if (!startDate.value) return undefined;
-  // If already ISO format, return as-is; otherwise convert
-  try {
-    const date = new Date(startDate.value);
-    return isNaN(date.getTime()) ? startDate.value : date.toISOString();
-  } catch {
-    return startDate.value;
-  }
+  return startDate.value;
 });
 
 const endDateISO = computed(() => {
   if (!endDate.value) return undefined;
-  // If already ISO format, return as-is; otherwise convert
-  try {
-    const date = new Date(endDate.value);
-    return isNaN(date.getTime()) ? endDate.value : date.toISOString();
-  } catch {
-    return endDate.value;
-  }
+  return endDate.value;
 });
 
 // Watch for modal opening and load data
@@ -379,12 +361,13 @@ async function loadChannelPairings() {
     const pairings = await adminService.getChannelPairingsByDate(
       communityId.value,
       startDateISO.value,
-      endDateISO.value
+      endDateISO.value,
+      { forceRefresh: true }
     );
     // Ensure all values are properly set
     channelPairings.value = pairings.map(pairing => ({
       date: pairing.date,
-      dateDisplay: pairing.dateDisplay,
+      dateDisplay: formatIsoDateLabel(pairing.date),
       channelName: pairing.channelName || null,
       totalPairings: typeof pairing.totalPairings === 'number' ? pairing.totalPairings : 0,
       engagedPairings: typeof pairing.engagedPairings === 'number' ? pairing.engagedPairings : 0,
@@ -425,7 +408,8 @@ async function loadPairings() {
       communityId.value,
       selectedDate.value,
       startDateISO.value,
-      endDateISO.value
+      endDateISO.value,
+      { forceRefresh: true }
     );
     groups.value = groupResults;
     pairings.value = []; // No longer used in detail view; groups are primary

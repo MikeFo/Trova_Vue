@@ -32,16 +32,25 @@
       <div v-else class="admin-console-container">
         <!-- Community Selector (if multiple communities OR super admin) -->
         <div v-if="managedCommunities.length > 1 || isSuperAdminUser" class="community-selector-section">
-          <ion-item>
+          <ion-item lines="none">
             <ion-label>
               <span v-if="isSuperAdminUser" style="font-weight: bold; color: #3880ff;">
                 Super Admin: Select Community
               </span>
               <span v-else>Select Community</span>
             </ion-label>
+          </ion-item>
+          <ion-item>
+            <ion-searchbar
+              v-model="communitySearch"
+              placeholder="Search communities"
+              inputmode="search"
+            ></ion-searchbar>
+          </ion-item>
+          <ion-item>
             <ion-select v-model="selectedCommunityId" @ionChange="onCommunityChange">
               <ion-select-option
-                v-for="community in managedCommunities"
+                v-for="community in filteredCommunities"
                 :key="community.id"
                 :value="community.id"
               >
@@ -216,6 +225,7 @@ const isSuperAdminUser = ref(false);
 const activeTab = ref('stats');
 const managedCommunities = ref<Community[]>([]);
 const selectedCommunityId = ref<number | null>(null);
+const communitySearch = ref('');
 
 const currentCommunityName = computed<string | null>(() => {
   if (selectedCommunityId.value != null) {
@@ -223,6 +233,14 @@ const currentCommunityName = computed<string | null>(() => {
     if (match) return match.name;
   }
   return communityStore.currentCommunity?.name ?? null;
+});
+
+const filteredCommunities = computed(() => {
+  const term = communitySearch.value.trim().toLowerCase();
+  if (!term) return managedCommunities.value;
+  return managedCommunities.value.filter((c) =>
+    (c.name || '').toLowerCase().includes(term)
+  );
 });
 
 // Magic Intros Modal state
@@ -505,6 +523,8 @@ function onCommunityChange() {
 
 async function refreshData() {
   isLoading.value = true;
+  // Clear all stats-related caches so subsequent loads are fresh.
+  adminService.clearStatsCaches();
   await checkManagerAccess();
   isLoading.value = false;
 }
