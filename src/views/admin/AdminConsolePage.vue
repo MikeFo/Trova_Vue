@@ -31,33 +31,23 @@
 
       <div v-else class="admin-console-container">
         <!-- Community Selector (if multiple communities OR super admin) -->
-        <div v-if="managedCommunities.length > 1 || isSuperAdminUser" class="community-selector-section">
-          <ion-item lines="none">
-            <ion-label>
-              <span v-if="isSuperAdminUser" style="font-weight: bold; color: #3880ff;">
-                Super Admin: Select Community
-              </span>
-              <span v-else>Select Community</span>
-            </ion-label>
-          </ion-item>
-          <ion-item>
-            <ion-searchbar
-              v-model="communitySearch"
-              placeholder="Search communities"
-              inputmode="search"
-            ></ion-searchbar>
-          </ion-item>
-          <ion-item>
-            <ion-select v-model="selectedCommunityId" @ionChange="onCommunityChange">
-              <ion-select-option
-                v-for="community in filteredCommunities"
-                :key="community.id"
-                :value="community.id"
-              >
-                {{ community.name }}
-              </ion-select-option>
-            </ion-select>
-          </ion-item>
+        <div v-if="managedCommunities.length > 1 || isSuperAdminUser" class="community-picker">
+          <span v-if="isSuperAdminUser" class="picker-badge">Super Admin</span>
+          <ion-select
+            v-model="selectedCommunityId"
+            interface="popover"
+            placeholder="Select Community"
+            class="picker-select"
+            @ionChange="onCommunityChange"
+          >
+            <ion-select-option
+              v-for="community in filteredCommunities"
+              :key="community.id"
+              :value="community.id"
+            >
+              {{ community.name }}
+            </ion-select-option>
+          </ion-select>
         </div>
 
         <!-- Tabs Navigation -->
@@ -193,7 +183,6 @@ import {
   IonSegment,
   IonSegmentButton,
   IonLabel,
-  IonItem,
   IonSelect,
   IonSelectOption,
 } from '@ionic/vue';
@@ -202,6 +191,7 @@ import {
   refresh,
   lockClosedOutline,
 } from 'ionicons/icons';
+import { useFirebase } from '@/composables/useFirebase';
 import UserManagementSection from './sections/UserManagementSection.vue';
 import DataUploadSection from './sections/DataUploadSection.vue';
 import AnalyticsDashboardSection from './sections/AnalyticsDashboardSection.vue';
@@ -225,7 +215,6 @@ const isSuperAdminUser = ref(false);
 const activeTab = ref('stats');
 const managedCommunities = ref<Community[]>([]);
 const selectedCommunityId = ref<number | null>(null);
-const communitySearch = ref('');
 
 const currentCommunityName = computed<string | null>(() => {
   if (selectedCommunityId.value != null) {
@@ -235,13 +224,7 @@ const currentCommunityName = computed<string | null>(() => {
   return communityStore.currentCommunity?.name ?? null;
 });
 
-const filteredCommunities = computed(() => {
-  const term = communitySearch.value.trim().toLowerCase();
-  if (!term) return managedCommunities.value;
-  return managedCommunities.value.filter((c) =>
-    (c.name || '').toLowerCase().includes(term)
-  );
-});
+const filteredCommunities = computed(() => managedCommunities.value);
 
 // Magic Intros Modal state
 const isMagicIntrosModalOpen = ref(false);
@@ -341,6 +324,7 @@ async function checkManagerAccess() {
         secretIdToSend
       );
       isManager.value = !!result?.isManager;
+      isSuperAdminUser.value = !!(result as any)?.isSuperAdmin;
 
       if (isManager.value) {
         slackSessionService.setValidatedContext(urlSecretId, communityId, slackUserId);
@@ -394,10 +378,10 @@ async function checkManagerAccess() {
     return;
   }
 
-  isSuperAdminUser.value = adminService.isSuperAdmin(authUserId);
+  // Read super-admin flag from the backend-provided user object (DB-backed, no hardcoded IDs)
+  isSuperAdminUser.value = adminService.isSuperAdmin(authStore.user);
 
   if (!communityId) {
-    // Super admins without communityId will still be able to load managed communities below.
     if (!isSuperAdminUser.value) {
       isManager.value = false;
       isLoading.value = false;
@@ -405,10 +389,29 @@ async function checkManagerAccess() {
     }
   }
 
+  // Check if Firebase auth is actually available (token might be expired even if store has user data)
+  const firebase = useFirebase();
+  const hasFirebaseAuth = !!firebase.auth?.currentUser;
+
   try {
     if (isSuperAdminUser.value) {
       isManager.value = true;
-      await loadManagedCommunities();
+      // Only load all communities if we have a live Firebase session;
+      // otherwise fall back to the single community from Slack params.
+      if (hasFirebaseAuth) {
+        await loadManagedCommunities();
+      } else if (communityId) {
+        const { communityService } = await import('@/services/community.service');
+        let community = communityStore.getCommunityById(communityId);
+        if (!community) {
+          try { community = await communityService.getCommunityById(communityId); } catch {}
+        }
+        if (community) {
+          managedCommunities.value = [community];
+          communityStore.setCurrentCommunity(community);
+        }
+      }
+
       if (communityId) {
         selectedCommunityId.value = communityId;
       } else if (managedCommunities.value.length > 0) {
@@ -444,7 +447,9 @@ async function checkManagerAccess() {
         if (loadedCommunity) communityStore.setCurrentCommunity(loadedCommunity);
       }
 
-      await loadManagedCommunities();
+      if (hasFirebaseAuth) {
+        await loadManagedCommunities();
+      }
     } else {
       setTimeout(() => {
         router.push('/tabs/home');
@@ -653,12 +658,39 @@ onMounted(() => {
   padding: 16px;
 }
 
-.community-selector-section {
+.community-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   background: white;
-  border-radius: 12px;
-  padding: 16px;
+  border-radius: 10px;
+  padding: 4px 8px 4px 12px;
   margin-bottom: 16px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  border: 1px solid #e5e7eb;
+  max-width: 360px;
+}
+
+.picker-badge {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #fff;
+  background: var(--color-primary, #16a34a);
+  padding: 2px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.picker-select {
+  --padding-start: 4px;
+  --padding-end: 0;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a1a1a;
 }
 
 ion-segment {

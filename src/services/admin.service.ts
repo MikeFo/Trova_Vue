@@ -363,18 +363,12 @@ export class AdminService {
   }
 
   /**
-   * Check if user is a super admin
-   * Super admin IDs:
-   * Production: [4147, 3113, 4136, 14453]
-   * Non-production: [3434, 3296, 3422, 2920, 2583, 2935]
+   * Check if user is a super admin.
+   * Reads the `isSuperAdmin` flag set by the backend on the user object
+   * (from the `is_super_admin` DB column). No client-side ID lists.
    */
-  isSuperAdmin(userId: number): boolean {
-    const isProduction = environment.production;
-    const productionSuperAdmins = [4147, 3113, 4136, 14453];
-    const nonProductionSuperAdmins = [3434, 3296, 3422, 2920, 2583, 2935];
-    
-    const superAdminIds = isProduction ? productionSuperAdmins : nonProductionSuperAdmins;
-    return superAdminIds.includes(userId);
+  isSuperAdmin(user: { isSuperAdmin?: boolean } | null | undefined): boolean {
+    return !!user?.isSuperAdmin;
   }
 
   /**
