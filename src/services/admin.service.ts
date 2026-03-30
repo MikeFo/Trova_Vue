@@ -3540,6 +3540,51 @@ export class AdminService {
   }
 
   /**
+   * Introductions created: distinct Trova-created channels from user_match.
+   * Returns total count, breakdown by type, and participant details for drill-down.
+   */
+  async getIntroductionsCreatedStats(
+    communityId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<{
+    total: number;
+    breakdown: Record<string, number>;
+    groups: Array<{
+      channelId: string;
+      source: string;
+      createdAt: string;
+      participants: Array<{ userId: number; name: string; email: string }>;
+    }>;
+  } | null> {
+    try {
+      let url = `/communities/${communityId}/stats/introductions-created`;
+      const params = new URLSearchParams();
+      if (startDate) params.set('startDate', startDate);
+      if (endDate) params.set('endDate', endDate);
+      const qs = params.toString();
+      if (qs) url += `?${qs}`;
+
+      devLog(`[AdminService] Fetching introductions created: ${url}`);
+      const result = await apiService.get<{
+        total: number;
+        breakdown: Record<string, number>;
+        groups: Array<{
+          channelId: string;
+          source: string;
+          createdAt: string;
+          participants: Array<{ userId: number; name: string; email: string }>;
+        }>;
+      }>(url);
+      devLog(`[AdminService] Introductions created: ${result.total}`, result.breakdown);
+      return result;
+    } catch (error) {
+      console.warn('[AdminService] Introductions created endpoint failed:', error);
+      return null;
+    }
+  }
+
+  /**
    * Messages exchanged in Trova-created channels only (user_match-based).
    * Date filtering applies to messages, not channel creation.
    */

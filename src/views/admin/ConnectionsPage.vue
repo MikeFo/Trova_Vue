@@ -297,12 +297,42 @@ async function loadUsers() {
   selectedUserId.value = null;
   selectedUserName.value = '';
   try {
-    const result = await adminService.getUsersWithConnections(
+    // Try new introductions-created endpoint first (returns groups with participants)
+    const introResult = await adminService.getIntroductionsCreatedStats(
       communityId.value,
       startDateISO.value,
       endDateISO.value
     );
-    users.value = result;
+
+    if (introResult && introResult.groups && introResult.groups.length > 0) {
+      // Aggregate: count how many groups each user appears in
+      const userMap = new Map<number, { name: string; count: number }>();
+      for (const group of introResult.groups) {
+        for (const p of group.participants) {
+          const existing = userMap.get(p.userId);
+          if (existing) {
+            existing.count++;
+          } else {
+            userMap.set(p.userId, { name: p.name, count: 1 });
+          }
+        }
+      }
+      users.value = Array.from(userMap.entries())
+        .map(([userId, data]) => ({
+          userId,
+          userName: data.name,
+          connectionCount: data.count,
+        }))
+        .sort((a, b) => b.connectionCount - a.connectionCount);
+    } else {
+      // Fallback to old method
+      const result = await adminService.getUsersWithConnections(
+        communityId.value,
+        startDateISO.value,
+        endDateISO.value
+      );
+      users.value = result;
+    }
   } catch (error) {
     console.error('Error loading users:', error);
     users.value = [];

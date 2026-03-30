@@ -1940,6 +1940,7 @@ async function loadStats() {
   ];
   const conversationsOwnedFields = ['trovaChatsStarted'];
   const profileOwnedFields = ['profileCompletionRate', 'profileCompletionCompleted', 'profileCompletionTotal'];
+  const introductionsOwnedFields = ['connectionsMade'];
 
   const mergeIntoStats = (source: Partial<UserStats>, skipFields: string[] = []) => {
     if (!stats.value) stats.value = {};
@@ -1978,7 +1979,7 @@ async function loadStats() {
   allPromises.push(
     adminService.getEngagementStats(communityId, start, end)
       .then((result) => {
-        if (result) mergeIntoStats(result, [...conversationsOwnedFields, ...profileOwnedFields]);
+        if (result) mergeIntoStats(result, [...conversationsOwnedFields, ...profileOwnedFields, ...introductionsOwnedFields]);
       })
       .catch((error) => { console.error('Error loading engagement stats:', error); })
       .finally(() => { isLoadingPrimary.value = false; isLoadingEngagement.value = false; })
@@ -2030,6 +2031,26 @@ async function loadStats() {
       .catch((error) => {
         console.warn('[UserStatsSection] Messages exchanged fetch failed:', error);
         mergeIntoStats({ trovaChatsStarted: 0 } as Partial<UserStats>);
+      })
+  );
+
+  // Introductions Created — distinct Trova-created channels from user_match
+  allPromises.push(
+    adminService.getIntroductionsCreatedStats(communityId, start, end)
+      .then((result) => {
+        if (result) {
+          mergeIntoStats({ connectionsMade: result.total } as Partial<UserStats>);
+        } else {
+          // Fallback to connections-count if new endpoint not deployed yet
+          return adminService.getMatchResponseStats(communityId, start, end)
+            .then((fallback) => {
+              if (fallback) mergeIntoStats({ connectionsMade: fallback.connectionsMade } as Partial<UserStats>);
+            });
+        }
+      })
+      .catch((error) => {
+        console.warn('[UserStatsSection] Introductions created fetch failed:', error);
+        mergeIntoStats({ connectionsMade: 0 } as Partial<UserStats>);
       })
   );
 
