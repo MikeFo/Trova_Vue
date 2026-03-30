@@ -782,6 +782,7 @@ import { profileService, type ProfilesInit } from '@/services/profile.service';
 import { toastController } from '@ionic/vue';
 import { fetchMagicIntroSummary } from '@/services/magic-intro.service';
 import type { MagicIntroSummary, DateRange } from '@/types/magic-intros';
+import { devWarn } from '@/utils/logger';
 import {
   IonButton,
   IonIcon,
@@ -2049,7 +2050,7 @@ async function loadStats() {
         }
       })
       .catch((error) => {
-        console.warn('[UserStatsSection] Introductions created fetch failed:', error);
+        devWarn('[UserStatsSection] Introductions created fetch failed:', error);
         mergeIntoStats({ connectionsMade: 0 } as Partial<UserStats>);
       })
   );
@@ -2085,11 +2086,11 @@ async function loadStats() {
                 }
               })
               .catch((error) => {
-                console.warn('[UserStatsSection] Failed to verify self-introduced count:', error);
+                devWarn('[UserStatsSection] Failed to verify self-introduced count:', error);
               });
           }
         } else {
-          console.warn('[UserStatsSection] Self-introduced stats endpoint returned null');
+          devWarn('[UserStatsSection] Self-introduced stats endpoint returned null');
           mergeIntoStats({ selfIntroduced: 0 } as Partial<UserStats>);
         }
       })

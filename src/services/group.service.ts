@@ -1,4 +1,5 @@
 import { apiService } from './api.service';
+import { devLog } from '../utils/logger';
 
 export interface Group {
   id: number;
@@ -74,13 +75,13 @@ export class GroupService {
       );
       return groups || [];
     } catch (error: any) {
-      // Log the actual error message from backend
-      const errorMessage = error.response?.data?.error?.message || 
-                          error.response?.data?.message || 
-                          error.message;
-      console.error('[GroupService] Failed to fetch groups:', errorMessage);
-      console.error('[GroupService] Error details:', error.response?.data);
-      
+      // apiService already logs failed GETs to console.error; dev-only context here
+      devLog('[GroupService] getGroups failed:', {
+        status: error.response?.status ?? error.status,
+        body: error.response?.data,
+        message: error.message,
+      });
+
       // If the main endpoint fails (e.g., 500 error), try the alternative endpoint
       if (error.status === 500 || error.response?.status === 500) {
         try {
@@ -89,10 +90,10 @@ export class GroupService {
           );
           return groups || [];
         } catch (altError: any) {
-          const altErrorMessage = altError.response?.data?.error?.message || 
-                                 altError.response?.data?.message || 
-                                 altError.message;
-          console.error('[GroupService] Alternative endpoint also failed:', altErrorMessage);
+          devLog('[GroupService] Alternative /communities/.../groups also failed:', {
+            status: altError.response?.status ?? altError.status,
+            body: altError.response?.data,
+          });
           return [];
         }
       }

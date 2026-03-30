@@ -12,6 +12,7 @@ import { authService } from './services/auth.service';
 import { useFirebase } from './composables/useFirebase';
 import { slackSessionService } from './services/slack-session.service';
 import { useAuthStore } from './stores/auth.store';
+import { devLog } from './utils/logger';
 
 const route = useRoute();
 const authStore = useAuthStore();
@@ -41,7 +42,7 @@ async function validateSlackSession() {
       console.error('[App] Failed to validate secretId:', error);
     }
   } else if (isFullyAuthenticated) {
-    console.log('[App] User is fully authenticated, skipping secretId validation');
+    devLog('[App] User is fully authenticated, skipping secretId validation');
   }
 }
 

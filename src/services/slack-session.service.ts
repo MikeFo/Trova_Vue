@@ -1,4 +1,5 @@
 import { apiService } from './api.service';
+import { devLog } from '../utils/logger';
 
 export interface SlackSessionValidation {
   isValid: boolean;
@@ -30,7 +31,7 @@ export class SlackSessionService {
       // Check cache first
       const cached = this.getCachedValidation(secretId);
       if (cached && this.isValidationStillValid(cached)) {
-        console.log('[SlackSessionService] Using cached validation');
+        devLog('[SlackSessionService] Using cached validation');
         return true;
       }
 
@@ -59,7 +60,7 @@ export class SlackSessionService {
       };
 
       this.cacheValidation(validation);
-      console.log('[SlackSessionService] SecretId validated successfully');
+      devLog('[SlackSessionService] SecretId validated successfully');
       return true;
     } catch (error: any) {
       console.error('[SlackSessionService] SecretId validation failed:', error);

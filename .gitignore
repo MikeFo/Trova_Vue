@@ -3,3 +3,5 @@ dist
 .env.local
 .env*.local# Local certificates (do not commit)
 .cert/
+# Local tooling
+.firebase/

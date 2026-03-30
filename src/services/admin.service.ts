@@ -1,9 +1,7 @@
 import { apiService } from './api.service';
 import type { User } from '../stores/auth.store';
 import type { Community } from './community.service';
-
-/** No-op in production; only logs in development. */
-const devLog: (...args: unknown[]) => void = import.meta.env.DEV ? (...args: unknown[]) => console.log(...args) : () => {};
+import { devLog, devWarn } from '../utils/logger';
 import { 
   collection, 
   query, 
@@ -418,7 +416,7 @@ export class AdminService {
               const { userService } = await import('./user.service');
               usersMap = await userService.getUsersByIds(userIds);
             } catch (userError) {
-              console.warn('[AdminService] Failed to fetch user emails:', userError);
+              devWarn('[AdminService] Failed to fetch user emails:', userError);
               // Continue without emails if user service fails
             }
           }
@@ -676,7 +674,7 @@ export class AdminService {
           fieldId: response.fieldId
         };
       } else {
-        console.warn(`[AdminService] Unexpected response format for custom field ${customFieldId}:`, response);
+        devWarn(`[AdminService] Unexpected response format for custom field ${customFieldId}:`, response);
         return [];
       }
     } catch (error) {
@@ -726,7 +724,7 @@ export class AdminService {
         pagination = response.pagination;
       } else {
         // Unexpected format
-        console.warn(`[AdminService] Unexpected response format for ${attributeType}:${attributeValue}`);
+        devWarn(`[AdminService] Unexpected response format for ${attributeType}:${attributeValue}`);
         data = [];
       }
       
@@ -755,7 +753,7 @@ export class AdminService {
             const pageData = Array.isArray(pageResponse) ? pageResponse : (pageResponse?.data || []);
             allUsers.push(...pageData);
           } catch (error) {
-            console.warn(`[AdminService] Failed to load page ${page} for ${attributeType}:${attributeValue}:`, error);
+            devWarn(`[AdminService] Failed to load page ${page} for ${attributeType}:${attributeValue}:`, error);
             // Continue loading other pages even if one fails
           }
         }
@@ -801,7 +799,7 @@ export class AdminService {
       
       // For 400 errors, it might be an unsupported type - try fallback
       if (status === 400) {
-        console.warn(`[AdminService] 400 Bad Request for ${attributeType}:${attributeValue}, attempting fallback`);
+        devWarn(`[AdminService] 400 Bad Request for ${attributeType}:${attributeValue}, attempting fallback`);
         return this.getUsersByAttributeFallback(communityId, attributeType, attributeValue, onlyActive);
       }
       
@@ -813,7 +811,7 @@ export class AdminService {
       }
       
       // For other errors, still try fallback but log the error
-      console.warn(`[AdminService] Error ${status} for ${attributeType}:${attributeValue}, attempting fallback`);
+      devWarn(`[AdminService] Error ${status} for ${attributeType}:${attributeValue}, attempting fallback`);
       return this.getUsersByAttributeFallback(communityId, attributeType, attributeValue, onlyActive);
     }
   }
@@ -1216,7 +1214,7 @@ export class AdminService {
                 }));
               } else {
                 // If verification filtered everyone out, return unverified (better than empty)
-                console.warn(`[AdminService] ⚠️ Verification filtered all users, returning unverified list`);
+                devWarn(`[AdminService] ⚠️ Verification filtered all users, returning unverified list`);
                 return recovered.map((profile: any) => ({
                   id: profile.userId || profile.id,
                   fname: profile.fname,
@@ -1231,11 +1229,11 @@ export class AdminService {
               }
             }
           } else {
-            console.warn(`[AdminService] ⚠️ No user IDs found in unconsolidated data for ${attributeType}:${attributeValue} (matched ${matchedRows} rows but none had user IDs)`);
+            devWarn(`[AdminService] ⚠️ No user IDs found in unconsolidated data for ${attributeType}:${attributeValue} (matched ${matchedRows} rows but none had user IDs)`);
           }
         } catch (e) {
           // If this recovery path fails, continue to return the profile-filter result (empty)
-          console.warn(`[AdminService] Attribute fallback recovery via unconsolidated endpoint failed for ${attributeType}:${attributeValue}`, e);
+          devWarn(`[AdminService] Attribute fallback recovery via unconsolidated endpoint failed for ${attributeType}:${attributeValue}`, e);
         }
       }
 
@@ -1306,7 +1304,7 @@ export class AdminService {
           // Try next endpoint
           continue;
         } else {
-          console.warn(`[AdminService] Error fetching users for skill ${skillType}:${skillValue} from ${url}:`, error);
+          devWarn(`[AdminService] Error fetching users for skill ${skillType}:${skillValue} from ${url}:`, error);
         }
       }
     }
@@ -1513,7 +1511,7 @@ export class AdminService {
               devLog(`[AdminService] ✅ Found ${filtered.length} members with skill "${skillValue}"`);
               return filtered;
             } catch (memberError) {
-              console.warn(`[AdminService] Failed to fetch community members:`, memberError);
+              devWarn(`[AdminService] Failed to fetch community members:`, memberError);
             }
           }
         }
@@ -1722,7 +1720,7 @@ export class AdminService {
           // Try next endpoint
           continue;
         } else {
-          console.warn(`[AdminService] Error fetching users for business topic ${topicValue} from ${url}:`, error);
+          devWarn(`[AdminService] Error fetching users for business topic ${topicValue} from ${url}:`, error);
         }
       }
     }
@@ -1875,7 +1873,7 @@ export class AdminService {
             devLog(`[AdminService] Members endpoint not available or failed`);
           }
         } catch (e) {
-          console.warn(`[AdminService] Member query approach failed:`, e);
+          devWarn(`[AdminService] Member query approach failed:`, e);
         }
 
         // Third, try unconsolidated endpoint recovery (but this returns aggregated data, not user rows)
@@ -1904,7 +1902,7 @@ export class AdminService {
           // We need a backend endpoint that returns the actual join table data
           devLog(`[AdminService] ⚠️ Unconsolidated endpoint returns aggregated data without user IDs. Need backend endpoint fix.`);
         } catch (e) {
-          console.warn(`[AdminService] Business topic unconsolidated endpoint recovery failed:`, e);
+          devWarn(`[AdminService] Business topic unconsolidated endpoint recovery failed:`, e);
         }
 
         // Fourth: Since we can't get user IDs from aggregated data, we need to inform the user
@@ -1947,7 +1945,7 @@ export class AdminService {
         data = response.data;
         pagination = response.pagination;
       } else {
-        console.warn(`[AdminService] Unexpected response format for custom field ${customFieldId}:${fieldValue}`);
+        devWarn(`[AdminService] Unexpected response format for custom field ${customFieldId}:${fieldValue}`);
         data = [];
       }
       
@@ -1968,7 +1966,7 @@ export class AdminService {
             const pageData = Array.isArray(pageResponse) ? pageResponse : (pageResponse?.data || []);
             allUsers.push(...pageData);
           } catch (error) {
-            console.warn(`[AdminService] Failed to load page ${page} for custom field ${customFieldId}:${fieldValue}:`, error);
+            devWarn(`[AdminService] Failed to load page ${page} for custom field ${customFieldId}:${fieldValue}:`, error);
           }
         }
         
@@ -2033,12 +2031,12 @@ export class AdminService {
     });
 
     if (suspiciousPatterns.length > 0) {
-      console.warn(
+      devWarn(
         `[AdminService] ⚠️ Potential issue: ${type} data appears to contain per-user responses instead of consolidated data.`,
         `Found ${suspiciousPatterns.length} items with suspicious patterns:`,
         suspiciousPatterns.slice(0, 3)
       );
-      console.warn(
+      devWarn(
         `[AdminService] Expected format: [{ name: "ChatGPT", value: 5 }] (cumulative count)`,
         `Found format: Items with pipe-separated or user-specific values`
       );
@@ -2046,7 +2044,7 @@ export class AdminService {
       // Check if values are reasonable (should be counts, not just 1s)
       const singleValueItems = data.filter(item => item.value === 1);
       if (singleValueItems.length === data.length && data.length > 1) {
-        console.warn(
+        devWarn(
           `[AdminService] ⚠️ Potential issue: All ${type} data items have value=1.`,
           `This might indicate per-user data instead of consolidated counts.`
         );
@@ -2179,7 +2177,7 @@ export class AdminService {
         devLog(`[AdminService] Profile completion: ${completedProfiles}/${profileList.length} (${stats.profileCompletionRate.toFixed(1)}%)`);
       } else {
         const errorReason = profiles.status === 'rejected' ? profiles.reason : 'unknown';
-        console.warn('[AdminService] Profiles fetch failed:', errorReason);
+        devWarn('[AdminService] Profiles fetch failed:', errorReason);
         if (profiles.status === 'rejected') {
           console.error('[AdminService] Profiles error details:', errorReason);
         }
@@ -2318,14 +2316,14 @@ export class AdminService {
         // Use unique members count if available, otherwise use total memberships
         stats.groupsJoined = uniqueMembers.size > 0 ? uniqueMembers.size : totalMembers;
       } else if (groups.status === 'rejected') {
-        console.warn('[AdminService] Groups fetch failed:', groups.reason);
+        devWarn('[AdminService] Groups fetch failed:', groups.reason);
       }
 
       // Connections Made (Matches)
       if (matches.status === 'fulfilled') {
         const matchList = matches.value || [];
         if (matchList.length === 0) {
-          console.warn('[AdminService] No matches returned from endpoint');
+          devWarn('[AdminService] No matches returned from endpoint');
         }
         
         // Filter matches by community if needed
@@ -2365,7 +2363,7 @@ export class AdminService {
           if (backendResult && typeof backendResult.connectionsMade === 'number') {
             // If backend returns 0 but we have matches, it's likely incorrect - use client-side fallback
             if (backendResult.connectionsMade === 0 && communityMatches && communityMatches.length > 0) {
-              console.warn(`[AdminService] ⚠️ Backend returned 0 connections but we have ${communityMatches.length} matches - using client-side calculation`);
+              devWarn(`[AdminService] ⚠️ Backend returned 0 connections but we have ${communityMatches.length} matches - using client-side calculation`);
             } else {
               connectionsMade = backendResult.connectionsMade;
               useBackendResult = true;
@@ -2377,7 +2375,7 @@ export class AdminService {
           if (error?.status === 404 || error?.response?.status === 404) {
             devLog(`[AdminService] Connections count endpoint not found, using client-side calculation`);
           } else {
-            console.warn(`[AdminService] Failed to fetch connections count from backend, using client-side calculation:`, error);
+            devWarn(`[AdminService] Failed to fetch connections count from backend, using client-side calculation:`, error);
           }
         }
         
@@ -2521,7 +2519,7 @@ export class AdminService {
           const responseRate = await this.calculateMatchResponseRate(communityId, communityMatches, startDate, endDate);
           stats.matchResponseRate = responseRate;
         } catch (error) {
-          console.warn('[AdminService] Could not calculate match response rate:', error);
+          devWarn('[AdminService] Could not calculate match response rate:', error);
           stats.matchResponseRate = 0;
         }
       } else if (matches.status === 'rejected') {
@@ -2581,7 +2579,7 @@ export class AdminService {
       const { profileService } = await import('./profile.service');
       return await profileService.getProfilesForUserAndCommunity(communityId);
     } catch (error) {
-      console.warn('[AdminService] Could not fetch profiles:', error);
+      devWarn('[AdminService] Could not fetch profiles:', error);
       return [];
     }
   }
@@ -2599,7 +2597,7 @@ export class AdminService {
       }
       return [];
     } catch (error) {
-      console.warn('[AdminService] Could not fetch events:', error);
+      devWarn('[AdminService] Could not fetch events:', error);
       return [];
     }
   }
@@ -2617,7 +2615,7 @@ export class AdminService {
       }
       return [];
     } catch (error) {
-      console.warn('[AdminService] Could not fetch groups:', error);
+      devWarn('[AdminService] Could not fetch groups:', error);
       return [];
     }
   }
@@ -2769,13 +2767,13 @@ export class AdminService {
           devLog(`[AdminService] ⚠️ ${endpoint.name} returned 401 (auth), skipping remaining endpoints`);
           break;
         }
-        console.warn(`[AdminService] ⚠️ ${endpoint.name} failed:`, status || error.message);
+        devWarn(`[AdminService] ⚠️ ${endpoint.name} failed:`, status || error.message);
         continue;
       }
     }
 
     if (!stoppedDueTo401) {
-      console.warn('[AdminService] ❌ All match endpoints failed or returned 0 matches');
+      devWarn('[AdminService] ❌ All match endpoints failed or returned 0 matches');
     }
     const emptyResult: any[] = [];
     if (cacheKey) {
@@ -2825,7 +2823,7 @@ export class AdminService {
             devLog(`[AdminService] ✅ User actions stats aggregated from slack-user-stats (using backend introsLedToConvos):`, aggregatedStats);
             return aggregatedStats;
           } else {
-            console.warn(`[AdminService] ⚠️ aggregateSlackUserStats returned null, continuing to next endpoint`);
+            devWarn(`[AdminService] ⚠️ aggregateSlackUserStats returned null, continuing to next endpoint`);
           }
         }
         
@@ -2862,7 +2860,7 @@ export class AdminService {
         if (status === 404) {
           // Silently continue for 404s
         } else {
-          console.warn(`[AdminService] Error fetching user actions from ${url}:`, {
+          devWarn(`[AdminService] Error fetching user actions from ${url}:`, {
             status,
             message: error?.message,
             response: error?.response?.data,
@@ -2924,7 +2922,7 @@ export class AdminService {
         // Sum engaged pairings from valid dates
         trovaMagicEngaged = validDates.reduce((sum, day) => sum + day.engagedPairings, 0);
       } catch (error) {
-        console.warn('[AdminService] Could not fetch Trova Magic engaged count:', error);
+        devWarn('[AdminService] Could not fetch Trova Magic engaged count:', error);
       }
       
       // 2. Channel Pairing: Count unique groups (same as displayed card)
@@ -2947,7 +2945,7 @@ export class AdminService {
           }
         }
       } catch (error) {
-        console.warn('[AdminService] Could not calculate Channel Pairing engaged count:', error);
+        devWarn('[AdminService] Could not calculate Channel Pairing engaged count:', error);
       }
       
       // 3. Mentor/Mentee: Count unique pairs (same logic as other types)
@@ -2992,7 +2990,7 @@ export class AdminService {
           }
         }
       } catch (error) {
-        console.warn('[AdminService] Could not calculate Mentor/Mentee engaged count:', error);
+        devWarn('[AdminService] Could not calculate Mentor/Mentee engaged count:', error);
       }
       
       const totalEngaged = trovaMagicEngaged + channelPairingEngaged + mentorMenteeEngaged;
@@ -3005,7 +3003,7 @@ export class AdminService {
       
       return totalEngaged;
     } catch (error) {
-      console.warn('[AdminService] Could not calculate Intros Led To Convos:', error);
+      devWarn('[AdminService] Could not calculate Intros Led To Convos:', error);
       return 0;
     }
   }
@@ -3031,7 +3029,7 @@ export class AdminService {
     totalUserCount?: number;
   }): Partial<UserStats> | null {
     if (!response.rows || !Array.isArray(response.rows)) {
-      console.warn('[AdminService] ⚠️ aggregateSlackUserStats: response.rows is missing or not an array, returning zeros');
+      devWarn('[AdminService] ⚠️ aggregateSlackUserStats: response.rows is missing or not an array, returning zeros');
       // Return zeros instead of null so UI can display the section
       return {
         openedTrova: 0,
@@ -3242,7 +3240,7 @@ export class AdminService {
         stats.spotlightsCreated = 0;
         stats.recWallsGiven = 0;
         stats.recWallsReceived = 0;
-        console.warn('[AdminService] No user events found, returning zeros');
+        devWarn('[AdminService] No user events found, returning zeros');
       }
 
       return stats;
@@ -3320,7 +3318,7 @@ export class AdminService {
             }
           }
         } catch (error) {
-          console.warn(`[AdminService] Error fetching ${matchType} matches for unique introductions:`, error);
+          devWarn(`[AdminService] Error fetching ${matchType} matches for unique introductions:`, error);
         }
       }
       
@@ -3448,7 +3446,7 @@ export class AdminService {
       devLog(`[AdminService] Profile completion: ${result.completed}/${result.total}`);
       return result;
     } catch (error) {
-      console.warn('[AdminService] Profile completion endpoint failed, will fall back to client-side:', error);
+      devWarn('[AdminService] Profile completion endpoint failed, will fall back to client-side:', error);
       return null;
     }
   }
@@ -3479,7 +3477,7 @@ export class AdminService {
     } catch (error: any) {
       const status = error?.status || error?.response?.status;
       if (status !== 404) {
-        console.warn(`[AdminService] Error fetching skills stats:`, { status, message: error?.message });
+        devWarn(`[AdminService] Error fetching skills stats:`, { status, message: error?.message });
       }
     }
 
@@ -3524,16 +3522,16 @@ export class AdminService {
         };
       }
       
-      console.warn(`[AdminService] Weekly introductions stats endpoint returned invalid response for community ${communityId}`);
+      devWarn(`[AdminService] Weekly introductions stats endpoint returned invalid response for community ${communityId}`);
       return null;
     } catch (error: any) {
       const status = error?.status || error?.response?.status;
       if (status === 404) {
         devLog(`[AdminService] Weekly introductions stats endpoint not found for community ${communityId} (404)`);
       } else if (status === 500) {
-        console.warn(`[AdminService] Weekly introductions stats endpoint returned 500 error for community ${communityId}:`, error?.response?.data || error?.message);
+        devWarn(`[AdminService] Weekly introductions stats endpoint returned 500 error for community ${communityId}:`, error?.response?.data || error?.message);
       } else {
-        console.warn(`[AdminService] Failed to fetch weekly introductions stats for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
+        devWarn(`[AdminService] Failed to fetch weekly introductions stats for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
       }
       return null;
     }
@@ -3579,7 +3577,7 @@ export class AdminService {
       devLog(`[AdminService] Introductions created: ${result.total}`, result.breakdown);
       return result;
     } catch (error) {
-      console.warn('[AdminService] Introductions created endpoint failed:', error);
+      devWarn('[AdminService] Introductions created endpoint failed:', error);
       return null;
     }
   }
@@ -3606,7 +3604,7 @@ export class AdminService {
       devLog(`[AdminService] Messages exchanged: ${result.total}`, result.breakdown);
       return result;
     } catch (error) {
-      console.warn('[AdminService] Messages exchanged endpoint failed, falling back:', error);
+      devWarn('[AdminService] Messages exchanged endpoint failed, falling back:', error);
       return null;
     }
   }
@@ -3651,9 +3649,9 @@ export class AdminService {
       if (status === 404) {
         devLog(`[AdminService] Conversations started endpoint not found for community ${communityId} (404)`);
       } else if (status === 500) {
-        console.warn(`[AdminService] Conversations started endpoint returned 500 error for community ${communityId}:`, error?.response?.data || error?.message);
+        devWarn(`[AdminService] Conversations started endpoint returned 500 error for community ${communityId}:`, error?.response?.data || error?.message);
       } else {
-        console.warn(`[AdminService] Failed to fetch conversations started for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
+        devWarn(`[AdminService] Failed to fetch conversations started for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
       }
       return null;
     }
@@ -3679,7 +3677,7 @@ export class AdminService {
   ): Promise<WeeklyIntroductionsUserRow[] | null> {
     try {
       if (!startDate || !endDate) {
-        console.warn('[AdminService] startDate and endDate are required for weekly introductions users');
+        devWarn('[AdminService] startDate and endDate are required for weekly introductions users');
         return null;
       }
 
@@ -3696,7 +3694,7 @@ export class AdminService {
       // Handle both array response and { rows: [...] } response format
       const rowsRaw = Array.isArray(response) ? response : response?.rows;
       if (!Array.isArray(rowsRaw)) {
-        console.warn(`[AdminService] Weekly introductions users endpoint returned unexpected format or no rows for community ${communityId}`);
+        devWarn(`[AdminService] Weekly introductions users endpoint returned unexpected format or no rows for community ${communityId}`);
         return [];
       }
 
@@ -3723,11 +3721,11 @@ export class AdminService {
     } catch (error: any) {
       const status = error?.status || error?.response?.status;
       if (status === 400) {
-        console.warn(`[AdminService] Weekly introductions users endpoint returned 400 (Bad Request) for community ${communityId}:`, error?.response?.data?.error || error?.message);
+        devWarn(`[AdminService] Weekly introductions users endpoint returned 400 (Bad Request) for community ${communityId}:`, error?.response?.data?.error || error?.message);
       } else if (status === 404) {
         devLog(`[AdminService] Weekly introductions users endpoint not found for community ${communityId}`);
       } else {
-        console.warn(`[AdminService] Failed to fetch weekly introductions users for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
+        devWarn(`[AdminService] Failed to fetch weekly introductions users for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
       }
       return null;
     }
@@ -3777,16 +3775,16 @@ export class AdminService {
         };
       }
       
-      console.warn(`[AdminService] Self-introduced stats endpoint returned invalid response for community ${communityId}`);
+      devWarn(`[AdminService] Self-introduced stats endpoint returned invalid response for community ${communityId}`);
       return null;
     } catch (error: any) {
       const status = error?.status || error?.response?.status;
       if (status === 404) {
         devLog(`[AdminService] Self-introduced stats endpoint not found for community ${communityId} (404)`);
       } else if (status === 500) {
-        console.warn(`[AdminService] Self-introduced stats endpoint returned 500 for community ${communityId}`);
+        devWarn(`[AdminService] Self-introduced stats endpoint returned 500 for community ${communityId}`);
       } else {
-        console.warn(`[AdminService] Failed to fetch self-introduced stats for community ${communityId}:`, error?.message || error);
+        devWarn(`[AdminService] Failed to fetch self-introduced stats for community ${communityId}:`, error?.message || error);
       }
       return null;
     }
@@ -3810,7 +3808,7 @@ export class AdminService {
   ): Promise<SelfIntroducedUserRow[] | null> {
     try {
       if (!startDate || !endDate) {
-        console.warn('[AdminService] startDate and endDate are required for self-introduced users');
+        devWarn('[AdminService] startDate and endDate are required for self-introduced users');
         return null;
       }
 
@@ -3832,7 +3830,7 @@ export class AdminService {
         : response?.rows ?? response?.data ?? response?.users;
       
       if (!Array.isArray(rowsRaw)) {
-        console.warn(`[AdminService] Self-introduced users endpoint returned unexpected format or no rows for community ${communityId}`);
+        devWarn(`[AdminService] Self-introduced users endpoint returned unexpected format or no rows for community ${communityId}`);
         return [];
       }
 
@@ -3861,11 +3859,11 @@ export class AdminService {
     } catch (error: any) {
       const status = error?.status || error?.response?.status;
       if (status === 400) {
-        console.warn(`[AdminService] Self-introduced users endpoint returned 400 (Bad Request) for community ${communityId}:`, error?.response?.data?.error || error?.message);
+        devWarn(`[AdminService] Self-introduced users endpoint returned 400 (Bad Request) for community ${communityId}:`, error?.response?.data?.error || error?.message);
       } else if (status === 404) {
         devLog(`[AdminService] Self-introduced users endpoint not found for community ${communityId}`);
       } else {
-        console.warn(`[AdminService] Failed to fetch self-introduced users for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
+        devWarn(`[AdminService] Failed to fetch self-introduced users for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
       }
       return null;
     }
@@ -3911,7 +3909,7 @@ export class AdminService {
     } catch (error: any) {
       const status = error?.status || error?.response?.status;
       if (status !== 404) {
-        console.warn(`[AdminService] Error fetching mentor/mentee stats:`, { status, message: error?.message });
+        devWarn(`[AdminService] Error fetching mentor/mentee stats:`, { status, message: error?.message });
       }
     }
 
@@ -4146,7 +4144,7 @@ export class AdminService {
         if (status === 404) {
           // Silently continue for 404s
         } else {
-          console.warn(`[AdminService] Error fetching mentor/mentee users from ${url}:`, {
+          devWarn(`[AdminService] Error fetching mentor/mentee users from ${url}:`, {
             status,
             message: error?.message,
           });
@@ -4576,7 +4574,7 @@ export class AdminService {
             // Note: usersCanMentor and usersWantMentor come from backend endpoint, not profiles
           });
         } catch (profileError) {
-          console.warn('[AdminService] Could not get profile data for skills calculation:', profileError);
+          devWarn('[AdminService] Could not get profile data for skills calculation:', profileError);
           // Fallback: estimate from skills data
           // If we have skills with values > 0, we know at least some users have skills
           const skillsWithUsers = allSkills.filter((s: AttributeModel) => s.value && s.value > 0);
@@ -4588,7 +4586,7 @@ export class AdminService {
 
         devLog(`[AdminService] 🎓 Skills stats calculated:`, stats);
       } catch (error) {
-        console.warn('[AdminService] Could not calculate skills stats:', error);
+        devWarn('[AdminService] Could not calculate skills stats:', error);
       }
 
       return stats;
@@ -4623,7 +4621,7 @@ export class AdminService {
         // Calculate from available data
         return this.calculateMatchEngagementStats(communityId, startDate, endDate);
       }
-      console.warn('[AdminService] Error fetching match engagement stats:', error);
+      devWarn('[AdminService] Error fetching match engagement stats:', error);
       return null;
     }
   }
@@ -4668,7 +4666,7 @@ export class AdminService {
         trovaMagicSessions = trovaMagicMatchRecords?.length || 0;
         devLog(`[AdminService] 🔗 Trova Magic: ${trovaMagicSessions} sessions → ${trovaMagicTotal} unique pairs, ${trovaMagicEngaged} engaged`);
       } catch (error) {
-        console.warn('[AdminService] Could not fetch Trova Magic from daily breakdown:', error);
+        devWarn('[AdminService] Could not fetch Trova Magic from daily breakdown:', error);
       }
       
       stats.trovaMagicMatches = trovaMagicTotal;
@@ -4711,7 +4709,7 @@ export class AdminService {
         channelPairingEngaged = byDate.reduce((sum, r) => sum + (r.engagedPairings || 0), 0);
         devLog(`[AdminService] 🔗 Channel Pairing engaged from by-date: ${channelPairingEngaged}`);
       } catch (error) {
-        console.warn('[AdminService] Could not calculate channel pairing engagement:', error);
+        devWarn('[AdminService] Could not calculate channel pairing engagement:', error);
       }
 
       stats.channelPairingEngagements = channelPairingEngaged;
@@ -4763,7 +4761,7 @@ export class AdminService {
 
       return stats;
     } catch (error) {
-      console.warn('[AdminService] Error calculating match engagement stats:', error);
+      devWarn('[AdminService] Error calculating match engagement stats:', error);
       return null;
     }
   }
@@ -4891,7 +4889,7 @@ export class AdminService {
 
       return stats;
     } catch (error) {
-      console.warn('[AdminService] Error calculating channel pairing stats:', error);
+      devWarn('[AdminService] Error calculating channel pairing stats:', error);
       return null;
     }
   }
@@ -4961,7 +4959,7 @@ export class AdminService {
       const firestore = firebase.firestore;
       
       if (!firestore) {
-        console.warn('[AdminService] Firestore not initialized, cannot query messages');
+        devWarn('[AdminService] Firestore not initialized, cannot query messages');
         return { totalMessagesSent: 0 };
       }
 
@@ -5008,7 +5006,7 @@ export class AdminService {
             const convSnapshot = await getDocs(convQuery);
             return convSnapshot.size;
           } catch (subcollectionError) {
-            console.debug(`[AdminService] Could not query messages subcollection for ${conversationId}:`, subcollectionError);
+            devLog(`[AdminService] Could not query messages subcollection for ${conversationId}:`, subcollectionError);
             return 0;
           }
         });
@@ -5049,7 +5047,7 @@ export class AdminService {
       const firestore = firebase.firestore;
       
       if (!firestore) {
-        console.warn('[AdminService] Firestore not initialized, cannot query messages');
+        devWarn('[AdminService] Firestore not initialized, cannot query messages');
         return { totalMessagesSent: 0 };
       }
 
@@ -5114,7 +5112,7 @@ export class AdminService {
             }
             return null;
           } catch (error) {
-            console.debug(`[AdminService] Error checking conversation ${conversationId}:`, error);
+            devLog(`[AdminService] Error checking conversation ${conversationId}:`, error);
             return null;
           }
         });
@@ -5153,7 +5151,7 @@ export class AdminService {
             const convSnapshot = await getDocs(convQuery);
             return convSnapshot.size;
           } catch (subcollectionError) {
-            console.debug(`[AdminService] Could not query messages subcollection for ${conversationId}:`, subcollectionError);
+            devLog(`[AdminService] Could not query messages subcollection for ${conversationId}:`, subcollectionError);
             return 0;
           }
         });
@@ -5270,7 +5268,7 @@ export class AdminService {
         });
         devLog(`[AdminService] 👥 After matches: ${dailyActiveUsers.size} daily, ${weeklyActiveUsers.size} weekly`);
       } catch (error) {
-        console.warn('[AdminService] Could not get matches for active users:', error);
+        devWarn('[AdminService] Could not get matches for active users:', error);
       }
 
       // 2. Get users from events
@@ -5308,7 +5306,7 @@ export class AdminService {
         });
         devLog(`[AdminService] 👥 After events: ${dailyActiveUsers.size} daily, ${weeklyActiveUsers.size} weekly`);
       } catch (error) {
-        console.warn('[AdminService] Could not get events for active users:', error);
+        devWarn('[AdminService] Could not get events for active users:', error);
       }
 
       // 3. Get users from groups
@@ -5334,7 +5332,7 @@ export class AdminService {
         });
         devLog(`[AdminService] 👥 After groups: ${dailyActiveUsers.size} daily, ${weeklyActiveUsers.size} weekly`);
       } catch (error) {
-        console.warn('[AdminService] Could not get groups for active users:', error);
+        devWarn('[AdminService] Could not get groups for active users:', error);
       }
 
       // 4. Get users from messages (Firebase) - use conversation updatedAt for activity
@@ -5377,7 +5375,7 @@ export class AdminService {
                   }
                 }
               } catch (error) {
-                console.debug(`[AdminService] Error fetching conversation ${conversationId}:`, error);
+                devLog(`[AdminService] Error fetching conversation ${conversationId}:`, error);
               }
             });
             
@@ -5390,7 +5388,7 @@ export class AdminService {
         if (isPermissionError) {
           devLog('[AdminService] Skipping message-based active users (Firestore not available for this session)');
         } else {
-          console.warn('[AdminService] Could not get messages for active users:', error);
+          devWarn('[AdminService] Could not get messages for active users:', error);
         }
       }
 
@@ -5527,7 +5525,7 @@ export class AdminService {
             }
           }
         } catch (error) {
-          console.debug(`[AdminService] Error fetching conversation ${conversationId}:`, error);
+          devLog(`[AdminService] Error fetching conversation ${conversationId}:`, error);
         }
       });
       
@@ -5568,7 +5566,7 @@ export class AdminService {
 
       return engagedCount;
     } catch (error) {
-      console.warn('[AdminService] Error counting engaged matches:', error);
+      devWarn('[AdminService] Error counting engaged matches:', error);
       return 0;
     }
   }
@@ -5628,7 +5626,7 @@ export class AdminService {
 
       return engagedGroups;
     } catch (error) {
-      console.warn('[AdminService] Error counting engaged matches by group:', error);
+      devWarn('[AdminService] Error counting engaged matches by group:', error);
       return 0;
     }
   }
@@ -5649,7 +5647,7 @@ export class AdminService {
       const firestore = firebase.firestore;
       
       if (!firestore) {
-        console.warn('[AdminService] Firestore not initialized, cannot query Trova chats');
+        devWarn('[AdminService] Firestore not initialized, cannot query Trova chats');
         return 0;
       }
 
@@ -5744,12 +5742,12 @@ export class AdminService {
                 }
               }
             } catch (subcollectionError) {
-              console.debug(`[AdminService] Could not query subcollection for ${conversationId}:`, subcollectionError);
+              devLog(`[AdminService] Could not query subcollection for ${conversationId}:`, subcollectionError);
             }
             
             return false;
           } catch (error) {
-            console.debug(`[AdminService] Error checking conversation ${conversationId}:`, error);
+            devLog(`[AdminService] Error checking conversation ${conversationId}:`, error);
             return false;
           }
         });
@@ -5894,7 +5892,7 @@ export class AdminService {
         // Validate date - skip if invalid
         if (isNaN(date.getTime())) {
           skippedInvalid++;
-          console.warn(`[AdminService] Invalid date for match ${match.id}:`, createdAt);
+          devWarn(`[AdminService] Invalid date for match ${match.id}:`, createdAt);
           return;
         }
         
@@ -5914,7 +5912,7 @@ export class AdminService {
         // Additional validation: ensure date string is valid (YYYY-MM-DD format)
         if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
           skippedInvalid++;
-          console.warn(`[AdminService] Invalid date string format for match ${match.id}:`, dateStr);
+          devWarn(`[AdminService] Invalid date string format for match ${match.id}:`, dateStr);
           return;
         }
         
@@ -6032,7 +6030,7 @@ export class AdminService {
       // Check for suspiciously high counts (likely data issues)
       const suspiciousDates = result.filter(r => r.totalPairings > 1000);
       if (suspiciousDates.length > 0) {
-        console.warn(`[AdminService] ⚠️ Found ${suspiciousDates.length} dates with >1000 pairings (possible data issue):`, 
+        devWarn(`[AdminService] ⚠️ Found ${suspiciousDates.length} dates with >1000 pairings (possible data issue):`, 
           suspiciousDates.map(d => `${d.date}: ${d.totalPairings}`));
       }
 
@@ -6270,7 +6268,7 @@ export class AdminService {
         // Validate date - skip if invalid
         if (isNaN(date.getTime())) {
           skippedInvalid++;
-          console.warn(`[AdminService] Invalid date for channel pairing match ${match.id}:`, createdAt);
+          devWarn(`[AdminService] Invalid date for channel pairing match ${match.id}:`, createdAt);
           return;
         }
         
@@ -6290,7 +6288,7 @@ export class AdminService {
         // Additional validation: ensure date string is valid (YYYY-MM-DD format)
         if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
           skippedInvalid++;
-          console.warn(`[AdminService] Invalid date string format for channel pairing match ${match.id}:`, dateStr);
+          devWarn(`[AdminService] Invalid date string format for channel pairing match ${match.id}:`, dateStr);
           return;
         }
         
@@ -6420,7 +6418,7 @@ export class AdminService {
       // Check for suspiciously high counts (likely data issues)
       const suspiciousDates = result.filter(r => r.totalPairings > 1000);
       if (suspiciousDates.length > 0) {
-        console.warn(`[AdminService] ⚠️ Found ${suspiciousDates.length} channel pairing dates with >1000 pairings (possible data issue):`, 
+        devWarn(`[AdminService] ⚠️ Found ${suspiciousDates.length} channel pairing dates with >1000 pairings (possible data issue):`, 
           suspiciousDates.map(d => `${d.date}: ${d.totalPairings}`));
       }
 
@@ -6667,7 +6665,7 @@ export class AdminService {
       });
       
       if (skippedWrongCommunity > 0) {
-        console.warn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} channel pairing matches with wrong communityId (expected ${communityId})`);
+        devWarn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} channel pairing matches with wrong communityId (expected ${communityId})`);
       }
       
       devLog(`[AdminService] After community filter: ${communityFilteredMatches.length} matches (from ${dateMatches.length} total)`);
@@ -6901,8 +6899,8 @@ export class AdminService {
             // Only flag as backend issue if we have other types but no mentor/mentee types
             // This could also mean the matches are outside the date range or don't exist
             detectedBackendIssue = true;
-            console.warn(`[AdminService] ⚠️ No mentor/mentee types found in response. Found types: ${Array.from(uniqueTypes).join(', ')}`);
-            console.warn(`[AdminService] ⚠️ This might indicate: (1) No mentor/mentee matches in date range, (2) Backend filtering issue, or (3) Type mismatch`);
+            devWarn(`[AdminService] ⚠️ No mentor/mentee types found in response. Found types: ${Array.from(uniqueTypes).join(', ')}`);
+            devWarn(`[AdminService] ⚠️ This might indicate: (1) No mentor/mentee matches in date range, (2) Backend filtering issue, or (3) Type mismatch`);
           }
           
           // Filter for mentor/mentee matches by checking the type field and sub_type field
@@ -6948,7 +6946,7 @@ export class AdminService {
       }
       
       if (!matches || matches.length === 0) {
-        console.warn(`[AdminService] ⚠️ No mentor/mentee matches found. Tried type variations: ${typeVariations.join(', ')} and client-side filtering`);
+        devWarn(`[AdminService] ⚠️ No mentor/mentee matches found. Tried type variations: ${typeVariations.join(', ')} and client-side filtering`);
         // If we detected a backend issue (no mentor/mentee types in response), set the flag
         if (!detectedBackendIssue && uniqueTypes.size > 0) {
           detectedBackendIssue = !Array.from(uniqueTypes).some(t => t.toLowerCase().includes('mentor') || t.toLowerCase().includes('mentee'));
@@ -6994,7 +6992,7 @@ export class AdminService {
         // Validate date - skip if invalid
         if (isNaN(date.getTime())) {
           skippedInvalid++;
-          console.warn(`[AdminService] Invalid date for mentor/mentee match ${match.id}:`, createdAt);
+          devWarn(`[AdminService] Invalid date for mentor/mentee match ${match.id}:`, createdAt);
           return;
         }
         
@@ -7014,7 +7012,7 @@ export class AdminService {
         // Additional validation: ensure date string is valid (YYYY-MM-DD format)
         if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
           skippedInvalid++;
-          console.warn(`[AdminService] Invalid date string format for mentor/mentee match ${match.id}:`, dateStr);
+          devWarn(`[AdminService] Invalid date string format for mentor/mentee match ${match.id}:`, dateStr);
           return;
         }
         
@@ -7065,7 +7063,7 @@ export class AdminService {
         });
         
         if (skippedWrongCommunity > 0) {
-          console.warn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} mentor/mentee matches with wrong communityId (expected ${communityId}) for date ${dateStr}`);
+          devWarn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} mentor/mentee matches with wrong communityId (expected ${communityId}) for date ${dateStr}`);
         }
         
         devLog(`[AdminService] After community filter for ${dateStr}: ${communityFilteredMatches.length} matches (from ${dateMatches.length} total)`);
@@ -7181,7 +7179,7 @@ export class AdminService {
       }
       
       if (!matches || matches.length === 0) {
-        console.warn(`[AdminService] ⚠️ No mentor/mentee matches found`);
+        devWarn(`[AdminService] ⚠️ No mentor/mentee matches found`);
         return [];
       }
       
@@ -7361,7 +7359,7 @@ export class AdminService {
       const allMatches = await this.getMatchesForCommunity(communityId, startDate, endDate);
       
       if (!allMatches || allMatches.length === 0) {
-        console.warn(`[AdminService] ⚠️ No matches found`);
+        devWarn(`[AdminService] ⚠️ No matches found`);
         return [];
       }
       
@@ -7661,7 +7659,7 @@ export class AdminService {
       }
       
       if (!matches || matches.length === 0) {
-        console.warn(`[AdminService] ⚠️ No mentor/mentee matches found with any type variation or client-side filtering`);
+        devWarn(`[AdminService] ⚠️ No mentor/mentee matches found with any type variation or client-side filtering`);
         return [];
       }
 
@@ -7707,7 +7705,7 @@ export class AdminService {
       });
       
       if (skippedWrongCommunity > 0) {
-        console.warn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} mentor/mentee matches with wrong communityId (expected ${communityId})`);
+        devWarn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} mentor/mentee matches with wrong communityId (expected ${communityId})`);
       }
       
       devLog(`[AdminService] After community filter: ${communityFilteredMatches.length} matches (from ${dateMatches.length} total)`);
