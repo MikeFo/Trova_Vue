@@ -4,8 +4,8 @@
     <p class="section-description">Upload CSV files to manage community data</p>
 
     <div class="upload-cards">
-      <!-- Driver Data Upload -->
-      <div class="upload-card">
+      <!-- Driver Data Upload — only communities with has_custom_data (e.g. Gemini) -->
+      <div v-if="hasCustomData" class="upload-card">
         <div class="card-header">
           <ion-icon :icon="carOutline" class="card-icon"></ion-icon>
           <h3 class="card-title">Driver Data</h3>
@@ -114,9 +114,13 @@ import {
 
 interface Props {
   communityId: number | null;
+  /** From communities.has_custom_data — only Gemini-style customers get driver CSV. */
+  hasCustomData?: boolean;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), {
+  hasCustomData: false,
+});
 
 const driverFileInput = ref<HTMLInputElement | null>(null);
 const reportsToFileInput = ref<HTMLInputElement | null>(null);

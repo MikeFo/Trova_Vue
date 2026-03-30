@@ -17,6 +17,8 @@ export interface Community {
   accessCode?: string;
   showHome?: boolean;
   searchable?: boolean;
+  /** When true, community can use custom driver CSV flows (e.g. Gemini). */
+  hasCustomData?: boolean;
 }
 
 class CommunityService {

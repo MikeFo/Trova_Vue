@@ -93,6 +93,7 @@
           <div v-if="activeTab === 'data'" class="tab-panel">
             <DataUploadSection
               :community-id="selectedCommunityId"
+              :has-custom-data="selectedCommunityHasCustomData"
             />
           </div>
 
@@ -225,6 +226,20 @@ const currentCommunityName = computed<string | null>(() => {
 });
 
 const filteredCommunities = computed(() => managedCommunities.value);
+
+/** Driver CSV upload is only for communities with has_custom_data (backend flag). */
+const selectedCommunityHasCustomData = computed(() => {
+  if (selectedCommunityId.value == null) return false;
+  const fromList = managedCommunities.value.find((c) => c.id === selectedCommunityId.value);
+  if (fromList && typeof (fromList as Community).hasCustomData === 'boolean') {
+    return (fromList as Community).hasCustomData === true;
+  }
+  const fromStore = communityStore.currentCommunity;
+  if (fromStore?.id === selectedCommunityId.value && typeof fromStore.hasCustomData === 'boolean') {
+    return fromStore.hasCustomData === true;
+  }
+  return false;
+});
 
 // Magic Intros Modal state
 const isMagicIntrosModalOpen = ref(false);
