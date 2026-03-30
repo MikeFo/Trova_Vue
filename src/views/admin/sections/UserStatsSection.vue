@@ -1924,11 +1924,12 @@ async function loadStats() {
   // Initialize stats object immediately so the UI skeleton can render
   stats.value = { totalUsers: 0, activeUsers: 0, newUsersThisMonth: 0 };
 
-  // Engagement attribution fields should not be overwritten by getUserActionsStats
+  // Fields that should not be overwritten once set by their authoritative source
   const engagementAttributionFields = [
     'trovaMagicEngagements', 'channelPairingEngagements', 'mentorMenteeEngagements',
     'trovaMagicMatches', 'channelPairingMatches', 'mentorMenteeMatches', 'mentorMenteeUniquePairs',
   ];
+  const conversationsOwnedFields = ['trovaChatsStarted'];
 
   const mergeIntoStats = (source: Partial<UserStats>, skipFields: string[] = []) => {
     if (!stats.value) stats.value = {};
@@ -1967,7 +1968,7 @@ async function loadStats() {
   allPromises.push(
     adminService.getEngagementStats(communityId, start, end)
       .then((result) => {
-        if (result) mergeIntoStats(result);
+        if (result) mergeIntoStats(result, conversationsOwnedFields);
       })
       .catch((error) => { console.error('Error loading engagement stats:', error); })
       .finally(() => { isLoadingPrimary.value = false; isLoadingEngagement.value = false; })

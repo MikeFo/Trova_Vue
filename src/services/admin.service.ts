@@ -2720,11 +2720,12 @@ export class AdminService {
         devLog(`[AdminService] ✅ Fetched ${matches?.length || 0} matches from ${endpoint.name}`);
         
         if (matches && matches.length > 0) {
-          // Filter by communityId first if available
+          // Always filter by communityId — API may return cross-community matches
           let filteredMatches = matches;
-          if (matches[0].communityId !== undefined || matches[0].community_id !== undefined) {
+          const hasCommunityField = matches.some((m: any) => m.communityId !== undefined || m.community_id !== undefined);
+          if (hasCommunityField) {
             filteredMatches = filteredMatches.filter((match: any) => {
-              const matchCommunityId = match.communityId || match.community_id;
+              const matchCommunityId = Number(match.communityId || match.community_id);
               return matchCommunityId === communityId;
             });
             if (filteredMatches.length !== matches.length) {
@@ -3164,40 +3165,20 @@ export class AdminService {
       devLog(`[AdminService] 📊 Calculating user actions stats for community ${communityId}`);
       const stats: Partial<UserStats> = {};
 
-      // Try to get user events from various endpoints
+      // Try to get user events from the canonical endpoint
       const dateParams = startDate && endDate ? `startDate=${startDate}&endDate=${endDate}` : '';
       const queryParams = dateParams ? `?${dateParams}` : '';
-      const queryParamsWithAmp = dateParams ? `&${dateParams}` : '';
-      
-      const userEventsEndpoints = [
-        // Standard endpoints
-        `/communities/${communityId}/user-events${queryParams}`,
-        `/communities/${communityId}/events/user${queryParams}`,
-        `/user-events?communityId=${communityId}${queryParamsWithAmp}`,
-        // Console endpoints
-        `/console/user-events?communityId=${communityId}${queryParamsWithAmp}`,
-        `/console/communities/${communityId}/user-events${queryParams}`,
-        `/console/events/user?communityId=${communityId}${queryParamsWithAmp}`,
-        // Alternative patterns
-        `/api/user-events?communityId=${communityId}${queryParamsWithAmp}`,
-        `/events/user?communityId=${communityId}${queryParamsWithAmp}`,
-      ];
+      const url = `/communities/${communityId}/user-events${queryParams}`;
 
       let userEvents: any[] = [];
-      for (const url of userEventsEndpoints) {
-        try {
-          const events = await apiService.get<any[]>(url);
-          if (events && Array.isArray(events)) {
-            userEvents = events;
-            devLog(`[AdminService] ✅ Found ${userEvents.length} user events from ${url}`);
-            break;
-          }
-        } catch (error: any) {
-          // Continue to next endpoint
-          if (error?.status !== 404 && error?.response?.status !== 404) {
-            console.warn(`[AdminService] Error fetching user events from ${url}:`, error);
-          }
+      try {
+        const events = await apiService.get<any[]>(url);
+        if (events && Array.isArray(events)) {
+          userEvents = events;
+          devLog(`[AdminService] ✅ Found ${userEvents.length} user events from ${url}`);
         }
+      } catch (error: any) {
+        devLog(`[AdminService] No user events found, returning zeros`);
       }
 
       // Calculate stats from user events
@@ -7132,14 +7113,11 @@ export class AdminService {
         return [];
       }
       
-      // Filter by communityId
-      const validMatches = matches.filter((match: any) => {
-        return match.communityId === communityId;
-      });
+      // getMatchesForCommunity already filters by communityId — no double-filtering needed
       
       // Count matches per user
       const userMatchCounts = new Map<number, number>();
-      validMatches.forEach((match: any) => {
+      matches.forEach((match: any) => {
         const userId = match.userId || match.user_id;
         if (userId) {
           userMatchCounts.set(userId, (userMatchCounts.get(userId) || 0) + 1);
