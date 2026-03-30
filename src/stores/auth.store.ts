@@ -10,6 +10,7 @@ export interface User {
   profilePicture: string;
   emailConfirmed: boolean;
   setupStep: string;
+  isSuperAdmin?: boolean;
   [key: string]: any;
 }
 
