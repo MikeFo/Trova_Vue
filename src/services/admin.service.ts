@@ -5336,23 +5336,6 @@ export class AdminService {
   }
 
   /**
-   * Get profile completion statistics
-   */
-  async getProfileCompletionStats(communityId: number): Promise<{ profileCompletionRate: number } | null> {
-    try {
-      const stats = await apiService.get<{ profileCompletionRate: number }>(`/communities/${communityId}/stats/profile-completion`);
-      return stats;
-    } catch (error: any) {
-      if (error?.status === 404 || error?.response?.status === 404) {
-        devLog(`[AdminService] Profile completion stats endpoint not found for community ${communityId}`);
-        return null;
-      }
-      console.error('Failed to fetch profile completion stats:', error);
-      return null;
-    }
-  }
-
-  /**
    * Get match response statistics
    */
   async getMatchResponseStats(communityId: number, startDate?: string, endDate?: string): Promise<{ matchResponseRate: number; connectionsMade: number } | null> {
