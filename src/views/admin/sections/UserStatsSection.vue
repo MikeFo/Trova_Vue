@@ -44,7 +44,7 @@
             </div>
             <div class="metric-content">
               <div class="metric-value">
-                <ion-spinner v-if="isLoadingPrimary && stats?.profileCompletionCompleted === undefined" name="crescent" class="metric-spinner"></ion-spinner>
+                <ion-spinner v-if="isLoadingProfileCompletion && stats?.profileCompletionCompleted === undefined" name="crescent" class="metric-spinner"></ion-spinner>
                 <span v-else-if="stats?.profileCompletionCompleted !== undefined && stats?.profileCompletionTotal !== undefined">
                   {{ formatNumber(stats.profileCompletionCompleted) }}/{{ formatNumber(stats.profileCompletionTotal) }}
                 </span>
@@ -843,6 +843,7 @@ const isLoadingPrimary = ref(true);
 const isLoadingActions = ref(true);
 const isLoadingEngagement = ref(true);
 const isLoadingSkills = ref(true);
+const isLoadingProfileCompletion = ref(true);
 const stats = ref<Partial<UserStats> | null>(null);
 const magicIntroSummary = ref<MagicIntroSummary | null>(null);
 const isLoadingMagicIntroSummary = ref(false);
@@ -1924,6 +1925,7 @@ async function loadStats() {
   isLoadingActions.value = true;
   isLoadingEngagement.value = true;
   isLoadingSkills.value = true;
+  isLoadingProfileCompletion.value = true;
 
   const { start, end } = getDateRangeForPeriod(selectedPeriod.value);
   const communityId = props.communityId;
@@ -1937,6 +1939,7 @@ async function loadStats() {
     'trovaMagicMatches', 'channelPairingMatches', 'mentorMenteeMatches', 'mentorMenteeUniquePairs',
   ];
   const conversationsOwnedFields = ['trovaChatsStarted'];
+  const profileOwnedFields = ['profileCompletionRate', 'profileCompletionCompleted', 'profileCompletionTotal'];
 
   const mergeIntoStats = (source: Partial<UserStats>, skipFields: string[] = []) => {
     if (!stats.value) stats.value = {};
@@ -1975,7 +1978,7 @@ async function loadStats() {
   allPromises.push(
     adminService.getEngagementStats(communityId, start, end)
       .then((result) => {
-        if (result) mergeIntoStats(result, conversationsOwnedFields);
+        if (result) mergeIntoStats(result, [...conversationsOwnedFields, ...profileOwnedFields]);
       })
       .catch((error) => { console.error('Error loading engagement stats:', error); })
       .finally(() => { isLoadingPrimary.value = false; isLoadingEngagement.value = false; })
@@ -2095,6 +2098,23 @@ async function loadStats() {
       .catch((error) => {
         console.error('[UserStatsSection] Self-introduced stats fetch rejected:', error);
       })
+  );
+
+  // Profile completion via lightweight aggregate endpoint (no full profile fetch)
+  allPromises.push(
+    adminService.getProfileCompletionStats(communityId)
+      .then((result) => {
+        if (result) {
+          const rate = result.total > 0 ? (result.completed / result.total) * 100 : 0;
+          mergeIntoStats({
+            profileCompletionCompleted: result.completed,
+            profileCompletionTotal: result.total,
+            profileCompletionRate: rate,
+          } as Partial<UserStats>);
+        }
+      })
+      .catch(() => {})
+      .finally(() => { isLoadingProfileCompletion.value = false; })
   );
 
   // Wait for all to settle, then mark global loading as done

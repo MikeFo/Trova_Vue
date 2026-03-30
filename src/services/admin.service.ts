@@ -3437,6 +3437,23 @@ export class AdminService {
   }
 
   /**
+   * Lightweight profile completion via aggregate backend query.
+   * Returns completed/total counts without fetching full profile data.
+   */
+  async getProfileCompletionStats(communityId: number): Promise<{ completed: number; total: number } | null> {
+    try {
+      const url = `/communities/${communityId}/stats/profile-completion`;
+      devLog(`[AdminService] Fetching profile completion stats: ${url}`);
+      const result = await apiService.get<{ completed: number; total: number }>(url);
+      devLog(`[AdminService] Profile completion: ${result.completed}/${result.total}`);
+      return result;
+    } catch (error) {
+      console.warn('[AdminService] Profile completion endpoint failed, will fall back to client-side:', error);
+      return null;
+    }
+  }
+
+  /**
    * Get Skills stats
    * Tries the dedicated backend endpoint first, then falls back to client-side calculation.
    */
