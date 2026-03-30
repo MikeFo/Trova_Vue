@@ -34,9 +34,6 @@
       <!-- Primary Metrics (Core ROI) -->
       <div class="primary-metrics-section">
         <h3 class="section-subtitle">Primary Metrics</h3>
-        <div v-if="isLoadingPrimary" class="section-loading-indicator">
-          <ion-spinner name="dots"></ion-spinner>
-        </div>
         <div class="primary-metrics-grid">
           <div
             class="primary-metric-card clickable"
@@ -47,7 +44,8 @@
             </div>
             <div class="metric-content">
               <div class="metric-value">
-                <span v-if="stats?.profileCompletionCompleted !== undefined && stats?.profileCompletionTotal !== undefined">
+                <ion-spinner v-if="isLoadingPrimary && stats?.profileCompletionCompleted === undefined" name="crescent" class="metric-spinner"></ion-spinner>
+                <span v-else-if="stats?.profileCompletionCompleted !== undefined && stats?.profileCompletionTotal !== undefined">
                   {{ formatNumber(stats.profileCompletionCompleted) }}/{{ formatNumber(stats.profileCompletionTotal) }}
                 </span>
                 <span v-else>{{ formatPercentage(stats?.profileCompletionRate) }}</span>
@@ -70,7 +68,10 @@
               <ion-icon :icon="peopleOutline"></ion-icon>
             </div>
             <div class="metric-content">
-              <div class="metric-value">{{ formatNumber(stats?.connectionsMade || 0) }}</div>
+              <div class="metric-value">
+                <ion-spinner v-if="isLoadingPrimary && stats?.connectionsMade === undefined" name="crescent" class="metric-spinner"></ion-spinner>
+                <span v-else>{{ formatNumber(stats?.connectionsMade || 0) }}</span>
+              </div>
               <div class="metric-label-with-info">
                 <span class="metric-label">Introductions Created</span>
                 <ion-icon
@@ -93,7 +94,10 @@
               <ion-icon :icon="chatbubblesOutline"></ion-icon>
             </div>
             <div class="metric-content">
-              <div class="metric-value">{{ formatNumber(stats?.trovaChatsStarted || 0) }}</div>
+              <div class="metric-value">
+                <ion-spinner v-if="isLoadingPrimary && stats?.trovaChatsStarted === undefined" name="crescent" class="metric-spinner"></ion-spinner>
+                <span v-else>{{ formatNumber(stats?.trovaChatsStarted || 0) }}</span>
+              </div>
               <div class="metric-label-with-info">
                 <span class="metric-label">Messages Exchanged</span>
                 <ion-icon
@@ -114,20 +118,20 @@
       <!-- General Actions Metrics -->
       <div v-if="hasUserActionsData || isLoadingActions" class="engagement-metrics-section">
         <h3 class="section-subtitle">General Actions</h3>
-        <div v-if="isLoadingActions && !hasUserActionsData" class="section-loading-indicator">
-          <ion-spinner name="dots"></ion-spinner>
-        </div>
         <div class="engagement-metrics-grid">
           <div
             class="engagement-metric-card clickable"
-            v-if="stats?.openedTrova !== undefined"
+            v-if="stats?.openedTrova !== undefined || isLoadingActions"
             @click="openOpenedTrovaList"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="openOutline"></ion-icon>
             </div>
             <div class="metric-content-small">
-              <div class="metric-value-small">{{ formatNumber(stats.openedTrova) }}</div>
+              <div class="metric-value-small">
+                <ion-spinner v-if="isLoadingActions && stats?.openedTrova === undefined" name="crescent" class="metric-spinner-small"></ion-spinner>
+                <span v-else>{{ formatNumber(stats?.openedTrova) }}</span>
+              </div>
               <div class="metric-label-with-info">
                 <span class="metric-label-small">Trova Opens</span>
                 <ion-icon
@@ -179,14 +183,17 @@
           </div>
           <div 
             class="engagement-metric-card clickable"
-            v-if="stats?.selfIntroduced !== undefined"
+            v-if="stats?.selfIntroduced !== undefined || isLoadingActions"
             @click="openSelfIntroducedList"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="starOutline"></ion-icon>
             </div>
             <div class="metric-content-small">
-              <div class="metric-value-small">{{ formatNumber(stats.selfIntroduced) }}</div>
+              <div class="metric-value-small">
+                <ion-spinner v-if="isLoadingActions && stats?.selfIntroduced === undefined" name="crescent" class="metric-spinner-small"></ion-spinner>
+                <span v-else>{{ formatNumber(stats?.selfIntroduced) }}</span>
+              </div>
               <div class="metric-label-with-info">
                 <span class="metric-label-small">Self-Introductions Posted</span>
                 <ion-icon
@@ -203,13 +210,10 @@
       <!-- Engagement Attribution -->
       <div v-if="hasEngagementAttributionData || isLoadingEngagement" class="engagement-metrics-section">
         <h3 class="section-subtitle">Engagement by Feature</h3>
-        <div v-if="isLoadingEngagement && !hasEngagementAttributionData" class="section-loading-indicator">
-          <ion-spinner name="dots"></ion-spinner>
-        </div>
         <div class="engagement-metrics-grid">
           <div 
             class="engagement-metric-card clickable" 
-            v-if="stats?.trovaMagicEngagements !== undefined || stats?.trovaMagicMatches !== undefined"
+            v-if="stats?.trovaMagicEngagements !== undefined || stats?.trovaMagicMatches !== undefined || isLoadingEngagement"
             @click="navigateToMagicIntros"
           >
             <div class="metric-icon-small">
@@ -217,7 +221,8 @@
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">
-                <span v-if="magicIntroSummary">
+                <ion-spinner v-if="isLoadingEngagement && stats?.trovaMagicMatches === undefined && !magicIntroSummary" name="crescent" class="metric-spinner-small"></ion-spinner>
+                <span v-else-if="magicIntroSummary">
                   {{ formatNumber(magicIntroSummary.engagedPairs) }}/{{ formatNumber(magicIntroSummary.totalPairs) }}
                 </span>
                 <span v-else-if="stats?.trovaMagicEngagements !== undefined && stats?.trovaMagicMatches !== undefined">
@@ -240,7 +245,7 @@
           </div>
           <div 
             class="engagement-metric-card clickable" 
-            v-if="stats?.channelPairingEngagements !== undefined || stats?.channelPairingMatches !== undefined"
+            v-if="stats?.channelPairingEngagements !== undefined || stats?.channelPairingMatches !== undefined || isLoadingEngagement"
             @click="navigateToChannelPairings"
           >
             <div class="metric-icon-small">
@@ -248,13 +253,14 @@
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">
-                <span v-if="stats?.channelPairingEngagements !== undefined && stats?.channelPairingMatches !== undefined">
+                <ion-spinner v-if="isLoadingEngagement && stats?.channelPairingMatches === undefined" name="crescent" class="metric-spinner-small"></ion-spinner>
+                <span v-else-if="stats?.channelPairingEngagements !== undefined && stats?.channelPairingMatches !== undefined">
                   {{ formatNumber(stats.channelPairingEngagements || 0) }}/{{ formatNumber(stats.channelPairingMatches) }}
                 </span>
                 <span v-else-if="stats?.channelPairingMatches !== undefined">
                   {{ formatNumber(stats.channelPairingEngagements || 0) }}/{{ formatNumber(stats.channelPairingMatches) }}
                 </span>
-                <span v-else>{{ formatNumber(stats.channelPairingEngagements || 0) }}</span>
+                <span v-else>{{ formatNumber(stats?.channelPairingEngagements || 0) }}</span>
               </div>
               <div class="metric-label-with-info">
                 <span class="metric-label-small">Channel Pairings (Engaged / Total)</span>
@@ -268,7 +274,7 @@
           </div>
           <div 
             class="engagement-metric-card clickable" 
-            v-if="stats?.mentorMenteeEngagements !== undefined || stats?.mentorMenteeMatches !== undefined"
+            v-if="stats?.mentorMenteeEngagements !== undefined || stats?.mentorMenteeMatches !== undefined || isLoadingEngagement"
             @click="navigateToMentorMenteeMatches"
           >
             <div class="metric-icon-small">
@@ -276,7 +282,8 @@
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">
-                <span v-if="stats?.mentorMenteeMatches !== undefined && stats?.mentorMenteeUniquePairs !== undefined">
+                <ion-spinner v-if="isLoadingEngagement && stats?.mentorMenteeMatches === undefined" name="crescent" class="metric-spinner-small"></ion-spinner>
+                <span v-else-if="stats?.mentorMenteeMatches !== undefined && stats?.mentorMenteeUniquePairs !== undefined">
                   {{ formatNumber(stats.mentorMenteeUniquePairs) }}/{{ formatNumber(stats.mentorMenteeMatches) }}
                 </span>
                 <span v-else-if="stats?.mentorMenteeMatches !== undefined">
@@ -2295,12 +2302,25 @@ async function exportStats() {
   flex: 1;
 }
 
+.metric-spinner {
+  width: 24px;
+  height: 24px;
+  color: var(--color-primary);
+}
+
+.metric-spinner-small {
+  width: 20px;
+  height: 20px;
+  color: var(--color-primary);
+}
+
 .metric-value {
   font-size: 28px;
   font-weight: 700;
   color: var(--color-primary);
   margin-bottom: 4px;
   line-height: 1.2;
+  min-height: 34px;
 }
 
 .metric-label {
@@ -2396,6 +2416,7 @@ async function exportStats() {
   color: #1a1a1a;
   margin-bottom: 4px;
   line-height: 1.2;
+  min-height: 34px;
 }
 
 .engagement-metric-header {
