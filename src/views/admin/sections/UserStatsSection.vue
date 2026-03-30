@@ -2013,45 +2013,22 @@ async function loadStats() {
       .catch(() => {})
   );
 
-  // Conversations started → Messages Exchanged
+  // Messages Exchanged — only counts messages in Trova-created channels
   allPromises.push(
-    adminService.getConversationsStarted(communityId, start, end)
+    adminService.getMessagesExchangedStats(communityId, start, end)
       .then((result) => {
         if (result) {
-          const totalMessages = result.totalMessages || 0;
-          if (result.conversations && result.conversations.length > 0) {
-            const sumOfMessageCounts = result.conversations.reduce((sum, conv) => sum + (conv.messageCount || 0), 0);
-            if (sumOfMessageCounts !== totalMessages) {
-              console.warn(`[UserStatsSection] Mismatch: sum of message counts (${sumOfMessageCounts}) != totalMessages (${totalMessages})`);
-            }
-          }
-          mergeIntoStats({ trovaChatsStarted: totalMessages } as Partial<UserStats>);
+          mergeIntoStats({ trovaChatsStarted: result.total } as Partial<UserStats>);
         } else {
-          console.warn('[UserStatsSection] Conversations started returned null, will try fallback');
-          mergeIntoStats({ trovaChatsStarted: 0 } as Partial<UserStats>);
-          // Async fallback chain
-          return adminService.getMessageStats(communityId, start, end)
-            .then((messageStats) => {
-              if (messageStats?.totalMessagesSent != null && stats.value) {
-                stats.value.trovaChatsStarted = messageStats.totalMessagesSent;
-                stats.value = { ...stats.value };
-                return;
-              }
-              return adminService.getMessagesFromMatches(communityId!, start, end);
-            })
+          // Fallback to conversations-started if new endpoint not deployed yet
+          return adminService.getConversationsStarted(communityId, start, end)
             .then((fallback) => {
-              if (fallback && stats.value && (stats.value.trovaChatsStarted === 0 || stats.value.trovaChatsStarted === undefined)) {
-                stats.value.trovaChatsStarted = fallback.totalMessagesSent || 0;
-                stats.value = { ...stats.value };
-              }
-            })
-            .catch((error) => {
-              console.warn('[UserStatsSection] Message stats fallback failed:', error);
+              mergeIntoStats({ trovaChatsStarted: fallback?.totalMessages || 0 } as Partial<UserStats>);
             });
         }
       })
       .catch((error) => {
-        console.warn('[UserStatsSection] Conversations started endpoint rejected:', error);
+        console.warn('[UserStatsSection] Messages exchanged fetch failed:', error);
         mergeIntoStats({ trovaChatsStarted: 0 } as Partial<UserStats>);
       })
   );

@@ -3540,6 +3540,33 @@ export class AdminService {
   }
 
   /**
+   * Messages exchanged in Trova-created channels only (user_match-based).
+   * Date filtering applies to messages, not channel creation.
+   */
+  async getMessagesExchangedStats(
+    communityId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<{ total: number; breakdown: Record<string, number> } | null> {
+    try {
+      let url = `/communities/${communityId}/stats/messages-exchanged`;
+      const params = new URLSearchParams();
+      if (startDate) params.set('startDate', startDate);
+      if (endDate) params.set('endDate', endDate);
+      const qs = params.toString();
+      if (qs) url += `?${qs}`;
+
+      devLog(`[AdminService] Fetching messages exchanged: ${url}`);
+      const result = await apiService.get<{ total: number; breakdown: Record<string, number> }>(url);
+      devLog(`[AdminService] Messages exchanged: ${result.total}`, result.breakdown);
+      return result;
+    } catch (error) {
+      console.warn('[AdminService] Messages exchanged endpoint failed, falling back:', error);
+      return null;
+    }
+  }
+
+  /**
    * Get conversations started from matches (Magic Intros, Channel Pairings, Mentor Matches)
    * Backend endpoint: GET /communities/:id/stats/conversations-started
    * 
