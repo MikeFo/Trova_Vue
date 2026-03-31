@@ -126,12 +126,22 @@ export class ApiService {
       const response = await this.api.get<T>(url, config);
       return response.data;
     } catch (error: any) {
-      if (error.response?.status !== 404) {
-        console.error(`API GET ${url}:`, error.response?.data?.message ?? error.message);
+      const status = error.response?.status;
+      const message = error.response?.data?.message ?? error.message;
+      const is404 = status === 404;
+      const isNotMember422 =
+        status === 422 &&
+        String(error.response?.data?.error || message || '')
+          .toLowerCase()
+          .includes('not a member of requested community');
+
+      // Keep console readable: don't log missing endpoints (404) or expected empty-state membership checks (422).
+      if (!is404 && !isNotMember422) {
+        console.error(`API GET ${url}:`, message);
       }
       // Re-throw with more context
-      const enhancedError = new Error(error.response?.data?.message || error.message || 'Request failed');
-      (enhancedError as any).status = error.response?.status;
+      const enhancedError = new Error(message || 'Request failed');
+      (enhancedError as any).status = status;
       (enhancedError as any).response = error.response;
       throw enhancedError;
     }

@@ -327,9 +327,13 @@ export class AdminService {
         `/communities/${communityId}/managers/${userId}/check`
       );
       return response?.isManager || false;
-    } catch (error) {
+    } catch (error: any) {
       if (community && community.leaderId === userId) {
         return true;
+      }
+      // Some deployments do not implement this endpoint; treat as "not a manager" without noise.
+      if (error.status === 404 || error.response?.status === 404) {
+        return false;
       }
       console.error('Failed to check manager status:', error);
       return false;
