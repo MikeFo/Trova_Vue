@@ -2,13 +2,13 @@
   <ion-page>
     <ion-header>
       <ion-toolbar>
-        <ion-buttons slot="start">
+        <ion-buttons v-if="!isSlackUser" slot="start">
           <ion-button @click="goBack">
             <ion-icon :icon="arrowBack"></ion-icon>
           </ion-button>
         </ion-buttons>
         <ion-title>Admin Console</ion-title>
-        <ion-buttons slot="end">
+        <ion-buttons v-if="!isSlackUser" slot="end">
           <ion-button @click="refreshData">
             <ion-icon :icon="refresh"></ion-icon>
           </ion-button>
@@ -227,6 +227,7 @@ const isLoading = ref(true);
 const isManager = ref(false);
 const isSuperAdminUser = ref(false);
 const slackSessionExpired = ref(false);
+const isSlackUser = ref(false);
 const activeTab = ref('stats');
 const managedCommunities = ref<Community[]>([]);
 const selectedCommunityId = ref<number | null>(null);
@@ -323,6 +324,7 @@ function getCommunityId(): number | null {
 async function checkManagerAccess() {
   const hasSlackLinkParams =
     !!route.query.s && !!route.query.communityId && !!route.query.slackUserId;
+  isSlackUser.value = hasSlackLinkParams || slackSessionService.isSlackLinkUser();
   const authUserId = authStore.user?.id ?? null;
   const communityId = getCommunityId();
 
