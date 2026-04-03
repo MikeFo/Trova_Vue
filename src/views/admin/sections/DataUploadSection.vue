@@ -43,13 +43,60 @@
           <h3 class="card-title">Mapped Pairings</h3>
         </div>
         <p class="card-description">Upload CSV with user email pairings for groups (up to 6 users per group)</p>
+
+        <!-- Spreadsheet-style format reference -->
         <div class="csv-format-help">
-          <p class="format-label">Required columns:</p>
-          <pre class="format-sample">useremail1,useremail2,useremail3,useremail4,useremail5,useremail6
-alice@co.com,bob@co.com,carol@co.com,,,
-dave@co.com,eve@co.com,,,,</pre>
-          <p class="format-note">Only useremail1 and useremail2 are required. Columns 3–6 are optional.</p>
+          <p class="format-label">Required CSV Format</p>
+          <div class="spreadsheet-preview">
+            <table class="spreadsheet-table">
+              <thead>
+                <tr>
+                  <th class="row-number"></th>
+                  <th>A</th>
+                  <th>B</th>
+                  <th class="optional-col">C</th>
+                  <th class="optional-col">D</th>
+                  <th class="optional-col">E</th>
+                  <th class="optional-col">F</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="header-row">
+                  <td class="row-number">1</td>
+                  <td class="required-cell">useremail1</td>
+                  <td class="required-cell">useremail2</td>
+                  <td class="optional-cell">useremail3</td>
+                  <td class="optional-cell">useremail4</td>
+                  <td class="optional-cell">useremail5</td>
+                  <td class="optional-cell">useremail6</td>
+                </tr>
+                <tr>
+                  <td class="row-number">2</td>
+                  <td>alice@company.com</td>
+                  <td>bob@company.com</td>
+                  <td>carol@company.com</td>
+                  <td></td>
+                  <td></td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <td class="row-number">3</td>
+                  <td>dave@company.com</td>
+                  <td>eve@company.com</td>
+                  <td></td>
+                  <td></td>
+                  <td></td>
+                  <td></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="format-legend">
+            <span class="legend-required"><span class="legend-dot required"></span> Required</span>
+            <span class="legend-optional"><span class="legend-dot optional"></span> Optional</span>
+          </div>
         </div>
+
         <div class="file-input-container">
           <input
             ref="pairingsFileInput"
@@ -75,6 +122,103 @@ dave@co.com,eve@co.com,,,,</pre>
         </ion-button>
       </div>
     </div>
+
+    <!-- Format Error Modal -->
+    <ion-modal :is-open="showFormatErrorModal" @did-dismiss="showFormatErrorModal = false">
+      <ion-header>
+        <ion-toolbar>
+          <ion-title>Incorrect CSV Format</ion-title>
+          <ion-buttons slot="end">
+            <ion-button @click="showFormatErrorModal = false">Close</ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+      <ion-content class="format-error-content">
+        <div class="error-modal-body">
+          <div class="error-banner">
+            <ion-icon :icon="alertCircleOutline" class="error-icon"></ion-icon>
+            <div>
+              <h3>Upload Failed</h3>
+              <p>{{ formatErrorMessage }}</p>
+            </div>
+          </div>
+
+          <div v-if="formatErrorColumns.length" class="error-columns-found">
+            <p class="detail-label">Columns found in your file:</p>
+            <div class="column-chips">
+              <span
+                v-for="col in formatErrorColumns"
+                :key="col"
+                class="column-chip"
+                :class="{ 'chip-valid': isValidPairingColumn(col), 'chip-invalid': !isValidPairingColumn(col) }"
+              >{{ col }}</span>
+            </div>
+          </div>
+
+          <div class="expected-format-section">
+            <p class="detail-label">Your CSV must look like this:</p>
+            <div class="spreadsheet-preview modal-preview">
+              <table class="spreadsheet-table">
+                <thead>
+                  <tr>
+                    <th class="row-number"></th>
+                    <th>A</th>
+                    <th>B</th>
+                    <th class="optional-col">C</th>
+                    <th class="optional-col">D</th>
+                    <th class="optional-col">E</th>
+                    <th class="optional-col">F</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr class="header-row">
+                    <td class="row-number">1</td>
+                    <td class="required-cell">useremail1</td>
+                    <td class="required-cell">useremail2</td>
+                    <td class="optional-cell">useremail3</td>
+                    <td class="optional-cell">useremail4</td>
+                    <td class="optional-cell">useremail5</td>
+                    <td class="optional-cell">useremail6</td>
+                  </tr>
+                  <tr>
+                    <td class="row-number">2</td>
+                    <td>john@email.com</td>
+                    <td>sarah@email.com</td>
+                    <td>mike@email.com</td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                  </tr>
+                  <tr>
+                    <td class="row-number">3</td>
+                    <td>alex@email.com</td>
+                    <td>taylor@email.com</td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="format-rules">
+            <p class="detail-label">Rules</p>
+            <ul>
+              <li><strong>Row 1</strong> must be the header row with exact column names</li>
+              <li><strong>useremail1</strong> and <strong>useremail2</strong> are required in every row</li>
+              <li><strong>useremail3</strong> through <strong>useremail6</strong> are optional (for larger groups)</li>
+              <li>Save as <strong>.csv</strong> (comma-separated), not .xlsx</li>
+            </ul>
+          </div>
+
+          <ion-button expand="block" @click="retryPairingsUpload" color="primary">
+            Try Again
+          </ion-button>
+        </div>
+      </ion-content>
+    </ion-modal>
   </div>
 </template>
 
@@ -86,11 +230,18 @@ import {
   IonButton,
   IonIcon,
   IonSpinner,
+  IonModal,
+  IonHeader,
+  IonToolbar,
+  IonTitle,
+  IonButtons,
+  IonContent,
 } from '@ionic/vue';
 import {
   peopleOutline,
   linkOutline,
   documentOutline,
+  alertCircleOutline,
 } from 'ionicons/icons';
 
 interface Props {
@@ -108,6 +259,16 @@ const reportsToFile = ref<File | null>(null);
 const pairingsFile = ref<File | null>(null);
 const isUploadingReports = ref(false);
 const isUploadingPairings = ref(false);
+
+const showFormatErrorModal = ref(false);
+const formatErrorMessage = ref('');
+const formatErrorColumns = ref<string[]>([]);
+
+const VALID_PAIRING_COLUMNS = ['useremail1', 'useremail2', 'useremail3', 'useremail4', 'useremail5', 'useremail6'];
+
+function isValidPairingColumn(col: string): boolean {
+  return VALID_PAIRING_COLUMNS.includes(col.toLowerCase().trim());
+}
 
 function triggerReportsToInput() {
   reportsToFileInput.value?.click();
@@ -134,6 +295,42 @@ function readFileAsText(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error);
     reader.readAsText(file);
   });
+}
+
+function parseColumnsFromError(errorMsg: string): string[] {
+  const match = errorMsg.match(/Found columns:\s*(.+)/i);
+  if (match) {
+    return match[1].split(',').map(c => c.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function showPairingsFormatError(error: any) {
+  const msg = error?.response?.data?.error
+    || error?.response?.data?.message
+    || error?.message
+    || 'Unknown error';
+
+  formatErrorColumns.value = parseColumnsFromError(msg);
+
+  if (msg.toLowerCase().includes('useremail1') || msg.toLowerCase().includes('columns')) {
+    formatErrorMessage.value = 'Your CSV is missing the required column headers. The first row must contain useremail1 and useremail2.';
+  } else if (msg.toLowerCase().includes('empty')) {
+    formatErrorMessage.value = 'The uploaded CSV file is empty. Please add data and try again.';
+  } else if (msg.toLowerCase().includes('parse')) {
+    formatErrorMessage.value = 'The file could not be read as a CSV. Make sure it is saved as a .csv file, not .xlsx.';
+  } else {
+    formatErrorMessage.value = msg;
+  }
+
+  showFormatErrorModal.value = true;
+}
+
+function retryPairingsUpload() {
+  showFormatErrorModal.value = false;
+  pairingsFile.value = null;
+  if (pairingsFileInput.value) pairingsFileInput.value.value = '';
+  triggerPairingsInput();
 }
 
 async function uploadReportsToData() {
@@ -197,14 +394,19 @@ async function uploadPairings() {
     await toast.present();
     pairingsFile.value = null;
     if (pairingsFileInput.value) pairingsFileInput.value.value = '';
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error uploading pairings:', error);
-    const toast = await toastController.create({
-      message: 'Failed to upload mapped pairings. Please try again.',
-      duration: 3000,
-      color: 'danger',
-    });
-    await toast.present();
+    const status = error?.status || error?.response?.status;
+    if (status === 400) {
+      showPairingsFormatError(error);
+    } else {
+      const toast = await toastController.create({
+        message: 'Failed to upload mapped pairings. Please try again.',
+        duration: 3000,
+        color: 'danger',
+      });
+      await toast.present();
+    }
   } finally {
     isUploadingPairings.value = false;
   }
@@ -272,6 +474,7 @@ async function uploadPairings() {
   margin: 0;
 }
 
+/* Spreadsheet-style table */
 .csv-format-help {
   background: white;
   border: 1px solid #e5e7eb;
@@ -283,27 +486,97 @@ async function uploadPairings() {
   font-size: 12px;
   font-weight: 600;
   color: #475569;
-  margin: 0 0 6px 0;
+  margin: 0 0 8px 0;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
-.format-sample {
-  font-size: 11px;
-  background: #f1f5f9;
-  padding: 8px;
-  border-radius: 4px;
+.spreadsheet-preview {
   overflow-x: auto;
-  margin: 0 0 6px 0;
-  color: #334155;
-  line-height: 1.5;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
 }
 
-.format-note {
+.spreadsheet-table {
+  width: 100%;
+  border-collapse: collapse;
   font-size: 12px;
-  color: #64748b;
-  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Mono', 'Menlo', monospace;
+  white-space: nowrap;
 }
+
+.spreadsheet-table thead th {
+  background: #e5e7eb;
+  color: #6b7280;
+  font-weight: 500;
+  font-size: 11px;
+  text-align: center;
+  padding: 4px 8px;
+  border: 1px solid #d1d5db;
+}
+
+.spreadsheet-table thead th.optional-col {
+  color: #9ca3af;
+}
+
+.spreadsheet-table td {
+  padding: 6px 10px;
+  border: 1px solid #e5e7eb;
+  color: #374151;
+}
+
+.spreadsheet-table .row-number {
+  background: #f3f4f6;
+  color: #9ca3af;
+  text-align: center;
+  width: 28px;
+  font-size: 11px;
+  padding: 4px 6px;
+}
+
+.spreadsheet-table thead th.row-number {
+  background: #e5e7eb;
+  width: 28px;
+}
+
+.spreadsheet-table .header-row td {
+  font-weight: 700;
+  background: #f8fafc;
+}
+
+.spreadsheet-table .required-cell {
+  color: #15803d;
+  background: #f0fdf4;
+}
+
+.spreadsheet-table .optional-cell {
+  color: #9ca3af;
+  background: #fafafa;
+}
+
+.format-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.legend-required, .legend-optional {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.legend-dot.required { background: #16a34a; }
+.legend-dot.optional { background: #d1d5db; }
 
 .file-input-container {
   display: flex;
@@ -323,5 +596,118 @@ async function uploadPairings() {
 .upload-card ion-button {
   margin-top: auto;
   --border-radius: 8px;
+}
+
+/* Format Error Modal */
+.format-error-content {
+  --background: #f8fafc;
+}
+
+.error-modal-body {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.error-banner {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.error-icon {
+  font-size: 28px;
+  color: #dc2626;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.error-banner h3 {
+  font-size: 16px;
+  font-weight: 700;
+  color: #991b1b;
+  margin: 0 0 4px 0;
+}
+
+.error-banner p {
+  font-size: 14px;
+  color: #7f1d1d;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.error-columns-found {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.detail-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  margin: 0 0 8px 0;
+}
+
+.column-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.column-chip {
+  font-size: 12px;
+  font-family: 'SF Mono', 'Menlo', monospace;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+.chip-valid {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+
+.chip-invalid {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+
+.expected-format-section {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.modal-preview {
+  margin-top: 4px;
+}
+
+.format-rules {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.format-rules ul {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  color: #475569;
+  line-height: 1.8;
+}
+
+.format-rules ul strong {
+  color: #1e293b;
 }
 </style>
