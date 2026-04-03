@@ -262,9 +262,15 @@
             </ul>
           </div>
 
-          <ion-button expand="block" @click="retryPairingsUpload" color="primary">
-            Try Again
-          </ion-button>
+          <div class="modal-actions">
+            <button class="copy-btn copy-btn-lg" @click="copyPairingsSample">
+              <ion-icon :icon="pairingsCopied ? checkmarkOutline : clipboardOutline"></ion-icon>
+              {{ pairingsClipboardLabel }}
+            </button>
+            <ion-button expand="block" @click="retryPairingsUpload" color="primary">
+              Try Again
+            </ion-button>
+          </div>
         </div>
       </ion-content>
     </ion-modal>
@@ -812,5 +818,19 @@ async function uploadPairings() {
 
 .format-rules ul strong {
   color: #1e293b;
+}
+
+.modal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.copy-btn-lg {
+  width: 100%;
+  justify-content: center;
+  padding: 10px 16px;
+  font-size: 14px;
+  border-radius: 8px;
 }
 </style>
