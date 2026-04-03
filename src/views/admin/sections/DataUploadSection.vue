@@ -688,6 +688,7 @@ async function uploadPairings() {
 
 .file-name {
   font-size: 14px;
+  font-weight: 700;
   color: #1a1a1a;
   padding: 8px 12px;
   background: white;
