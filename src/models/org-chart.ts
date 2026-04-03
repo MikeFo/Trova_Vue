@@ -12,6 +12,7 @@ export interface OrgNode {
   role?: string;
   team?: string;
   email?: string;
+  _depthFromFocus?: number;
 }
 
 export interface OrgUser {

@@ -87,12 +87,18 @@
                 :datasource="orgChartData"
                 :display-flags="displayFlags"
                 :group-scale="groupScale"
+                :max-render-depth="maxRenderDepth"
                 :is-highlighted="highlightedSlackId === orgChartData.slackId"
                 :highlighted-slack-id="highlightedSlackId"
                 @node-click="handleNodeClick"
                 @select-node="handleSelectNode"
               />
         </OrgChartContainer>
+
+        <button @click="toggleExpandedView" class="view-toggle-btn">
+          <ion-icon :icon="isExpandedView ? contractOutline : expandOutline"></ion-icon>
+          {{ isExpandedView ? 'Focused View' : 'Full Org Chart' }}
+        </button>
       </div>
 
       <!-- Empty State -->
@@ -115,7 +121,7 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { IonPage, IonHeader, IonToolbar, IonTitle, IonContent, IonIcon, IonButton, IonSpinner, alertController } from '@ionic/vue';
-import { search, close, alertCircle } from 'ionicons/icons';
+import { search, close, alertCircle, expandOutline, contractOutline } from 'ionicons/icons';
 import { communityService } from '@/services/community.service';
 import { orgChartAuthService } from '@/services/org-chart-auth.service';
 import { slackSessionService } from '@/services/slack-session.service';
@@ -158,6 +164,10 @@ const displayFlags = ref({
 const chartScale = ref(1.0);
 const chartTranslateX = ref(0);
 const chartTranslateY = ref(0);
+
+// Depth-limited rendering
+const maxRenderDepth = ref<number>(2);
+const isExpandedView = ref(false);
 
 // Search
 const searchQuery = ref('');
@@ -381,6 +391,7 @@ function handleOrgDataResponse(response: OrgChartResponse) {
   // Restructure the tree to show full context around the focus user
   // (manager, teammates/siblings, and direct reports). API already expanded path via slackIdsInChain.
   orgChartData.value = restructureTreeForUser(response.dataSource, focusSlackId);
+  annotateDepthFromFocus(orgChartData.value, focusSlackId);
 
   loading.value = false;
 
@@ -655,6 +666,71 @@ function retryLoad() {
   initOrg(true);
 }
 
+function toggleExpandedView() {
+  isExpandedView.value = !isExpandedView.value;
+  maxRenderDepth.value = isExpandedView.value ? Infinity : 2;
+}
+
+/**
+ * BFS from the focused user outward, assigning each node its distance
+ * from the focus. Used by OrgChartNode to gate rendering by depth.
+ */
+function annotateDepthFromFocus(root: OrgNode, focusSlackId: string): void {
+  const parentMap = new Map<string, OrgNode>();
+  const nodeMap = new Map<string, OrgNode>();
+
+  function mapNodes(node: OrgNode) {
+    nodeMap.set(node.slackId, node);
+    if (node.children) {
+      for (const child of node.children) {
+        parentMap.set(child.slackId, node);
+        mapNodes(child);
+      }
+    }
+  }
+  mapNodes(root);
+
+  const focusNode = nodeMap.get(focusSlackId);
+  if (!focusNode) {
+    function setZero(node: OrgNode) {
+      node._depthFromFocus = 0;
+      node.children?.forEach(setZero);
+    }
+    setZero(root);
+    return;
+  }
+
+  const visited = new Set<string>();
+  const queue: Array<{ node: OrgNode; depth: number }> = [{ node: focusNode, depth: 0 }];
+  visited.add(focusSlackId);
+
+  while (queue.length > 0) {
+    const { node, depth } = queue.shift()!;
+    node._depthFromFocus = depth;
+
+    const parent = parentMap.get(node.slackId);
+    if (parent && !visited.has(parent.slackId)) {
+      visited.add(parent.slackId);
+      queue.push({ node: parent, depth: depth + 1 });
+    }
+
+    if (node.children) {
+      for (const child of node.children) {
+        if (!visited.has(child.slackId)) {
+          visited.add(child.slackId);
+          queue.push({ node: child, depth: depth + 1 });
+        }
+      }
+    }
+  }
+
+  function setUnvisited(node: OrgNode) {
+    if (node._depthFromFocus === undefined) node._depthFromFocus = Infinity;
+    node.children?.forEach(setUnvisited);
+  }
+  setUnvisited(root);
+}
+
 // Helper function to enrich org chart data with profile pictures from users
 async function enrichWithProfilePictures(response: OrgChartResponse) {
   // Try to get profile pictures from the users array
@@ -898,6 +974,35 @@ watch(() => route.query, () => {
   color: #6b7280;
 }
 
+.view-toggle-btn {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: #ffffff;
+  border: 2px solid #2d7a4e;
+  border-radius: 24px;
+  color: #2d7a4e;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  transition: background 0.2s ease, color 0.2s ease;
+  z-index: 50;
+}
+
+.view-toggle-btn:hover {
+  background: #2d7a4e;
+  color: #ffffff;
+}
+
+.view-toggle-btn ion-icon {
+  font-size: 18px;
+}
+
 @media (max-width: 768px) {
   .org-chart-search-container {
     padding: 12px;
@@ -911,6 +1016,13 @@ watch(() => route.query, () => {
   .org-chart-wrapper {
     height: calc(100vh - 180px);
     min-height: 400px;
+  }
+
+  .view-toggle-btn {
+    bottom: 12px;
+    right: 12px;
+    padding: 8px 12px;
+    font-size: 12px;
   }
 }
 </style>
