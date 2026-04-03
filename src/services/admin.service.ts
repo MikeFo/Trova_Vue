@@ -144,6 +144,7 @@ export interface ConversationsStartedResponse {
 }
 
 export class AdminService {
+  private managersCheckEndpointMissing = false;
   // Cache for expensive operations
   private matchesCache = new Map<string, { data: any[]; timestamp: number }>();
   private conversationsCache = new Map<string, { data: any; timestamp: number }>();
@@ -322,6 +323,8 @@ export class AdminService {
       return true;
     }
 
+    if (this.managersCheckEndpointMissing) return false;
+
     try {
       const response = await apiService.get<{ isManager: boolean }>(
         `/communities/${communityId}/managers/${userId}/check`
@@ -333,6 +336,7 @@ export class AdminService {
       }
       // Some deployments do not implement this endpoint; treat as "not a manager" without noise.
       if (error.status === 404 || error.response?.status === 404) {
+        this.managersCheckEndpointMissing = true;
         return false;
       }
       console.error('Failed to check manager status:', error);
@@ -535,27 +539,13 @@ export class AdminService {
   }
 
   /**
-   * Upload driver data CSV
+   * Upload reports-to data CSV.
+   * Reads the file as text and sends the raw CSV string as JSON — matches the
+   * Ionic client and backend contract (POST /upload-reporting-data { csvData }).
    */
-  async uploadDriverData(communityId: number, file: File): Promise<void> {
+  async uploadReportsToData(communityId: number, csvData: string): Promise<void> {
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      await apiService.post(`/communities/${communityId}/data/drivers`, formData);
-    } catch (error) {
-      console.error('Failed to upload driver data:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Upload reports-to data CSV
-   */
-  async uploadReportsToData(communityId: number, file: File): Promise<void> {
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      await apiService.post(`/communities/${communityId}/data/reports-to`, formData);
+      await apiService.post(`/communities/${communityId}/upload-reporting-data`, { csvData });
     } catch (error) {
       console.error('Failed to upload reports-to data:', error);
       throw error;
@@ -563,13 +553,13 @@ export class AdminService {
   }
 
   /**
-   * Upload mapped pairings CSV
+   * Upload mapped pairings CSV.
+   * Sends raw CSV string + original file name as JSON — matches the Ionic client
+   * and backend contract (POST /upload-pairing-csv { csvData, fileName }).
    */
-  async uploadMappedPairings(communityId: number, file: File): Promise<void> {
+  async uploadMappedPairings(communityId: number, csvData: string, fileName: string): Promise<void> {
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      await apiService.post(`/communities/${communityId}/data/pairings`, formData);
+      await apiService.post(`/communities/${communityId}/upload-pairing-csv`, { csvData, fileName });
     } catch (error) {
       console.error('Failed to upload mapped pairings:', error);
       throw error;

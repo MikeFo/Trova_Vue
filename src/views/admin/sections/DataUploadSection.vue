@@ -4,36 +4,6 @@
     <p class="section-description">Upload CSV files to manage community data</p>
 
     <div class="upload-cards">
-      <!-- Driver Data Upload — only communities with has_custom_data (e.g. Gemini) -->
-      <div v-if="hasCustomData" class="upload-card">
-        <div class="card-header">
-          <ion-icon :icon="carOutline" class="card-icon"></ion-icon>
-          <h3 class="card-title">Driver Data</h3>
-        </div>
-        <p class="card-description">Upload CSV file with driver data</p>
-        <div class="file-input-container">
-          <input
-            ref="driverFileInput"
-            type="file"
-            accept=".csv"
-            @change="handleDriverFileSelect"
-            style="display: none"
-          />
-          <ion-button fill="outline" @click="triggerDriverInput">
-            <ion-icon :icon="documentOutline" slot="start"></ion-icon>
-            Choose CSV File
-          </ion-button>
-          <div v-if="driverFile" class="file-name">{{ driverFile.name }}</div>
-        </div>
-        <ion-button
-          expand="block"
-          @click="uploadDriverData"
-          :disabled="!driverFile || isUploading"
-        >
-          {{ isUploading ? 'Uploading...' : 'Upload Driver Data' }}
-        </ion-button>
-      </div>
-
       <!-- Reports To Data Upload -->
       <div class="upload-card">
         <div class="card-header">
@@ -49,7 +19,7 @@
             @change="handleReportsToFileSelect"
             style="display: none"
           />
-          <ion-button fill="outline" @click="triggerReportsToInput">
+          <ion-button fill="outline" @click="triggerReportsToInput" :disabled="isUploadingReports">
             <ion-icon :icon="documentOutline" slot="start"></ion-icon>
             Choose CSV File
           </ion-button>
@@ -57,10 +27,12 @@
         </div>
         <ion-button
           expand="block"
+          color="primary"
           @click="uploadReportsToData"
-          :disabled="!reportsToFile || isUploading"
+          :disabled="!reportsToFile || isUploadingReports"
         >
-          {{ isUploading ? 'Uploading...' : 'Upload Reports To Data' }}
+          <ion-spinner v-if="isUploadingReports" name="dots" slot="start"></ion-spinner>
+          {{ isUploadingReports ? 'Uploading...' : 'Upload Reports To Data' }}
         </ion-button>
       </div>
 
@@ -71,6 +43,13 @@
           <h3 class="card-title">Mapped Pairings</h3>
         </div>
         <p class="card-description">Upload CSV with user email pairings for groups (up to 6 users per group)</p>
+        <div class="csv-format-help">
+          <p class="format-label">Required columns:</p>
+          <pre class="format-sample">useremail1,useremail2,useremail3,useremail4,useremail5,useremail6
+alice@co.com,bob@co.com,carol@co.com,,,
+dave@co.com,eve@co.com,,,,</pre>
+          <p class="format-note">Only useremail1 and useremail2 are required. Columns 3–6 are optional.</p>
+        </div>
         <div class="file-input-container">
           <input
             ref="pairingsFileInput"
@@ -79,7 +58,7 @@
             @change="handlePairingsFileSelect"
             style="display: none"
           />
-          <ion-button fill="outline" @click="triggerPairingsInput">
+          <ion-button fill="outline" @click="triggerPairingsInput" :disabled="isUploadingPairings">
             <ion-icon :icon="documentOutline" slot="start"></ion-icon>
             Choose CSV File
           </ion-button>
@@ -87,10 +66,12 @@
         </div>
         <ion-button
           expand="block"
+          color="primary"
           @click="uploadPairings"
-          :disabled="!pairingsFile || isUploading"
+          :disabled="!pairingsFile || isUploadingPairings"
         >
-          {{ isUploading ? 'Uploading...' : 'Upload Mapped Pairings' }}
+          <ion-spinner v-if="isUploadingPairings" name="dots" slot="start"></ion-spinner>
+          {{ isUploadingPairings ? 'Uploading...' : 'Upload Mapped Pairings' }}
         </ion-button>
       </div>
     </div>
@@ -104,9 +85,9 @@ import { toastController } from '@ionic/vue';
 import {
   IonButton,
   IonIcon,
+  IonSpinner,
 } from '@ionic/vue';
 import {
-  carOutline,
   peopleOutline,
   linkOutline,
   documentOutline,
@@ -114,7 +95,6 @@ import {
 
 interface Props {
   communityId: number | null;
-  /** From communities.has_custom_data — only Gemini-style customers get driver CSV. */
   hasCustomData?: boolean;
 }
 
@@ -122,17 +102,12 @@ const props = withDefaults(defineProps<Props>(), {
   hasCustomData: false,
 });
 
-const driverFileInput = ref<HTMLInputElement | null>(null);
 const reportsToFileInput = ref<HTMLInputElement | null>(null);
 const pairingsFileInput = ref<HTMLInputElement | null>(null);
-const driverFile = ref<File | null>(null);
 const reportsToFile = ref<File | null>(null);
 const pairingsFile = ref<File | null>(null);
-const isUploading = ref(false);
-
-function triggerDriverInput() {
-  driverFileInput.value?.click();
-}
+const isUploadingReports = ref(false);
+const isUploadingPairings = ref(false);
 
 function triggerReportsToInput() {
   reportsToFileInput.value?.click();
@@ -140,11 +115,6 @@ function triggerReportsToInput() {
 
 function triggerPairingsInput() {
   pairingsFileInput.value?.click();
-}
-
-function handleDriverFileSelect(event: Event) {
-  const target = event.target as HTMLInputElement;
-  driverFile.value = target.files?.[0] || null;
 }
 
 function handleReportsToFileSelect(event: Event) {
@@ -157,90 +127,86 @@ function handlePairingsFileSelect(event: Event) {
   pairingsFile.value = target.files?.[0] || null;
 }
 
-async function uploadDriverData() {
-  if (!props.communityId || !driverFile.value) return;
-
-  isUploading.value = true;
-  try {
-    await adminService.uploadDriverData(props.communityId, driverFile.value);
-    const toast = await toastController.create({
-      message: 'Driver data uploaded successfully',
-      duration: 2000,
-      color: 'success',
-    });
-    await toast.present();
-    driverFile.value = null;
-    if (driverFileInput.value) {
-      driverFileInput.value.value = '';
-    }
-  } catch (error) {
-    console.error('Error uploading driver data:', error);
-    const toast = await toastController.create({
-      message: 'Failed to upload driver data',
-      duration: 2000,
-      color: 'danger',
-    });
-    await toast.present();
-  } finally {
-    isUploading.value = false;
-  }
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
 }
 
 async function uploadReportsToData() {
   if (!props.communityId || !reportsToFile.value) return;
 
-  isUploading.value = true;
+  const file = reportsToFile.value;
+  isUploadingReports.value = true;
+
+  const warnToast = await toastController.create({
+    message: `Uploading ${file.name} — this might take a bit!`,
+    duration: 3000,
+    color: 'warning',
+  });
+  await warnToast.present();
+
   try {
-    await adminService.uploadReportsToData(props.communityId, reportsToFile.value);
+    const csvData = await readFileAsText(file);
+    await adminService.uploadReportsToData(props.communityId, csvData);
     const toast = await toastController.create({
-      message: 'Reports to data uploaded successfully',
+      message: 'Successfully uploaded reports to data',
       duration: 2000,
       color: 'success',
     });
     await toast.present();
     reportsToFile.value = null;
-    if (reportsToFileInput.value) {
-      reportsToFileInput.value.value = '';
-    }
+    if (reportsToFileInput.value) reportsToFileInput.value.value = '';
   } catch (error) {
     console.error('Error uploading reports to data:', error);
     const toast = await toastController.create({
-      message: 'Failed to upload reports to data',
-      duration: 2000,
+      message: 'Failed to upload reports to data. Please try again.',
+      duration: 3000,
       color: 'danger',
     });
     await toast.present();
   } finally {
-    isUploading.value = false;
+    isUploadingReports.value = false;
   }
 }
 
 async function uploadPairings() {
   if (!props.communityId || !pairingsFile.value) return;
 
-  isUploading.value = true;
+  const file = pairingsFile.value;
+  isUploadingPairings.value = true;
+
+  const warnToast = await toastController.create({
+    message: `Uploading ${file.name} — this might take a bit!`,
+    duration: 3000,
+    color: 'warning',
+  });
+  await warnToast.present();
+
   try {
-    await adminService.uploadMappedPairings(props.communityId, pairingsFile.value);
+    const csvData = await readFileAsText(file);
+    await adminService.uploadMappedPairings(props.communityId, csvData, file.name);
     const toast = await toastController.create({
-      message: 'Mapped pairings uploaded successfully',
+      message: 'Successfully uploaded mapped pairings',
       duration: 2000,
       color: 'success',
     });
     await toast.present();
     pairingsFile.value = null;
-    if (pairingsFileInput.value) {
-      pairingsFileInput.value.value = '';
-    }
+    if (pairingsFileInput.value) pairingsFileInput.value.value = '';
   } catch (error) {
     console.error('Error uploading pairings:', error);
     const toast = await toastController.create({
-      message: 'Failed to upload mapped pairings',
-      duration: 2000,
+      message: 'Failed to upload mapped pairings. Please try again.',
+      duration: 3000,
       color: 'danger',
     });
     await toast.present();
   } finally {
-    isUploading.value = false;
+    isUploadingPairings.value = false;
   }
 }
 </script>
@@ -306,6 +272,39 @@ async function uploadPairings() {
   margin: 0;
 }
 
+.csv-format-help {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.format-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  margin: 0 0 6px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.format-sample {
+  font-size: 11px;
+  background: #f1f5f9;
+  padding: 8px;
+  border-radius: 4px;
+  overflow-x: auto;
+  margin: 0 0 6px 0;
+  color: #334155;
+  line-height: 1.5;
+}
+
+.format-note {
+  font-size: 12px;
+  color: #64748b;
+  margin: 0;
+}
+
 .file-input-container {
   display: flex;
   flex-direction: column;
@@ -326,8 +325,3 @@ async function uploadPairings() {
   --border-radius: 8px;
 }
 </style>
-
-
-
-
-

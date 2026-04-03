@@ -71,11 +71,13 @@ export class GroupService {
    */
   private userGroupsEndpointMissing = false;
   private starredGroupsEndpointMissing = false;
+  private notMemberCommunityIds = new Set<number>();
 
   /**
    * Get all groups for a community
    */
   async getGroups(communityId: number, userId: number): Promise<Group[]> {
+    if (this.notMemberCommunityIds.has(communityId)) return [];
     try {
       const groups = await apiService.get<Group[]>(
         `/groups?communityId=${communityId}&userId=${userId}`
@@ -92,6 +94,7 @@ export class GroupService {
       // Expected empty state: user is not a member of this community
       if ((error.status === 422 || error.response?.status === 422) &&
         String(error.response?.data?.error || error.message || '').toLowerCase().includes('not a member of requested community')) {
+        this.notMemberCommunityIds.add(communityId);
         return [];
       }
 
