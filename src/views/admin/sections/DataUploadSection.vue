@@ -318,8 +318,8 @@ const formatErrorColumns = ref<string[]>([]);
 const reportsCopied = ref(false);
 const pairingsCopied = ref(false);
 
-const reportsToClipboardLabel = computed(() => reportsCopied.value ? 'Copied!' : 'Copy for Excel');
-const pairingsClipboardLabel = computed(() => pairingsCopied.value ? 'Copied!' : 'Copy for Excel');
+const reportsToClipboardLabel = computed(() => reportsCopied.value ? 'Copied!' : 'Copy Template');
+const pairingsClipboardLabel = computed(() => pairingsCopied.value ? 'Copied!' : 'Copy Template');
 
 const REPORTS_TO_SAMPLE = 'Email\tQuestion Name\tManager\nstevesmith@email.com\tDepartment\tAshley Hunt\njanedoe@email.com\tEngineering\tMichael Chen';
 const PAIRINGS_SAMPLE = 'useremail1\tuseremail2\tuseremail3\tuseremail4\tuseremail5\tuseremail6\nalice@company.com\tbob@company.com\tcarol@company.com\t\t\t\ndave@company.com\teve@company.com\t\t\t\t';
@@ -574,21 +574,19 @@ async function uploadPairings() {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: none;
-  border: 1px solid #d1d5db;
+  background: var(--color-primary, #16a34a);
+  border: none;
   border-radius: 6px;
-  padding: 4px 10px;
+  padding: 5px 12px;
   font-size: 11px;
-  font-weight: 500;
-  color: #475569;
+  font-weight: 600;
+  color: #fff;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .copy-btn:hover {
-  background: #f1f5f9;
-  border-color: #94a3b8;
-  color: #1e293b;
+  background: #15803d;
 }
 
 .copy-btn ion-icon {
