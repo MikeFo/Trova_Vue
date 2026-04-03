@@ -16,7 +16,17 @@
       </ion-toolbar>
     </ion-header>
     <ion-content :fullscreen="true" class="admin-console-content">
-      <div v-if="!isLoading && !isManager" class="access-denied">
+      <div v-if="!isLoading && !isManager && slackSessionExpired" class="access-denied">
+        <ion-icon :icon="timeOutline" class="lock-icon session-expired-icon"></ion-icon>
+        <h2>Session Expired</h2>
+        <p>For security, your session has expired.<br/>Please return to Slack to reauthenticate.</p>
+        <ion-button @click="returnToSlack" color="primary">
+          <ion-icon :icon="logoSlack" slot="start"></ion-icon>
+          Return to Slack
+        </ion-button>
+      </div>
+
+      <div v-else-if="!isLoading && !isManager" class="access-denied">
         <ion-icon :icon="lockClosedOutline" class="lock-icon"></ion-icon>
         <h2>Access Denied</h2>
         <p>You must be a community leader or manager to access the admin console.</p>
@@ -191,7 +201,10 @@ import {
   arrowBack,
   refresh,
   lockClosedOutline,
+  timeOutline,
+  logoSlack,
 } from 'ionicons/icons';
+import { environment } from '@/environments/environment';
 import { useFirebase } from '@/composables/useFirebase';
 import UserManagementSection from './sections/UserManagementSection.vue';
 import DataUploadSection from './sections/DataUploadSection.vue';
@@ -213,6 +226,7 @@ const communityStore = useCommunityStore();
 const isLoading = ref(true);
 const isManager = ref(false);
 const isSuperAdminUser = ref(false);
+const slackSessionExpired = ref(false);
 const activeTab = ref('stats');
 const managedCommunities = ref<Community[]>([]);
 const selectedCommunityId = ref<number | null>(null);
@@ -317,8 +331,8 @@ async function checkManagerAccess() {
     const slackUserId = String(route.query.slackUserId);
     const urlSecretId = typeof route.query.s === 'string' ? route.query.s : '';
 
-    // If session has expired, treat as no access (Slack link window closed).
     if (slackSessionService.isSessionExpired()) {
+      slackSessionExpired.value = true;
       isManager.value = false;
       isLoading.value = false;
       return;
@@ -371,15 +385,16 @@ async function checkManagerAccess() {
           router.push('/tabs/home');
         }, 2000);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(
         'Error checking manager access via Slack console gate:',
         error instanceof Error ? error.message : error
       );
+      const status = error?.status || error?.response?.status;
+      if (status === 401 && hasSlackLinkParams) {
+        slackSessionExpired.value = true;
+      }
       isManager.value = false;
-      setTimeout(() => {
-        router.push('/tabs/home');
-      }, 2000);
     } finally {
       isLoading.value = false;
     }
@@ -521,6 +536,16 @@ function setCommunity(communityId: number) {
   // This will trigger the watch in AnalyticsDashboardSection to load data
 }
 
+function returnToSlack() {
+  const slackTeamId = route.query.slackTeamId as string || '';
+  const slackAppId = environment.slackAppId;
+  if (slackTeamId && slackAppId) {
+    window.location.href = `slack://app?team=${slackTeamId}&id=${slackAppId}&tab=home`;
+  } else {
+    window.location.href = 'https://slack.com';
+  }
+}
+
 function goBack() {
   router.back();
 }
@@ -637,6 +662,10 @@ onMounted(() => {
   font-size: 64px;
   color: #ef4444;
   margin-bottom: 16px;
+}
+
+.session-expired-icon {
+  color: #f59e0b;
 }
 
 .access-denied h2 {
