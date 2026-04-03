@@ -11,6 +11,49 @@
           <h3 class="card-title">Reports To Data</h3>
         </div>
         <p class="card-description">Upload CSV with user reports-to-manager data</p>
+
+        <div class="csv-format-help">
+          <div class="format-header">
+            <p class="format-label">Required CSV Format</p>
+            <button class="copy-btn" @click="copyReportsToSample" :title="reportsToClipboardLabel">
+              <ion-icon :icon="reportsCopied ? checkmarkOutline : clipboardOutline"></ion-icon>
+              {{ reportsToClipboardLabel }}
+            </button>
+          </div>
+          <div class="spreadsheet-preview">
+            <table class="spreadsheet-table">
+              <thead>
+                <tr>
+                  <th class="row-number"></th>
+                  <th>A</th>
+                  <th>B</th>
+                  <th>C</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="header-row">
+                  <td class="row-number">1</td>
+                  <td class="required-cell">Email</td>
+                  <td class="required-cell">Question Name</td>
+                  <td class="required-cell">Manager</td>
+                </tr>
+                <tr>
+                  <td class="row-number">2</td>
+                  <td>stevesmith@email.com</td>
+                  <td>Department</td>
+                  <td>Ashley Hunt</td>
+                </tr>
+                <tr>
+                  <td class="row-number">3</td>
+                  <td>janedoe@email.com</td>
+                  <td>Engineering</td>
+                  <td>Michael Chen</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <div class="file-input-container">
           <input
             ref="reportsToFileInput"
@@ -46,7 +89,13 @@
 
         <!-- Spreadsheet-style format reference -->
         <div class="csv-format-help">
-          <p class="format-label">Required CSV Format</p>
+          <div class="format-header">
+            <p class="format-label">Required CSV Format</p>
+            <button class="copy-btn" @click="copyPairingsSample" :title="pairingsClipboardLabel">
+              <ion-icon :icon="pairingsCopied ? checkmarkOutline : clipboardOutline"></ion-icon>
+              {{ pairingsClipboardLabel }}
+            </button>
+          </div>
           <div class="spreadsheet-preview">
             <table class="spreadsheet-table">
               <thead>
@@ -223,7 +272,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { adminService } from '@/services/admin.service';
 import { toastController } from '@ionic/vue';
 import {
@@ -242,6 +291,8 @@ import {
   linkOutline,
   documentOutline,
   alertCircleOutline,
+  clipboardOutline,
+  checkmarkOutline,
 } from 'ionicons/icons';
 
 interface Props {
@@ -263,6 +314,27 @@ const isUploadingPairings = ref(false);
 const showFormatErrorModal = ref(false);
 const formatErrorMessage = ref('');
 const formatErrorColumns = ref<string[]>([]);
+
+const reportsCopied = ref(false);
+const pairingsCopied = ref(false);
+
+const reportsToClipboardLabel = computed(() => reportsCopied.value ? 'Copied!' : 'Copy for Excel');
+const pairingsClipboardLabel = computed(() => pairingsCopied.value ? 'Copied!' : 'Copy for Excel');
+
+const REPORTS_TO_SAMPLE = 'Email\tQuestion Name\tManager\nstevesmith@email.com\tDepartment\tAshley Hunt\njanedoe@email.com\tEngineering\tMichael Chen';
+const PAIRINGS_SAMPLE = 'useremail1\tuseremail2\tuseremail3\tuseremail4\tuseremail5\tuseremail6\nalice@company.com\tbob@company.com\tcarol@company.com\t\t\t\ndave@company.com\teve@company.com\t\t\t\t';
+
+async function copyReportsToSample() {
+  await navigator.clipboard.writeText(REPORTS_TO_SAMPLE);
+  reportsCopied.value = true;
+  setTimeout(() => { reportsCopied.value = false; }, 2000);
+}
+
+async function copyPairingsSample() {
+  await navigator.clipboard.writeText(PAIRINGS_SAMPLE);
+  pairingsCopied.value = true;
+  setTimeout(() => { pairingsCopied.value = false; }, 2000);
+}
 
 const VALID_PAIRING_COLUMNS = ['useremail1', 'useremail2', 'useremail3', 'useremail4', 'useremail5', 'useremail6'];
 
@@ -482,13 +554,45 @@ async function uploadPairings() {
   padding: 12px;
 }
 
+.format-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
 .format-label {
   font-size: 12px;
   font-weight: 600;
   color: #475569;
-  margin: 0 0 8px 0;
+  margin: 0;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.copy-btn:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+  color: #1e293b;
+}
+
+.copy-btn ion-icon {
+  font-size: 14px;
 }
 
 .spreadsheet-preview {
