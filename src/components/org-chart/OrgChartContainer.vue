@@ -104,10 +104,13 @@ function emitCurrentState() {
 
 // ── Mouse ──
 
+const DRAG_THRESHOLD = 4;
+let pendingDrag = false;
+
 function onMouseDown(e: MouseEvent) {
   if (e.button !== 0) return;
   stopInertia();
-  isDragging.value = true;
+  pendingDrag = true;
   startX.value = e.clientX;
   startY.value = e.clientY;
   startTranslateX.value = translateX.value;
@@ -120,7 +123,15 @@ function onMouseDown(e: MouseEvent) {
 }
 
 function onMouseMove(e: MouseEvent) {
-  if (!isDragging.value) return;
+  if (!pendingDrag && !isDragging.value) return;
+
+  if (pendingDrag && !isDragging.value) {
+    const dx = e.clientX - startX.value;
+    const dy = e.clientY - startY.value;
+    if (dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD) return;
+    isDragging.value = true;
+    pendingDrag = false;
+  }
 
   const now = performance.now();
   const dt = now - lastMoveTime;
@@ -138,6 +149,7 @@ function onMouseMove(e: MouseEvent) {
 }
 
 function onMouseUp() {
+  pendingDrag = false;
   if (!isDragging.value) return;
   isDragging.value = false;
   emitCurrentState();
@@ -145,6 +157,7 @@ function onMouseUp() {
 }
 
 function onMouseLeave() {
+  pendingDrag = false;
   if (!isDragging.value) return;
   isDragging.value = false;
   emitCurrentState();
@@ -166,7 +179,7 @@ function onTouchStart(e: TouchEvent) {
     touchStartDistance.value = getTouchDistance(e.touches);
     touchStartScale.value = scale.value;
   } else if (e.touches.length === 1) {
-    isDragging.value = true;
+    pendingDrag = true;
     startX.value = e.touches[0].clientX;
     startY.value = e.touches[0].clientY;
     startTranslateX.value = translateX.value;
@@ -185,7 +198,15 @@ function onTouchMove(e: TouchEvent) {
     const scaleChange = currentDistance / touchStartDistance.value;
     pendingScale = Math.max(zoomoutLimit, Math.min(zoominLimit, touchStartScale.value * scaleChange));
     scheduleUpdate();
-  } else if (isDragging.value && e.touches.length === 1) {
+  } else if ((pendingDrag || isDragging.value) && e.touches.length === 1) {
+    if (pendingDrag && !isDragging.value) {
+      const dx = e.touches[0].clientX - startX.value;
+      const dy = e.touches[0].clientY - startY.value;
+      if (dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD) return;
+      isDragging.value = true;
+      pendingDrag = false;
+    }
+
     const now = performance.now();
     const dt = now - lastMoveTime;
     if (dt > 0) {
@@ -203,6 +224,7 @@ function onTouchMove(e: TouchEvent) {
 }
 
 function onTouchEnd() {
+  pendingDrag = false;
   const wasDragging = isDragging.value;
   isDragging.value = false;
   isPinching.value = false;

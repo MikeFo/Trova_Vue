@@ -393,19 +393,27 @@ function handleOrgDataResponse(response: OrgChartResponse) {
   };
 
   // Focus user: from Slack directory (otherSlackUserId) or viewer (slackUserId) when no other specified
-  const focusSlackId = otherSlackUserId.value || slackUserId.value;
+  let focusSlackId = otherSlackUserId.value || slackUserId.value;
 
   // Restructure the tree to show full context around the focus user
   // (manager, teammates/siblings, and direct reports). API already expanded path via slackIdsInChain.
   orgChartData.value = restructureTreeForUser(response.dataSource, focusSlackId);
+
+  // If the focus user wasn't found in the tree (e.g. super admin with numeric user ID),
+  // fall back to the root node so the chart opens expanded at the top.
+  if (!findNodeInTree(orgChartData.value, focusSlackId)) {
+    focusSlackId = orgChartData.value.slackId;
+  }
+
   annotateDepthFromFocus(orgChartData.value, focusSlackId);
 
+  // Set highlight BEFORE clearing loading so nodes mount with the correct expanded state
+  highlightedSlackId.value = focusSlackId;
   loading.value = false;
 
-  // Center the chart on the focus user and highlight that node
+  // Center the chart after DOM renders
   setTimeout(() => {
     centerOnUser(focusSlackId);
-    highlightedSlackId.value = focusSlackId;
   }, 200);
 }
 
@@ -671,6 +679,16 @@ function closePopup() {
 
 function retryLoad() {
   initOrg(true);
+}
+
+function findNodeInTree(node: OrgNode, slackId: string): boolean {
+  if (node.slackId === slackId) return true;
+  if (node.children) {
+    for (const child of node.children) {
+      if (findNodeInTree(child, slackId)) return true;
+    }
+  }
+  return false;
 }
 
 function toggleExpandedView() {
