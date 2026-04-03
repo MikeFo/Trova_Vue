@@ -304,10 +304,17 @@ async function initOrg(isInitialPageLoad: boolean = true) {
   }
 
   try {
-    const keyDocRefId = await orgChartAuthService.createSecretCode(
-      communityId.value!,
-      slackUserId.value
-    );
+    // For Firebase super admins the Firestore secret code is not required;
+    // the backend will authenticate via the Authorization header instead.
+    let keyDocRefId = '';
+    try {
+      keyDocRefId = await orgChartAuthService.createSecretCode(
+        communityId.value!,
+        slackUserId.value
+      );
+    } catch (secretErr) {
+      if (!isFullyAuthenticated) throw secretErr;
+    }
 
     const slackSecretId = secretId.value || '';
     let secretIdToSend = '';
