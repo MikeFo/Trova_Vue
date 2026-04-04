@@ -43,7 +43,7 @@ defineExpose({
 const zoomoutLimit = 0.2;
 const zoominLimit = 1.5;
 /** Base zoom step per wheel event (scaled by delta magnitude below). */
-const zoomModifier = 0.054;
+const zoomModifier = 0.09;
 
 const scale = ref(props.scale || 1.0);
 const translateX = ref(props.translateX || 0);
@@ -247,7 +247,7 @@ function onWheel(e: WheelEvent) {
   if (e.deltaMode === 1) delta *= 16;
   if (e.deltaMode === 2) delta *= 800;
 
-  const magnitude = Math.min(Math.abs(delta) / 100, 1.25);
+  const magnitude = Math.min(Math.abs(delta) / 100, 1.5);
   const direction = delta > 0 ? -1 : 1;
   const step = direction * zoomModifier * magnitude;
 
