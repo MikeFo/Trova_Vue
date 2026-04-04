@@ -88,6 +88,7 @@
                 :display-flags="displayFlags"
                 :group-scale="groupScale"
                 :max-render-depth="maxRenderDepth"
+                :reporting-chain-slack-ids="slackIdsInChain"
                 :is-highlighted="highlightedSlackId === orgChartData.slackId"
                 :highlighted-slack-id="highlightedSlackId"
                 @node-click="handleNodeClick"
@@ -118,7 +119,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch, provide, reactive } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { IonPage, IonHeader, IonToolbar, IonTitle, IonContent, IonIcon, IonButton, IonSpinner, alertController } from '@ionic/vue';
 import { search, close, alertCircle, expandOutline, contractOutline } from 'ionicons/icons';
@@ -168,6 +169,10 @@ const chartTranslateY = ref(0);
 // Depth-limited rendering
 const maxRenderDepth = ref<number>(2);
 const isExpandedView = ref(false);
+
+/** Slack IDs of nodes the user manually expanded — bypasses depth filter for that subtree root. */
+const manualDepthBypassSlackIds = reactive<Record<string, boolean>>({});
+provide('orgChartManualDepthBypass', manualDepthBypassSlackIds);
 
 // Search
 const searchQuery = ref('');
@@ -381,6 +386,10 @@ async function initOrg(isInitialPageLoad: boolean = true) {
 }
 
 function handleOrgDataResponse(response: OrgChartResponse) {
+  for (const k of Object.keys(manualDepthBypassSlackIds)) {
+    delete manualDepthBypassSlackIds[k];
+  }
+
   allUsers.value = response.users || [];
   slackIdsInChain.value = response.slackIdsInChain || [];
   
@@ -694,6 +703,9 @@ function findNodeInTree(node: OrgNode, slackId: string): boolean {
 function toggleExpandedView() {
   isExpandedView.value = !isExpandedView.value;
   maxRenderDepth.value = isExpandedView.value ? Infinity : 2;
+  for (const k of Object.keys(manualDepthBypassSlackIds)) {
+    delete manualDepthBypassSlackIds[k];
+  }
 }
 
 /**

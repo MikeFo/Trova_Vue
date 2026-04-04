@@ -42,7 +42,8 @@ defineExpose({
 
 const zoomoutLimit = 0.2;
 const zoominLimit = 1.5;
-const zoomModifier = 0.08;
+/** Base zoom step per wheel event (scaled by delta magnitude below). */
+const zoomModifier = 0.045;
 
 const scale = ref(props.scale || 1.0);
 const translateX = ref(props.translateX || 0);
@@ -240,9 +241,18 @@ function onWheel(e: WheelEvent) {
   const mouseX = e.clientX - rect.left;
   const mouseY = e.clientY - rect.top;
 
+  // Normalize delta: trackpads emit many small pixel deltas; mice use ~100 per notch.
+  // Scale sensitivity so small deltas zoom gently; cap so one notch isn't excessive.
+  let delta = e.deltaY;
+  if (e.deltaMode === 1) delta *= 16;
+  if (e.deltaMode === 2) delta *= 800;
+
+  const magnitude = Math.min(Math.abs(delta) / 100, 1.25);
+  const direction = delta > 0 ? -1 : 1;
+  const step = direction * zoomModifier * magnitude;
+
   const oldScale = scale.value;
-  const direction = e.deltaY > 0 ? -1 : 1;
-  const newScale = Math.max(zoomoutLimit, Math.min(zoominLimit, oldScale + direction * zoomModifier));
+  const newScale = Math.max(zoomoutLimit, Math.min(zoominLimit, oldScale + step));
   if (newScale === oldScale) return;
 
   const ratio = newScale / oldScale;

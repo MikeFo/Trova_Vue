@@ -1,6 +1,7 @@
 <template>
   <div
     class="org-node-wrapper"
+    :class="{ 'org-chain-member': isSelfOnChain }"
     :data-slack-id="datasource.slackId"
     :data-node-id="datasource.id"
     ref="nodeWrapper"
@@ -63,22 +64,26 @@
     <div
       v-if="hasVisibleChildren && !isCollapsed"
       class="org-node-children"
+      :class="{ 'org-connector-down--chain': isSelfOnChain }"
     >
       <div
         v-for="(group, groupIndex) in visibleChildGroups"
         :key="`group-${groupIndex}`"
         class="org-group"
+        :class="{ 'org-group--chain': groupTouchesChain(group) }"
       >
         <div
           v-for="child in group"
           :key="child.id || child.slackId"
           class="org-node-child"
+          :class="{ 'org-node-child--chain': isInReportingChain(child.slackId) }"
         >
           <OrgChartNode
             :datasource="child"
             :display-flags="displayFlags"
             :group-scale="groupScale"
             :max-render-depth="maxRenderDepth"
+            :reporting-chain-slack-ids="reportingChainSlackIds"
             :is-selected="selectedNodeId === child.id"
             :is-highlighted="highlightedSlackId === child.slackId"
             :highlighted-slack-id="activeHighlightedSlackId"
@@ -92,7 +97,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch, inject } from 'vue';
 import { add, remove } from 'ionicons/icons';
 import { IonIcon } from '@ionic/vue';
 import type { OrgNode, OrgChartDisplayFlags } from '@/models/org-chart';
@@ -108,10 +113,26 @@ const props = defineProps<{
   displayFlags: OrgChartDisplayFlags;
   groupScale?: number;
   maxRenderDepth?: number;
+  /** Slack IDs on the path from org root to the focused user (from API slackIdsInChain). */
+  reportingChainSlackIds?: string[];
   isSelected?: boolean;
   isHighlighted?: boolean;
   highlightedSlackId?: string | null;
 }>();
+
+/** Set when user clicks expand — shows all direct reports regardless of maxRenderDepth. */
+const manualDepthBypass = inject<Record<string, boolean>>('orgChartManualDepthBypass', {});
+
+const chainSet = computed(() => new Set(props.reportingChainSlackIds ?? []));
+const isSelfOnChain = computed(() => chainSet.value.has(props.datasource.slackId));
+
+function isInReportingChain(slackId: string): boolean {
+  return chainSet.value.has(slackId);
+}
+
+function groupTouchesChain(group: OrgNode[]): boolean {
+  return group.some((c) => chainSet.value.has(c.slackId));
+}
 
 const emit = defineEmits<{
   (e: 'node-click', node: OrgNode): void;
@@ -151,11 +172,15 @@ const effectiveChildren = computed(() => {
   return children;
 });
 
-// Depth-limit filtering
+// Depth-limit filtering (Focused View). Manual expand bypasses so users can drill to the full org.
 const visibleChildren = computed(() => {
   const max = props.maxRenderDepth;
-  if (max === undefined || !isFinite(max)) return effectiveChildren.value;
-  return effectiveChildren.value.filter(c => (c._depthFromFocus ?? 0) <= max);
+  const eff = effectiveChildren.value;
+  if (max === undefined || !isFinite(max)) return eff;
+  if (manualDepthBypass[props.datasource.slackId]) {
+    return eff;
+  }
+  return eff.filter(c => (c._depthFromFocus ?? 0) <= max);
 });
 
 const totalChildCount = computed(() => props.datasource.children?.length ?? 0);
@@ -188,8 +213,12 @@ const visibleChildGroups = computed(() => {
 
 function toggleExpand() {
   if (!hasAnyChildren.value) return;
+  const sid = props.datasource.slackId;
   if (isCollapsed.value) {
     showAllChildren.value = true;
+    manualDepthBypass[sid] = true;
+  } else {
+    delete manualDepthBypass[sid];
   }
   isCollapsed.value = !isCollapsed.value;
 }
@@ -231,7 +260,8 @@ watch(() => props.isHighlighted, (newVal) => {
   align-items: center;
   position: relative;
   margin: 20px;
-  contain: content;
+  /* Do not use contain: paint/content — it clips the expand toggle (positioned outside the card box). */
+  z-index: 1;
 }
 
 .org-node {
@@ -245,6 +275,7 @@ watch(() => props.isHighlighted, (newVal) => {
   cursor: pointer;
   transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
   position: relative;
+  z-index: 2;
 }
 
 .org-node:hover {
@@ -310,7 +341,8 @@ watch(() => props.isHighlighted, (newVal) => {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  z-index: 10;
+  z-index: 20;
+  pointer-events: auto;
   transition: background 0.2s ease, color 0.2s ease;
 }
 
@@ -369,15 +401,18 @@ watch(() => props.isHighlighted, (newVal) => {
   position: relative;
 }
 
+/* Connectors: thicker, higher-contrast than legacy grey hairlines */
 .org-node-children::before {
   content: '';
   position: absolute;
   top: -20px;
   left: 50%;
   transform: translateX(-50%);
-  width: 2px;
+  width: 3px;
   height: 20px;
-  background: #d1d5db;
+  border-radius: 2px;
+  background: #64748b;
+  z-index: 1;
 }
 
 .org-group {
@@ -396,12 +431,15 @@ watch(() => props.isHighlighted, (newVal) => {
   top: -20px;
   left: 0;
   right: 0;
-  height: 2px;
-  background: #d1d5db;
+  height: 3px;
+  border-radius: 2px;
+  background: #64748b;
+  z-index: 1;
 }
 
 .org-node-child {
   position: relative;
+  z-index: 1;
 }
 
 .org-node-child::before {
@@ -410,9 +448,45 @@ watch(() => props.isHighlighted, (newVal) => {
   top: -20px;
   left: 50%;
   transform: translateX(-50%);
-  width: 2px;
+  width: 3px;
   height: 20px;
-  background: #d1d5db;
+  border-radius: 2px;
+  background: #64748b;
+  z-index: 1;
+}
+
+/* Reporting chain from API: same path as yellow focus highlight — draw in brand green */
+.org-node-children.org-connector-down--chain::before {
+  background: #2d7a4e;
+  box-shadow: 0 0 0 1px rgba(45, 122, 78, 0.35);
+  z-index: 2;
+}
+
+.org-group.org-group--chain::before {
+  background: #2d7a4e;
+  box-shadow: 0 0 0 1px rgba(45, 122, 78, 0.35);
+  z-index: 2;
+}
+
+.org-node-child.org-node-child--chain::before {
+  background: #2d7a4e;
+  box-shadow: 0 0 0 1px rgba(45, 122, 78, 0.35);
+  z-index: 2;
+}
+
+/* Subtle cue on cards that sit on the reporting chain */
+.org-chain-member .org-node:not(.org-node-highlighted) {
+  border-color: #cbd5e1;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.08),
+    inset 0 0 0 1px rgba(45, 122, 78, 0.12);
+}
+
+/* Connectors must not capture clicks — full-width bus + z-index sat above flex children in some browsers. */
+.org-node-children::before,
+.org-group::before,
+.org-node-child::before {
+  pointer-events: none;
 }
 
 @media (max-width: 768px) {
