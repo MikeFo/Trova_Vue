@@ -65,15 +65,15 @@
       </div>
 
       <!-- Error State -->
-      <div v-else-if="error" class="org-chart-error">
+      <div v-else-if="orgChartError" class="org-chart-error">
         <ion-icon :icon="alertCircle" class="error-icon"></ion-icon>
-        <h3>Authentication Expired</h3>
-        <p>{{ error }}</p>
+        <h3>{{ orgChartError.title }}</h3>
+        <p>{{ orgChartError.detail }}</p>
         <ion-button @click="retryLoad">Retry</ion-button>
       </div>
 
       <!-- Org Chart -->
-      <div v-if="orgChartData" class="org-chart-wrapper">
+      <div v-else-if="orgChartData" class="org-chart-wrapper">
         <OrgChartContainer
           ref="chartContainerRef"
           :scale="chartScale"
@@ -103,7 +103,7 @@
       </div>
 
       <!-- Empty State -->
-      <div v-else-if="!loading && !error" class="org-chart-empty">
+      <div v-else class="org-chart-empty">
         <p>Org chart will appear here once data is loaded.</p>
       </div>
 
@@ -149,7 +149,7 @@ const secretId = ref<string>('');
 
 // State
 const loading = ref(true);
-const error = ref<string | null>(null);
+const orgChartError = ref<{ title: string; detail: string } | null>(null);
 const orgChartData = ref<OrgNode | null>(null);
 const allUsers = ref<OrgUser[]>([]);
 const slackIdsInChain = ref<string[]>([]);
@@ -243,14 +243,20 @@ function extractQueryParams() {
   // For authenticated users, slackUserId is optional (we'll use user ID as fallback)
   // For Slack link users, slackUserId is required
   if (!communityId.value) {
-    error.value = 'Missing required parameters: communityId';
+    orgChartError.value = {
+      title: 'Missing information',
+      detail: 'communityId is required to load the org chart.',
+    };
     console.error('[OrgChartPage] Missing required parameters: communityId');
     loading.value = false;
     return false;
   }
 
   if (!isFullyAuthenticated && !slackUserId.value) {
-    error.value = 'Missing required parameters: slackUserId';
+    orgChartError.value = {
+      title: 'Missing information',
+      detail: 'slackUserId is required for this link.',
+    };
     console.error('[OrgChartPage] Missing required parameters: slackUserId');
     loading.value = false;
     return false;
@@ -294,7 +300,7 @@ async function initOrg(isInitialPageLoad: boolean = true) {
   }
 
   loading.value = true;
-  error.value = null;
+  orgChartError.value = null;
 
   // Check if user is fully authenticated (has Firebase auth + user profile)
   const isFullyAuthenticated = authStore.isAuthenticated && authStore.user?.id;
@@ -364,25 +370,73 @@ async function initOrg(isInitialPageLoad: boolean = true) {
     
     handleOrgDataResponse(response);
   } catch (err: any) {
-    console.error('[OrgChartPage] Failed to load org chart:', err?.message ?? err);
+    console.error('[OrgChartPage] Failed to load org chart:', err?.message ?? err, err);
 
     const errorMessage = err.message || err.response?.data?.message || '';
     const status = err.status || err.response?.status;
-    
+
     // Check if error is due to expired secretId from Slack link
     // Only show Slack expiration alert if user came from Slack link
-    if ((status === 401 || 
-         errorMessage.toLowerCase().includes('expired') || 
-         errorMessage.toLowerCase().includes('invalid') || 
-         errorMessage.toLowerCase().includes('secret')) 
-        && slackSessionService.isSlackLinkUser()) {
+    if ((status === 401 ||
+         errorMessage.toLowerCase().includes('expired') ||
+         errorMessage.toLowerCase().includes('invalid') ||
+         errorMessage.toLowerCase().includes('secret')) &&
+        slackSessionService.isSlackLinkUser()) {
       loading.value = false;
       await showSlackSessionExpiredAlert();
     } else {
-      error.value = errorMessage || 'Failed to load org chart. Authentication may have expired.';
+      orgChartError.value = parseOrgChartApiError(err);
       loading.value = false;
     }
   }
+}
+
+/** User-facing copy; never dump raw JSON / DB errors. */
+function parseOrgChartApiError(err: any): { title: string; detail: string } {
+  const status = err?.status ?? err?.response?.status;
+  const data = err?.response?.data;
+  const msg =
+    (typeof data === 'string' ? data : (data as { message?: string })?.message) ||
+    err?.message ||
+    '';
+  const blob =
+    typeof data === 'object' && data !== null
+      ? JSON.stringify(data)
+      : String(data || '');
+  const haystack = `${msg} ${blob}`.toLowerCase();
+
+  const isServerOrDb =
+    (typeof status === 'number' && status >= 500) ||
+    haystack.includes('dberror') ||
+    haystack.includes('xx000') ||
+    haystack.includes('internal_load') ||
+    haystack.includes('postgres') ||
+    haystack.includes('parallel worker');
+
+  if (status === 401) {
+    return {
+      title: 'Authentication required',
+      detail:
+        'Your session may have expired. Sign in again, or tap Retry after refreshing your session.',
+    };
+  }
+
+  if (isServerOrDb) {
+    return {
+      title: 'Could not load org chart',
+      detail:
+        'The server hit an error while loading this view. Try Retry in a moment. If it keeps happening, contact support.',
+    };
+  }
+
+  const short =
+    msg && msg.length < 180 && !msg.trim().startsWith('{')
+      ? msg
+      : 'Something went wrong. Try Retry.';
+  return {
+    title: 'Unable to load org chart',
+    detail: short,
+  };
 }
 
 function handleOrgDataResponse(response: OrgChartResponse) {
