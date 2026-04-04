@@ -43,7 +43,7 @@ defineExpose({
 const zoomoutLimit = 0.2;
 const zoominLimit = 1.5;
 /** Base zoom step per wheel event (scaled by delta magnitude below). */
-const zoomModifier = 0.045;
+const zoomModifier = 0.054;
 
 const scale = ref(props.scale || 1.0);
 const translateX = ref(props.translateX || 0);
