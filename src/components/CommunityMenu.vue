@@ -144,6 +144,21 @@ async function loadCommunities(forceRefresh: boolean = false) {
       return;
     }
 
+    const { useFirebase } = await import('@/composables/useFirebase');
+    const { auth } = useFirebase();
+    const { slackSessionService } = await import('@/services/slack-session.service');
+    const hasSlackSession =
+      !!slackSessionService.getCurrentValidation()?.secretId ||
+      (typeof window !== 'undefined' &&
+        (() => {
+          const q = new URLSearchParams(window.location.search);
+          return !!(q.get('s') && q.get('communityId') && q.get('slackUserId'));
+        })());
+    if (auth && !auth.currentUser && !hasSlackSession) {
+      devLog('[CommunityMenu] Skipping communities fetch until Firebase or Slack session is available');
+      return;
+    }
+
     devLog('[CommunityMenu] Loading user communities for userId:', userId, forceRefresh ? '(force refresh)' : '');
     const userCommunities = await communityService.getUserCommunities(userId, forceRefresh);
     communities.value = userCommunities;
@@ -165,13 +180,60 @@ watch(() => authStore.user?.id, (newUserId) => {
   }
 });
 
+/** Wait for Firebase or Slack session before hitting API (avoids 401 when store has user but no credential yet). */
+let firebaseAuthUnsub: (() => void) | null = null;
+
+async function scheduleInitialCommunitiesLoad(): Promise<void> {
+  if (!authStore.user?.id) return;
+
+  const { useFirebase } = await import('@/composables/useFirebase');
+  const { auth } = useFirebase();
+  const { slackSessionService } = await import('@/services/slack-session.service');
+  const hasSlack =
+    !!slackSessionService.getCurrentValidation()?.secretId ||
+    (typeof window !== 'undefined' &&
+      (() => {
+        const q = new URLSearchParams(window.location.search);
+        return !!(q.get('s') && q.get('communityId') && q.get('slackUserId'));
+      })());
+
+  if (auth?.currentUser) {
+    await loadCommunities();
+    return;
+  }
+  if (hasSlack) {
+    await loadCommunities();
+    return;
+  }
+  if (!auth) {
+    await loadCommunities();
+    return;
+  }
+
+  const { onAuthStateChanged } = await import('firebase/auth');
+  firebaseAuthUnsub = onAuthStateChanged(auth, (firebaseUser) => {
+    if (firebaseAuthUnsub) {
+      firebaseAuthUnsub();
+      firebaseAuthUnsub = null;
+    }
+    if (firebaseUser && authStore.user?.id) {
+      void loadCommunities();
+    }
+  });
+}
+
 // Listen for community updates (e.g., after joining a new community)
 onMounted(() => {
   window.addEventListener('communities-updated', handleCommunitiesUpdated);
+  void scheduleInitialCommunitiesLoad();
 });
 
 onUnmounted(() => {
   window.removeEventListener('communities-updated', handleCommunitiesUpdated);
+  if (firebaseAuthUnsub) {
+    firebaseAuthUnsub();
+    firebaseAuthUnsub = null;
+  }
 });
 
 function handleCommunitiesUpdated() {
@@ -260,9 +322,6 @@ async function handleLogout() {
   }
 }
 
-onMounted(() => {
-  loadCommunities();
-});
 </script>
 
 <style scoped>

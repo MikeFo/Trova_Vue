@@ -2,6 +2,36 @@
   <ion-page>
     <!-- Community Menu (left side) -->
     <CommunityMenu />
+
+    <!-- Mobile: top bar so #profile-trigger exists (ProfileMenu ion-popover); desktop header is hidden on mobile -->
+    <ion-header v-if="isMobile" class="mobile-top-header">
+      <ion-toolbar class="mobile-top-toolbar">
+        <ion-menu-toggle menu="community-menu" slot="start">
+          <div class="logo-wrapper">
+            <div class="trova-logo">
+              <img
+                v-if="communityLogo"
+                :src="communityLogo"
+                :alt="communityName"
+                class="community-logo-img"
+              />
+              <span v-else class="logo-letter">{{ communityName.charAt(0).toUpperCase() }}</span>
+            </div>
+          </div>
+        </ion-menu-toggle>
+        <div slot="end" class="profile-wrapper" id="profile-trigger">
+          <img
+            v-if="user?.profilePicture"
+            :src="user.profilePicture"
+            :alt="user.fullName || 'Profile'"
+            class="profile-picture"
+          />
+          <div v-else class="profile-placeholder">
+            <ion-icon :icon="person"></ion-icon>
+          </div>
+        </div>
+      </ion-toolbar>
+    </ion-header>
     
     <!-- Desktop: Top navigation with logo and profile -->
     <ion-header v-if="!isMobile" class="desktop-header">
@@ -258,6 +288,29 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* Mobile top bar (profile popover trigger + menu) */
+.mobile-top-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.mobile-top-toolbar {
+  --background: #ffffff;
+  --border-width: 0;
+  --min-height: 56px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.mobile-top-toolbar .logo-wrapper {
+  margin-right: 0;
+}
+
+.mobile-top-toolbar .profile-wrapper {
+  margin-left: 0;
+}
+
 /* Desktop Header */
 .desktop-header {
   position: sticky;
