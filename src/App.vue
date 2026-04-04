@@ -28,7 +28,7 @@ async function validateSlackSession() {
   const isFullyAuthenticated = authStore.isAuthenticated && authStore.user?.id;
   
   if (secretId && communityId && slackUserId && !isFullyAuthenticated) {
-    console.log('[App] Validating secretId from URL for session gate');
+    devLog('[App] Validating secretId from URL for session gate');
     try {
       const isValid = await slackSessionService.validateSecretId(
         secretId,

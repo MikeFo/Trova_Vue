@@ -73,6 +73,7 @@ import { ref, computed, watch } from 'vue';
 import { dataService, type DataThing } from '@/services/data.service';
 import { closeCircle } from 'ionicons/icons';
 import { IonItem, IonInput, IonButton, IonChip, IonIcon, IonText } from '@ionic/vue';
+import { devLog } from '@/utils/logger';
 
 interface Props {
   selectedThings: Array<string | DataThing>;
@@ -104,13 +105,13 @@ let searchTimeout: ReturnType<typeof setTimeout> | null = null;
 // Load all things of this type on mount
 async function loadThings() {
   try {
-    console.log(`[ThingSelector] Loading things of type: ${props.type}`);
+    devLog(`[ThingSelector] Loading things of type: ${props.type}`);
     const things = await dataService.getThings(props.type);
-    console.log(`[ThingSelector] Successfully loaded ${things?.length || 0} things:`, things);
+    devLog(`[ThingSelector] Successfully loaded ${things?.length || 0} things:`, things);
     
     if (things && Array.isArray(things)) {
       allThings.value = things;
-      console.log(`[ThingSelector] Set allThings.value to ${allThings.value.length} items`);
+      devLog(`[ThingSelector] Set allThings.value to ${allThings.value.length} items`);
     } else {
       console.warn(`[ThingSelector] Received invalid response:`, things);
       allThings.value = [];

@@ -100,6 +100,7 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth.store';
 import { useCommunityStore } from '@/stores/community.store';
 import { authService } from '@/services/auth.service';
+import { devLog } from '@/utils/logger';
 import {
   IonPopover,
   IonContent,
@@ -189,7 +190,7 @@ function navigateToConsole() {
 
 function handleShare() {
   // TODO: Implement share functionality
-  console.log('Share clicked');
+  devLog('Share clicked');
   popoverRef.value?.$el?.dismiss();
 }
 

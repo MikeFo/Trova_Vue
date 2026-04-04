@@ -51,6 +51,7 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth.store';
 import { useCommunityStore } from '@/stores/community.store';
 import { eventService, type Event } from '@/services/event.service';
+import { devLog } from '@/utils/logger';
 import CalendarGrid from './components/CalendarGrid.vue';
 import EventsList from './components/EventsList.vue';
 import {
@@ -155,7 +156,7 @@ async function handleShareEvent(event: Event) {
     } else {
       await navigator.clipboard.writeText(shareUrl);
       // TODO: Show toast notification
-      console.log('Event URL copied to clipboard:', shareUrl);
+      devLog('[EventsPage] Event URL copied to clipboard');
     }
   } catch (error) {
     console.error('Error sharing event:', error);

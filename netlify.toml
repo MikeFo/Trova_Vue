@@ -15,3 +15,10 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
+# Baseline security headers (avoid X-Frame-Options: DENY until iframe embed requirements are confirmed)
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"

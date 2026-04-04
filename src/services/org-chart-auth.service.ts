@@ -1,4 +1,5 @@
 import { useFirebase } from '../composables/useFirebase';
+import { devLog } from '../utils/logger';
 import { collection, addDoc, Timestamp } from 'firebase/firestore';
 
 export class OrgChartAuthService {
@@ -25,7 +26,7 @@ export class OrgChartAuthService {
         slackUserId,
       });
 
-      console.log('[OrgChartAuthService] Created Firebase document with ID:', docRef.id);
+      devLog('[OrgChartAuthService] Created Firebase document with ID:', docRef.id);
       
       // Return the document ID (this becomes keyDocRefId)
       return docRef.id;

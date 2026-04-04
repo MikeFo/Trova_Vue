@@ -192,6 +192,7 @@ import { useAuthStore } from '@/stores/auth.store';
 import { useCommunityStore } from '@/stores/community.store';
 import { matchService, type UserMatch } from '@/services/match.service';
 import { profileService, type ProfilesInit } from '@/services/profile.service';
+import { devLog } from '@/utils/logger';
 import {
   IonPage,
   IonContent,
@@ -315,7 +316,7 @@ async function loadMatches() {
   try {
     const loadedMatches = await matchService.getMatches();
     matches.value = loadedMatches;
-    console.log('[DiscoverPage] Loaded matches:', loadedMatches.length);
+    devLog('[DiscoverPage] Loaded matches:', loadedMatches.length);
   } catch (error) {
     console.error('[DiscoverPage] Error loading matches:', error);
   } finally {
@@ -335,7 +336,7 @@ async function loadProfiles() {
   try {
     const loadedProfiles = await profileService.getProfilesForUserAndCommunity(communityId);
     profiles.value = loadedProfiles;
-    console.log('[DiscoverPage] Loaded profiles:', loadedProfiles.length);
+    devLog('[DiscoverPage] Loaded profiles:', loadedProfiles.length);
   } catch (error) {
     console.error('[DiscoverPage] Error loading profiles:', error);
   } finally {
@@ -354,7 +355,7 @@ function viewProfile(userId: number) {
 
 async function sayHi(match: UserMatch) {
   // TODO: Implement friend request/say hi functionality
-  console.log('[DiscoverPage] Say Hi to:', match.matchedUser?.fullName || match.matchedUserId);
+  devLog('[DiscoverPage] Say Hi to:', match.matchedUser?.fullName || match.matchedUserId);
   // This would typically send a friend request or start a conversation
 }
 

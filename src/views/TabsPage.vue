@@ -178,6 +178,7 @@ import ProfileMenu from '@/components/ProfileMenu.vue';
 import PhotoUploadModal from '@/components/PhotoUploadModal.vue';
 import { IonTabBar, IonTabButton, IonTabs, IonLabel, IonIcon, IonPage, IonRouterOutlet, IonHeader, IonToolbar, IonMenuToggle } from '@ionic/vue';
 import { home, chatbubbles, search, people, person, gridOutline, calendarOutline, mapOutline, business } from 'ionicons/icons';
+import { devLog } from '@/utils/logger';
 
 const router = useRouter();
 const route = useRoute();
@@ -208,7 +209,7 @@ function navigateToHome() {
 }
 
 function navigateTo(path: string) {
-  console.log('[TabsPage] Navigating to:', path);
+  devLog('[TabsPage] Navigating to:', path);
   try {
     router.push(path);
   } catch (error) {
@@ -243,7 +244,7 @@ function openPhotoUpload() {
 function handlePhotoUpdated(photoUrl: string) {
   // Photo is already updated in auth store by the modal
   // This is just for any additional handling if needed
-  console.log('Profile photo updated:', photoUrl);
+  devLog('[TabsPage] Profile photo updated');
 }
 
 onMounted(() => {

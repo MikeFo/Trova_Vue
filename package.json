@@ -25,6 +25,7 @@
     "@ionic/vue-router": "^8.0.0",
     "@okta/okta-auth-js": "^7.14.0",
     "axios": "^1.13.2",
+    "dompurify": "^3.3.3",
     "firebase": "^12.5.0",
     "ionicons": "^7.0.0",
     "pinia": "^3.0.4",

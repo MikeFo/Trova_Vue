@@ -54,7 +54,7 @@
             <div v-if="shouldShowAuthor(message, index)" class="message-author">
               {{ message.authorName }}
             </div>
-            <div class="message-text" v-html="formatMessage(message.message || '')"></div>
+            <div class="message-text" v-html="formatChatMessageHtml(message.message || '')"></div>
             <div v-if="message.image" class="message-image">
               <img :src="message.image" alt="Message image" />
             </div>
@@ -136,6 +136,7 @@ import {
 } from '@ionic/vue';
 import type { FirebaseMessages, FirebaseMessage } from '@/models/conversation';
 import { Timestamp } from 'firebase/firestore';
+import { formatChatMessageHtml } from '@/utils/formatChatMessageHtml';
 
 interface Props {
   conversation: FirebaseMessages | null;
@@ -187,14 +188,6 @@ function shouldShowAvatar(message: FirebaseMessage, index: number): boolean {
   return nextMessage.userId !== message.userId;
 }
 
-function formatMessage(text: string): string {
-  if (!text) return '';
-  // Basic HTML sanitization and linkification
-  return text
-    .replace(/\n/g, '<br>')
-    .replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank">$1</a>');
-}
-
 function formatMessageTime(timestamp: Timestamp | undefined): string {
   if (!timestamp) return '';
   
@@ -215,7 +208,7 @@ function formatMessageTime(timestamp: Timestamp | undefined): string {
 
 function formatMessageTimeFlexible(message: FirebaseMessage): string {
   if (message.timestamp) {
-    return formatMessageTimeFlexible(message);
+    return formatMessageTime(message.timestamp);
   }
   if (message.createdAtDate) {
     const date = message.createdAtDate;

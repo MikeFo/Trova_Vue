@@ -175,6 +175,7 @@ import { useCommunityStore } from '@/stores/community.store';
 import { useConversationsStore } from '@/stores/conversations.store';
 import { conversationService } from '@/services/conversation.service';
 import { groupService, type Group } from '@/services/group.service';
+import { devLog } from '@/utils/logger';
 import { eventService, type Event } from '@/services/event.service';
 import ChatThread from './components/ChatThread.vue';
 import GroupDetailsSidebar from './components/GroupDetailsSidebar.vue';
@@ -227,11 +228,11 @@ async function loadGroup() {
 
       // Load conversation for group
       try {
-        console.log('[GroupDetailPage] Loading conversation for group:', fetchedGroup.id);
+        devLog('[GroupDetailPage] Loading conversation for group:', fetchedGroup.id);
         
         // If group already has a convoId, use it directly (most common case)
         if (fetchedGroup.convoId) {
-          console.log('[GroupDetailPage] Group has convoId, loading directly:', fetchedGroup.convoId);
+          devLog('[GroupDetailPage] Group has convoId, loading directly:', fetchedGroup.convoId);
           const directConvo = await conversationService.getConversationById(fetchedGroup.convoId);
           
           if (directConvo) {
@@ -250,9 +251,9 @@ async function loadGroup() {
               // Fallback: set directly if method fails
               conversationsStore.activeConversation = directConvo;
             }
-            console.log('[GroupDetailPage] Conversation loaded with', messages.length, 'messages');
+            devLog('[GroupDetailPage] Conversation loaded with', messages.length, 'messages');
           } else {
-            console.log('[GroupDetailPage] Conversation not found by ID, trying parentId query...');
+            devLog('[GroupDetailPage] Conversation not found by ID, trying parentId query...');
             // Fallback: try querying by parentId
             const groupConversations = await conversationService.getFirebaseConversationsByGroupId(
               fetchedGroup.id,
@@ -261,7 +262,7 @@ async function loadGroup() {
             
             if (groupConversations.length > 0) {
               const foundConvo = groupConversations[0];
-              console.log('[GroupDetailPage] Found group conversation by parentId:', foundConvo.conversationId);
+              devLog('[GroupDetailPage] Found group conversation by parentId:', foundConvo.conversationId);
               
               // Load messages for this conversation
               const messages = await conversationService.getMessagesForConversation(foundConvo.conversationId);
@@ -276,16 +277,16 @@ async function loadGroup() {
                 console.warn('[GroupDetailPage] Error setting active conversation:', err);
                 conversationsStore.activeConversation = foundConvo;
               }
-              console.log('[GroupDetailPage] Conversation loaded with', messages.length, 'messages');
+              devLog('[GroupDetailPage] Conversation loaded with', messages.length, 'messages');
             } else {
               // No conversation found, try to create one
-              console.log('[GroupDetailPage] No conversation found, trying to get or create...');
+              devLog('[GroupDetailPage] No conversation found, trying to get or create...');
               await createOrLoadConversation(fetchedGroup);
             }
           }
         } else {
           // Group doesn't have convoId, try querying by parentId first
-          console.log('[GroupDetailPage] No convoId, trying parentId query...');
+          devLog('[GroupDetailPage] No convoId, trying parentId query...');
           const groupConversations = await conversationService.getFirebaseConversationsByGroupId(
             fetchedGroup.id,
             'groups'
@@ -293,7 +294,7 @@ async function loadGroup() {
           
           if (groupConversations.length > 0) {
             const foundConvo = groupConversations[0];
-            console.log('[GroupDetailPage] Found group conversation by parentId:', foundConvo.conversationId);
+            devLog('[GroupDetailPage] Found group conversation by parentId:', foundConvo.conversationId);
             
             // Load messages for this conversation
             const messages = await conversationService.getMessagesForConversation(foundConvo.conversationId);
@@ -308,10 +309,10 @@ async function loadGroup() {
               console.warn('[GroupDetailPage] Error setting active conversation:', err);
               conversationsStore.activeConversation = foundConvo;
             }
-            console.log('[GroupDetailPage] Conversation loaded with', messages.length, 'messages');
+            devLog('[GroupDetailPage] Conversation loaded with', messages.length, 'messages');
           } else {
             // No conversation found, try to create one
-            console.log('[GroupDetailPage] No conversation found, trying to get or create...');
+            devLog('[GroupDetailPage] No conversation found, trying to get or create...');
             await createOrLoadConversation(fetchedGroup);
           }
         }
@@ -339,10 +340,10 @@ async function loadGroup() {
 
 async function createOrLoadConversation(fetchedGroup: Group) {
   try {
-    console.log('[GroupDetailPage] No conversation found, trying to get or create...');
+    devLog('[GroupDetailPage] No conversation found, trying to get or create...');
     // Try to get or create conversation
     const convoResult = await groupService.getOrCreateConvo(fetchedGroup.id);
-    console.log('[GroupDetailPage] getOrCreateConvo result:', convoResult);
+    devLog('[GroupDetailPage] getOrCreateConvo result:', convoResult);
     
     if (convoResult.conversationId) {
       // Wait a moment for backend to sync to Firebase
@@ -361,7 +362,7 @@ async function createOrLoadConversation(fetchedGroup: Group) {
           break;
         }
         
-        console.log(`[GroupDetailPage] Retry ${attempt + 1}/3 loading conversation...`);
+        devLog(`[GroupDetailPage] Retry ${attempt + 1}/3 loading conversation...`);
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
       
@@ -381,10 +382,10 @@ async function createOrLoadConversation(fetchedGroup: Group) {
           // Fallback: set directly if method fails
           conversationsStore.activeConversation = loadedConvo;
         }
-        console.log('[GroupDetailPage] Created and loaded new conversation with', messages.length, 'messages');
+        devLog('[GroupDetailPage] Created and loaded new conversation with', messages.length, 'messages');
       } else {
         // Fallback: try loading by conversationId directly
-        console.log('[GroupDetailPage] Trying to load by conversationId directly...');
+        devLog('[GroupDetailPage] Trying to load by conversationId directly...');
         const directConvo = await conversationService.getConversationById(convoResult.conversationId);
         if (directConvo) {
           // Add conversation to store and set as active
@@ -398,7 +399,7 @@ async function createOrLoadConversation(fetchedGroup: Group) {
             // Fallback: set directly if method fails
             conversationsStore.activeConversation = directConvo;
           }
-          console.log('[GroupDetailPage] Loaded conversation directly by ID');
+          devLog('[GroupDetailPage] Loaded conversation directly by ID');
         } else {
           console.warn('[GroupDetailPage] Conversation not found after all attempts');
         }
@@ -420,7 +421,7 @@ async function handleShare() {
   try {
     const result = await groupService.shareGroup(group.value.id);
     // TODO: Show share dialog or copy to clipboard
-    console.log('Share URL:', result.shareUrl);
+    devLog('Share URL:', result.shareUrl);
   } catch (error) {
     console.error('Error sharing group:', error);
   }
