@@ -39,6 +39,14 @@ const routes: Array<RouteRecordRaw> = [
     component: () => import('@/views/auth/SlackSigninRedirectPage.vue')
   },
   {
+    path: '/slack-install',
+    component: () => import('@/views/auth/SlackInstallPage.vue')
+  },
+  {
+    path: '/slack-install-redirect',
+    component: () => import('@/views/auth/SlackInstallRedirectPage.vue')
+  },
+  {
     path: '/logout',
     component: () => import('@/views/auth/LogoutPage.vue')
   },
