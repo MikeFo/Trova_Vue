@@ -38,10 +38,6 @@
         v-else-if="phase === 'wizard'"
         :class="['shell', phase === 'wizard' ? 'shell--wide' : 'shell--narrow']"
       >
-        <ion-note v-if="designPreview" class="preview-banner" color="warning">
-          Design preview: OAuth and save requests are skipped. Remove ?preview=1 for a real install.
-        </ion-note>
-
         <!-- Step 1 -->
         <template v-if="wizardStep === 1">
           <section class="step1">
@@ -52,9 +48,9 @@
               <h1 class="headline">Turn your Slack workspace into a connected community</h1>
               <p class="subhead">Profiles, introductions, and connections, all without leaving Slack.</p>
               <ul class="outcomes">
-                <li>See who’s who across your team instantly</li>
-                <li>Help people find others by skill, interest, or location</li>
-                <li>Make it easier to connect, online and in person</li>
+                <li>Help people find the people and resources they need with Trova’s directory, searchable by interests, skills, or location</li>
+                <li>Empower people to connect and engage on shared interests and backgrounds</li>
+                <li>Showcase where people are based with Trova’s interactive map</li>
               </ul>
             </div>
 
@@ -142,31 +138,29 @@
                 </div>
 
                 <div class="setup-actions">
+                  <div class="legal-inline setup-legal">
+                    <ion-checkbox v-model="acceptedTerms" class="legal-check" />
+                    <span class="legal-text">
+                      By continuing, you agree to our
+                      <router-link to="/terms" class="legal-a">Terms</router-link>
+                      and
+                      <router-link to="/privacy" class="legal-a">Privacy Policy</router-link>.
+                    </span>
+                  </div>
+                  <p v-if="showTermsPrompt" class="legal-error" role="alert">
+                    Please check the box above to continue.
+                  </p>
                   <ion-button
                     expand="block"
                     size="large"
                     class="cta-primary setup-submit"
-                    :disabled="!canSubmitStep2 || savingStep2"
-                    @click="submitStep2"
+                    :disabled="savingStep2"
+                    @click="attemptSubmitStep2"
                   >
                     <ion-spinner v-if="savingStep2" name="crescent" class="btn-spinner" />
                     <span v-else>Continue</span>
                   </ion-button>
                   <button type="button" class="setup-back-link" @click="wizardStep = 1">Back</button>
-                </div>
-
-                <div class="legal-inline setup-legal">
-                  <ion-checkbox v-model="acceptedTerms" class="legal-check" />
-                  <span class="legal-text">
-                    By continuing, you agree to our
-                    <a href="https://www.trova.io" target="_blank" rel="noopener noreferrer" class="legal-a"
-                      >Terms</a
-                    >
-                    and
-                    <a href="https://www.trova.io" target="_blank" rel="noopener noreferrer" class="legal-a"
-                      >Privacy Policy</a
-                    >.
-                  </span>
                 </div>
               </div>
 
@@ -216,8 +210,6 @@
               </ul>
             </div>
 
-            <p class="immediate-action">{{ immediateActionText }}</p>
-
             <div class="loop-strip" aria-label="How Trova works">
               <div class="loop-step">
                 <div class="loop-ico">
@@ -241,16 +233,29 @@
               </div>
             </div>
 
-            <p class="activation-note">
-              <strong>Tip:</strong> Open the Trova Home tab in Slack so your team can build profiles and discover each other.
-              Automated welcome posts can be enabled on the backend when you are ready.
-            </p>
+            <div class="tips-card" role="note" aria-label="Tips">
+              <p class="tips-title">Tips</p>
+              <ul class="tips-list">
+                <li>
+                  Open the Trova Home tab in Slack so your team can build profiles and discover each other.
+                </li>
+                <li>
+                  <strong>
+                    🚀 Get off to a fast start by leveraging our
+                    <a
+                      href="https://trova-wiki.notion.site/launch"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Launch Guide
+                    </a>
+                  </strong>
+                </li>
+              </ul>
+            </div>
 
             <ion-button expand="block" size="large" class="cta-primary" @click="openTrovaInSlack">
               Open Trova in Slack
-            </ion-button>
-            <ion-button expand="block" fill="outline" class="cta-secondary" @click="goFinishProfile">
-              Finish your profile
             </ion-button>
           </div>
         </template>
@@ -259,11 +264,7 @@
       <!-- Missing code -->
       <div v-else-if="phase === 'no_code'" class="shell shell--narrow ion-padding">
         <p>Missing authorization code. Start from the Trova app or add Trova to Slack first.</p>
-        <ion-button expand="block" @click="router.push('/slack-install')">Add Trova to Slack</ion-button>
-        <p v-if="showPreviewHint" class="preview-hint">
-          <strong>Local design preview:</strong>
-          <router-link class="preview-link" :to="previewRoute">Open the full wizard (no OAuth)</router-link>
-        </p>
+        <ion-button expand="block" fill="outline" @click="router.push('/slack-install')">Go to install page</ion-button>
       </div>
     </ion-content>
   </ion-page>
@@ -317,8 +318,11 @@ function shouldUseDesignPreview(): boolean {
   const code = route.query.code as string | undefined;
   const err = route.query.error as string | undefined;
   if (code || err) return false;
+  // Default to showing the full wizard locally when no OAuth params are present.
+  // Support explicit opt-out by passing preview=0.
   const p = route.query.preview;
-  return p === '1' || p === 'true';
+  if (p === '0' || p === 'false') return false;
+  return true;
 }
 
 const designPreview = ref(false);
@@ -327,8 +331,6 @@ const phase = ref<Phase>(
   shouldUseDesignPreview() ? 'wizard' : initialCode || initialError ? 'loading' : 'no_code'
 );
 
-const showPreviewHint = import.meta.env.DEV;
-const previewRoute = { path: '/slack-install-redirect', query: { preview: '1' } };
 const oauthError = ref('');
 const wizardStep = ref<1 | 2 | 3>(1);
 
@@ -342,12 +344,13 @@ const formName = ref('');
 const formType = ref('corporate');
 const acceptedTerms = ref(false);
 const savingStep2 = ref(false);
+const showTermsPrompt = ref(false);
 
 const communityTypes = [
   { value: 'corporate', label: 'Corporate' },
   { value: 'college', label: 'College / university' },
   { value: 'nonprofit', label: 'Nonprofit' },
-  { value: 'community', label: 'Community' },
+  { value: 'community', label: 'Networking Community' },
   { value: 'other', label: 'Other' },
 ];
 
@@ -362,11 +365,6 @@ const canSubmitStep2 = computed(() => {
   const hasCommunity = community.value != null && Number.isFinite(community.value.id);
   return formName.value.trim().length > 0 && acceptedTerms.value && hasCommunity;
 });
-
-const immediateActionText = computed(
-  () =>
-    'Open the Trova Home tab in Slack to get started, and invite your team so the directory fills in with profiles.'
-);
 
 function setRedirectAfterInstall(userId?: number) {
   const sid = userSlackId.value;
@@ -438,6 +436,19 @@ async function submitStep2() {
   }
 }
 
+function attemptSubmitStep2() {
+  showTermsPrompt.value = false;
+  if (!acceptedTerms.value) {
+    showTermsPrompt.value = true;
+    return;
+  }
+  void submitStep2();
+}
+
+watch(acceptedTerms, (next) => {
+  if (next) showTermsPrompt.value = false;
+});
+
 function openTrovaInSlack() {
   const team = slackTeamId.value;
   const appId = environment.slackAppId;
@@ -446,10 +457,6 @@ function openTrovaInSlack() {
   } else {
     window.location.href = 'slack://open';
   }
-}
-
-function goFinishProfile() {
-  router.push('/setup');
 }
 
 function retryInstall() {
@@ -466,7 +473,8 @@ function applyDesignPreviewMocks() {
     type: 'corporate',
     bio: undefined,
   };
-  slackTeamName.value = 'Acme Engineering (preview)';
+  // Keep mock data production-friendly (no "(preview)" suffix in UI copy).
+  slackTeamName.value = 'Acme Engineering';
   slackTeamId.value = 'T00000000';
   userSlackId.value = null;
   installerUserId.value = undefined;
@@ -882,9 +890,14 @@ onMounted(async () => {
 }
 
 .setup-legal {
-  margin-top: 1.35rem;
-  padding-top: 1.2rem;
-  border-top: 1px solid #e2e8f0;
+  margin: 0 0 0.35rem;
+}
+
+.legal-error {
+  margin: 0 0 0.65rem;
+  font-size: 0.85rem;
+  color: var(--ion-color-danger);
+  font-weight: 600;
 }
 
 .directory-preview-aside {
@@ -934,7 +947,6 @@ onMounted(async () => {
   display: block;
   width: 100%;
   height: auto;
-  vertical-align: middle;
 }
 
 .legal-inline {
@@ -1032,6 +1044,41 @@ onMounted(async () => {
   text-align: left;
 }
 
+.tips-card {
+  margin: 0 0 1.25rem;
+  padding: 14px 14px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--ion-border-color);
+  background: #fff;
+  text-align: left;
+}
+.tips-title {
+  margin: 0 0 8px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ion-color-medium-shade);
+}
+.tips-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--ion-color-medium);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.tips-list li + li {
+  margin-top: 8px;
+}
+.tips-list a {
+  color: var(--ion-color-primary);
+  font-weight: 600;
+  text-decoration: none;
+}
+.tips-list a:hover {
+  text-decoration: underline;
+}
+
 .loop-strip {
   display: flex;
   flex-wrap: wrap;
@@ -1071,6 +1118,47 @@ onMounted(async () => {
   color: var(--ion-color-medium);
   font-size: 1rem;
   flex-shrink: 0;
+}
+
+/* Step 3 flow: horizontal strip wraps badly on phones; stack as a vertical timeline */
+@media (max-width: 559px) {
+  .loop-strip {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: 12px 14px;
+  }
+  .loop-step {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    text-align: left;
+    min-width: 0;
+    width: 100%;
+  }
+  .loop-ico {
+    margin: 0;
+    flex-shrink: 0;
+  }
+  .loop-label {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.8125rem;
+    line-height: 1.35;
+    text-align: left;
+  }
+  .loop-arrow {
+    align-self: center;
+    margin: 2px 0;
+    transform: rotate(90deg);
+  }
+}
+
+@media (min-width: 560px) {
+  .loop-strip {
+    flex-wrap: nowrap;
+  }
 }
 
 .activation-note {

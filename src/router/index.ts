@@ -51,6 +51,18 @@ const routes: Array<RouteRecordRaw> = [
     component: () => import('@/views/auth/LogoutPage.vue')
   },
   {
+    path: '/terms',
+    component: () => import('@/views/legal/TermsPage.vue')
+  },
+  {
+    path: '/privacy',
+    component: () => import('@/views/legal/PrivacyPage.vue')
+  },
+  {
+    path: '/safety',
+    component: () => import('@/views/legal/SafetyTipsPage.vue')
+  },
+  {
     path: '/setup',
     component: () => import('@/views/profile/SetupPage.vue'),
     meta: { requiresAuth: true },
