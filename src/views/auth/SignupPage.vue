@@ -59,10 +59,10 @@
 
         <!-- Legal Text -->
         <p class="legal-text">
-          By creating an account you agree to our 
-          <a href="#" class="legal-link">Privacy Policy</a> 
-          and 
-          <a href="#" class="legal-link">Terms of Use</a>.
+          By creating an account you agree to our
+          <router-link to="/privacy" class="legal-link">Privacy Policy</router-link>
+          and
+          <router-link to="/terms" class="legal-link">Terms of Use</router-link>.
         </p>
 
         <!-- Create Account Button -->

@@ -39,8 +39,28 @@ const routes: Array<RouteRecordRaw> = [
     component: () => import('@/views/auth/SlackSigninRedirectPage.vue')
   },
   {
+    path: '/slack-install',
+    component: () => import('@/views/auth/SlackInstallPage.vue')
+  },
+  {
+    path: '/slack-install-redirect',
+    component: () => import('@/views/auth/SlackInstallRedirectPage.vue')
+  },
+  {
     path: '/logout',
     component: () => import('@/views/auth/LogoutPage.vue')
+  },
+  {
+    path: '/terms',
+    component: () => import('@/views/legal/TermsPage.vue')
+  },
+  {
+    path: '/privacy',
+    component: () => import('@/views/legal/PrivacyPage.vue')
+  },
+  {
+    path: '/safety',
+    component: () => import('@/views/legal/SafetyTipsPage.vue')
   },
   {
     path: '/setup',
@@ -60,6 +80,54 @@ const routes: Array<RouteRecordRaw> = [
       // Preserve query parameters when redirecting
       return {
         path: '/tabs/map',
+        query: to.query
+      };
+    },
+    meta: { requiresAuth: true },
+    beforeEnter: [requireAuth, requireSetupComplete]
+  },
+  {
+    path: '/matches',
+    redirect: (to) => {
+      // Legacy Slack links land on /matches; redirect to the Discover tab.
+      return {
+        path: '/tabs/discover',
+        query: to.query
+      };
+    },
+    meta: { requiresAuth: true },
+    beforeEnter: [requireAuth, requireSetupComplete]
+  },
+  {
+    path: '/profile',
+    redirect: (to) => {
+      // Legacy Slack links land on /profile; redirect to the Profile tab.
+      return {
+        path: '/tabs/profile',
+        query: to.query
+      };
+    },
+    meta: { requiresAuth: true },
+    beforeEnter: [requireAuth, requireSetupComplete]
+  },
+  {
+    path: '/profile/profile/:userId',
+    redirect: (to) => {
+      // Legacy Slack links land on /profile/profile/:userId; redirect to the Profile tab user view.
+      return {
+        path: `/tabs/profile/${to.params.userId}`,
+        query: to.query
+      };
+    },
+    meta: { requiresAuth: true },
+    beforeEnter: [requireAuth, requireSetupComplete]
+  },
+  {
+    path: '/image',
+    redirect: (to) => {
+      // Legacy Slack links land on /image (image upload flow). Redirect to Profile for now to avoid 404s.
+      return {
+        path: '/tabs/profile',
         query: to.query
       };
     },

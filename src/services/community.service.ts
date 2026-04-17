@@ -1,10 +1,12 @@
 import { apiService } from './api.service';
 import { useAuthStore } from '../stores/auth.store';
+import { environment } from '@/environments/environment';
 
 export interface Community {
   id: number;
   name: string;
   bio?: string;
+  type?: string;
   leaderId: number;
   leader?: {
     id: number;
@@ -154,6 +156,74 @@ class CommunityService {
     } catch (error) {
       console.warn('[CommunityService] viewSlackProfileFromMap failed (non-blocking):', error);
     }
+  }
+
+  /**
+   * First-time Slack workspace install: exchange OAuth code for Trova user + community (public).
+   * Backend: POST /public/slack/oauth-authenticate
+   */
+  async oauthAuthenticateSlackApp(
+    code: string,
+    redirectUri: string,
+    source = 'slack-install-redirect'
+  ): Promise<{
+    message?: string;
+    user: Record<string, unknown> & { id: number; slackId?: string };
+    community: Community;
+    extraInfo?: { slackTeamName?: string; slackTeamId?: string };
+  }> {
+    return apiService.post('/public/slack/oauth-authenticate', {
+      code,
+      redirectUri,
+      testMode: false,
+      source,
+    });
+  }
+
+  /**
+   * Update community fields via public PATCH (no Firebase required).
+   * Backend: PATCH /public/community/edit
+   */
+  async updateCommunityPublic(payload: {
+    id: number;
+    name: string;
+    type: string;
+    bio?: string;
+  }): Promise<Community> {
+    return apiService.patch('/public/community/edit', payload);
+  }
+
+  /**
+   * Upload community logo (multipart field `image`).
+   * Backend: POST /public/:id/community-image-upload
+   */
+  async uploadCommunityLogoPublic(communityId: number, file: File): Promise<Community> {
+    const formData = new FormData();
+    formData.append('image', file);
+    const { useFirebase } = await import('@/composables/useFirebase');
+    const headers: Record<string, string> = {};
+    const auth = useFirebase().auth;
+    if (auth?.currentUser) {
+      try {
+        headers['Authorization'] = await auth.currentUser.getIdToken();
+      } catch {
+        /* public endpoint — optional auth */
+      }
+    }
+    const res = await fetch(
+      `${environment.apiUrl}/public/${communityId}/community-image-upload`,
+      {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+        headers: Object.keys(headers).length ? headers : undefined,
+      }
+    );
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(err || `Upload failed (${res.status})`);
+    }
+    return res.json() as Promise<Community>;
   }
 }
 

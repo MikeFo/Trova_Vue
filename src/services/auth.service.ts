@@ -350,6 +350,32 @@ export class AuthService {
       this.authStore.isLoading = false;
     }
   }
+
+  /**
+   * Firestore hint for Slack landing / post-install flows (e.g. redirectTo: 'setup').
+   * Document: slackUser/{slackId}. May fail if Firestore rules require auth — safe to ignore.
+   */
+  async storeDataSlackLanding(
+    slackId: string,
+    data: {
+      redirectTo: string;
+      createdUserId?: number;
+      onboardingCompleted?: boolean;
+      selectedChannel?: string;
+      workspaceType?: string;
+      hasLaunchedFirstAction?: boolean;
+    }
+  ): Promise<void> {
+    if (!slackId) return;
+    try {
+      const { firestore } = useFirebase();
+      if (!firestore) return;
+      const { doc, setDoc } = await import('firebase/firestore');
+      await setDoc(doc(firestore, 'slackUser', slackId), data, { merge: true });
+    } catch (e) {
+      console.warn('[AuthService] storeDataSlackLanding skipped:', e);
+    }
+  }
 }
 
 // Lazy initialization to prevent errors during module load

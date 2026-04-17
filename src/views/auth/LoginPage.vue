@@ -74,9 +74,9 @@
           <!-- Legal Text -->
           <p class="legal-text">
             By signing in you agree to our
-            <a href="#" class="legal-link">Privacy Policy</a>
+            <router-link to="/privacy" class="legal-link">Privacy Policy</router-link>
             and
-            <a href="#" class="legal-link">Terms of Use</a>.
+            <router-link to="/terms" class="legal-link">Terms of Use</router-link>.
           </p>
 
           <!-- Sign In Button -->
