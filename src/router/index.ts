@@ -87,6 +87,54 @@ const routes: Array<RouteRecordRaw> = [
     beforeEnter: [requireAuth, requireSetupComplete]
   },
   {
+    path: '/matches',
+    redirect: (to) => {
+      // Legacy Slack links land on /matches; redirect to the Discover tab.
+      return {
+        path: '/tabs/discover',
+        query: to.query
+      };
+    },
+    meta: { requiresAuth: true },
+    beforeEnter: [requireAuth, requireSetupComplete]
+  },
+  {
+    path: '/profile',
+    redirect: (to) => {
+      // Legacy Slack links land on /profile; redirect to the Profile tab.
+      return {
+        path: '/tabs/profile',
+        query: to.query
+      };
+    },
+    meta: { requiresAuth: true },
+    beforeEnter: [requireAuth, requireSetupComplete]
+  },
+  {
+    path: '/profile/profile/:userId',
+    redirect: (to) => {
+      // Legacy Slack links land on /profile/profile/:userId; redirect to the Profile tab user view.
+      return {
+        path: `/tabs/profile/${to.params.userId}`,
+        query: to.query
+      };
+    },
+    meta: { requiresAuth: true },
+    beforeEnter: [requireAuth, requireSetupComplete]
+  },
+  {
+    path: '/image',
+    redirect: (to) => {
+      // Legacy Slack links land on /image (image upload flow). Redirect to Profile for now to avoid 404s.
+      return {
+        path: '/tabs/profile',
+        query: to.query
+      };
+    },
+    meta: { requiresAuth: true },
+    beforeEnter: [requireAuth, requireSetupComplete]
+  },
+  {
     path: '/tabs/',
     component: TabsPage,
     meta: { requiresAuth: true },
