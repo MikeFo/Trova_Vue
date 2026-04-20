@@ -570,8 +570,9 @@ export class AdminService {
 
   /**
    * Upload reports-to data CSV.
-   * Reads the file as text and sends the raw CSV string as JSON — matches the
-   * Ionic client and backend contract (POST /upload-reporting-data { csvData }).
+   * Reads the file as text and sends the raw CSV string as JSON.
+   * Backend: POST /communities/:id/upload-reporting-data { csvData }.
+   * (Do not use /communities/:id/data/reports-to — that path is not implemented on the API.)
    */
   async uploadReportsToData(communityId: number, csvData: string): Promise<void> {
     try {
