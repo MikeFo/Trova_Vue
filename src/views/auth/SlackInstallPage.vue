@@ -48,51 +48,23 @@
             stronger connections where you already work.
           </p>
           <div class="hero-cta">
-            <button
-              type="button"
-              class="add-to-slack-btn"
-              :disabled="!hasClientId"
-              @click="startInstall"
+            <!-- Official Slack button assets; href still built with redirect_uri (see installAuthorizeUrl). -->
+            <a
+              class="add-to-slack-official"
+              :class="{ 'add-to-slack-official--disabled': !hasClientId }"
+              :href="installAuthorizeUrl"
+              rel="noopener noreferrer"
+              @click="onAddToSlackClick"
             >
-              <!-- Official-style Slack hash mark (correct path data; no external images) -->
-              <span class="slack-glyph" aria-hidden="true">
-                <svg viewBox="0 0 54 54" width="22" height="22" xmlns="http://www.w3.org/2000/svg">
-                  <path
-                    fill="#E01E5A"
-                    d="M11.3 22.5a5.65 5.65 0 1 1 0-11.3h11.3v11.3H11.3z"
-                  />
-                  <path
-                    fill="#36C5F0"
-                    d="M22.5 11.3a5.65 5.65 0 1 1 11.3 0v11.3H22.5V11.3z"
-                  />
-                  <path
-                    fill="#2EB67D"
-                    d="M42.7 22.5a5.65 5.65 0 1 1 0 11.3H31.4V22.5h11.3z"
-                  />
-                  <path
-                    fill="#ECB22E"
-                    d="M31.4 42.7a5.65 5.65 0 1 1-11.3 0V31.4h11.3v11.3z"
-                  />
-                  <path
-                    fill="#E01E5A"
-                    d="M11.3 31.4a5.65 5.65 0 1 1 0 11.3h11.3V31.4H11.3z"
-                  />
-                  <path
-                    fill="#36C5F0"
-                    d="M11.3 22.5H0a5.65 5.65 0 1 1 0 11.3h11.3V22.5z"
-                  />
-                  <path
-                    fill="#2EB67D"
-                    d="M31.4 42.7v11.3a5.65 5.65 0 1 1-11.3 0V42.7h11.3z"
-                  />
-                  <path
-                    fill="#ECB22E"
-                    d="M42.7 31.4H54a5.65 5.65 0 1 1 0 11.3H42.7V31.4z"
-                  />
-                </svg>
-              </span>
-              <span>Add to Slack</span>
-            </button>
+              <img
+                alt="Add to Slack"
+                width="139"
+                height="40"
+                src="https://platform.slack-edge.com/img/add_to_slack.png"
+                :srcset="slackAddToSlackSrcset"
+                decoding="async"
+              />
+            </a>
             <p v-if="!hasClientId" class="config-warn">
               Slack client ID is not configured for this environment.
             </p>
@@ -202,11 +174,23 @@ const router = useRouter();
 
 const hasClientId = computed(() => Boolean(environment.slackClientId));
 
-function startInstall() {
+/** Same authorize URL as before (includes redirect_uri); do not use Slack’s static HTML href without it. */
+const installAuthorizeUrl = computed(() => {
+  if (!environment.slackClientId) {
+    return '#';
+  }
   const redirectUri = `${window.location.origin}/slack-install-redirect`;
   const teamId = (route.query.slackTeamId as string) || undefined;
-  const url = buildSlackAppInstallAuthorizeUrl({ redirectUri, teamId: teamId || null });
-  window.location.href = url;
+  return buildSlackAppInstallAuthorizeUrl({ redirectUri, teamId: teamId || null });
+});
+
+const slackAddToSlackSrcset =
+  'https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x';
+
+function onAddToSlackClick(e: MouseEvent) {
+  if (!hasClientId.value) {
+    e.preventDefault();
+  }
 }
 
 function goLogin() {
@@ -219,7 +203,9 @@ function openTrovaSite() {
 
 onMounted(() => {
   if (route.query.auto === '1' || route.query.auto === 'true') {
-    startInstall();
+    if (hasClientId.value) {
+      window.location.href = installAuthorizeUrl.value;
+    }
   }
 });
 </script>
@@ -348,42 +334,27 @@ onMounted(() => {
   gap: 12px;
 }
 
-.add-to-slack-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 14px 24px;
-  font-family: inherit;
-  font-size: 1rem;
-  font-weight: 700;
-  color: #1a1d21;
-  background: #fff;
-  border: 1px solid #c5c5c5;
-  border-radius: 8px;
-  cursor: pointer;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  transition:
-    transform 0.15s ease,
-    box-shadow 0.15s ease,
-    border-color 0.15s ease;
-}
-
-.add-to-slack-btn:hover:not(:disabled) {
-  border-color: #888;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  transform: translateY(-1px);
-}
-
-.add-to-slack-btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.slack-glyph {
-  display: flex;
+.add-to-slack-official {
+  display: inline-block;
   line-height: 0;
-  flex-shrink: 0;
+  border-radius: 10px;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.add-to-slack-official:hover {
+  opacity: 0.92;
+}
+
+.add-to-slack-official img {
+  display: block;
+  width: 139px;
+  height: 40px;
+  max-width: 100%;
+}
+
+.add-to-slack-official--disabled {
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .config-warn {
