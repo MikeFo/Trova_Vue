@@ -1,4 +1,5 @@
 import { apiService } from './api.service';
+import { devLog } from '../utils/logger';
 
 export interface Group {
   id: number;
@@ -65,22 +66,38 @@ export interface CreateGroupData {
 
 export class GroupService {
   /**
+   * Cache "endpoint missing" so we don't spam the API/console.
+   * These endpoints appear to be absent in some prod deployments.
+   */
+  private userGroupsEndpointMissing = false;
+  private starredGroupsEndpointMissing = false;
+  private notMemberCommunityIds = new Set<number>();
+
+  /**
    * Get all groups for a community
    */
   async getGroups(communityId: number, userId: number): Promise<Group[]> {
+    if (this.notMemberCommunityIds.has(communityId)) return [];
     try {
       const groups = await apiService.get<Group[]>(
         `/groups?communityId=${communityId}&userId=${userId}`
       );
       return groups || [];
     } catch (error: any) {
-      // Log the actual error message from backend
-      const errorMessage = error.response?.data?.error?.message || 
-                          error.response?.data?.message || 
-                          error.message;
-      console.error('[GroupService] Failed to fetch groups:', errorMessage);
-      console.error('[GroupService] Error details:', error.response?.data);
-      
+      // apiService already logs failed GETs to console.error; dev-only context here
+      devLog('[GroupService] getGroups failed:', {
+        status: error.response?.status ?? error.status,
+        body: error.response?.data,
+        message: error.message,
+      });
+
+      // Expected empty state: user is not a member of this community
+      if ((error.status === 422 || error.response?.status === 422) &&
+        String(error.response?.data?.error || error.message || '').toLowerCase().includes('not a member of requested community')) {
+        this.notMemberCommunityIds.add(communityId);
+        return [];
+      }
+
       // If the main endpoint fails (e.g., 500 error), try the alternative endpoint
       if (error.status === 500 || error.response?.status === 500) {
         try {
@@ -89,10 +106,10 @@ export class GroupService {
           );
           return groups || [];
         } catch (altError: any) {
-          const altErrorMessage = altError.response?.data?.error?.message || 
-                                 altError.response?.data?.message || 
-                                 altError.message;
-          console.error('[GroupService] Alternative endpoint also failed:', altErrorMessage);
+          devLog('[GroupService] Alternative /communities/.../groups also failed:', {
+            status: altError.response?.status ?? altError.status,
+            body: altError.response?.data,
+          });
           return [];
         }
       }
@@ -117,11 +134,21 @@ export class GroupService {
    * Get groups that the user is a member of
    */
   async getGroupsByUser(userId: number): Promise<Group[]> {
+    if (this.userGroupsEndpointMissing) return [];
     try {
       const groups = await apiService.get<Group[]>(`/groups/user/${userId}`);
       return groups || [];
-    } catch (error) {
-      console.error('Failed to fetch user groups:', error);
+    } catch (error: any) {
+      if (error.status === 404 || error.response?.status === 404) {
+        this.userGroupsEndpointMissing = true;
+        return [];
+      }
+      // Keep real failures visible, but avoid duplicating ApiService logging
+      devLog('[GroupService] getGroupsByUser failed:', {
+        status: error.response?.status ?? error.status,
+        body: error.response?.data,
+        message: error.message,
+      });
       return [];
     }
   }
@@ -245,6 +272,16 @@ export class GroupService {
    * @param communityId - Optional community ID to filter by. If null, returns groups from all communities
    */
   async getStarredGroups(userId: number, communityId?: number | null): Promise<Group[]> {
+    if (this.starredGroupsEndpointMissing) {
+      // Fall back to user groups only if that endpoint exists
+      if (this.userGroupsEndpointMissing) return [];
+      const allGroups = await this.getGroupsByUser(userId);
+      let filtered = allGroups.filter(g => g.isFavorite === true);
+      if (communityId !== null && communityId !== undefined) {
+        filtered = filtered.filter(g => g.communityId === communityId);
+      }
+      return filtered;
+    }
     try {
       let url = `/groups/user/${userId}/starred`;
       if (communityId !== null && communityId !== undefined) {
@@ -255,8 +292,10 @@ export class GroupService {
     } catch (error: any) {
       // Silently handle 404s (endpoint not implemented yet)
       if (error.status === 404 || error.response?.status === 404) {
+        this.starredGroupsEndpointMissing = true;
         // Try fallback - get all user groups and filter by isFavorite
         try {
+          if (this.userGroupsEndpointMissing) return [];
           const allGroups = await this.getGroupsByUser(userId);
           let filtered = allGroups.filter(g => g.isFavorite === true);
           if (communityId !== null && communityId !== undefined) {
@@ -268,11 +307,19 @@ export class GroupService {
           if (fallbackError.status === 404 || fallbackError.response?.status === 404) {
             return [];
           }
-          console.error('Fallback method failed:', fallbackError);
+          devLog('[GroupService] getStarredGroups fallback failed:', {
+            status: fallbackError.response?.status ?? fallbackError.status,
+            body: fallbackError.response?.data,
+            message: fallbackError.message,
+          });
           return [];
         }
       }
-      console.error('Failed to fetch starred groups:', error);
+      devLog('[GroupService] getStarredGroups failed:', {
+        status: error.response?.status ?? error.status,
+        body: error.response?.data,
+        message: error.message,
+      });
       return [];
     }
   }

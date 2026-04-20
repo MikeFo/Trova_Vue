@@ -21,11 +21,15 @@ export interface ActivityItem {
 }
 
 export class ActivityService {
+  // These endpoints are missing in some prod deployments; cache 404 to avoid repeat requests.
+  private activityEndpointsMissing = false;
+
   /**
    * Get community activity feed
    * @param communityId - Community ID
    */
   async getCommunityActivity(communityId: number): Promise<ActivityItem[]> {
+    if (this.activityEndpointsMissing) return [];
     try {
       const activity = await apiService.get<ActivityItem[]>(
         `/communities/${communityId}/activity`
@@ -39,6 +43,7 @@ export class ActivityService {
     } catch (error: any) {
       // Silently handle 404s (endpoint not implemented yet)
       if (error.status === 404 || error.response?.status === 404) {
+        this.activityEndpointsMissing = true;
         return [];
       }
       console.error('Failed to fetch community activity:', error);
@@ -51,6 +56,7 @@ export class ActivityService {
    * @param userId - User ID
    */
   async getAllCommunitiesActivity(userId: number): Promise<ActivityItem[]> {
+    if (this.activityEndpointsMissing) return [];
     try {
       const activity = await apiService.get<ActivityItem[]>(
         `/users/${userId}/activity/all`
@@ -64,6 +70,7 @@ export class ActivityService {
     } catch (error: any) {
       // Silently handle 404s (endpoint not implemented yet)
       if (error.status === 404 || error.response?.status === 404) {
+        this.activityEndpointsMissing = true;
         return [];
       }
       console.error('Failed to fetch all communities activity:', error);

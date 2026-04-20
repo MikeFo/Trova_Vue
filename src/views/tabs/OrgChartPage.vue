@@ -65,15 +65,15 @@
       </div>
 
       <!-- Error State -->
-      <div v-else-if="error" class="org-chart-error">
+      <div v-else-if="orgChartError" class="org-chart-error">
         <ion-icon :icon="alertCircle" class="error-icon"></ion-icon>
-        <h3>Authentication Expired</h3>
-        <p>{{ error }}</p>
+        <h3>{{ orgChartError.title }}</h3>
+        <p>{{ orgChartError.detail }}</p>
         <ion-button @click="retryLoad">Retry</ion-button>
       </div>
 
       <!-- Org Chart -->
-      <div v-if="orgChartData" class="org-chart-wrapper">
+      <div v-else-if="orgChartData" class="org-chart-wrapper">
         <OrgChartContainer
           ref="chartContainerRef"
           :scale="chartScale"
@@ -87,16 +87,23 @@
                 :datasource="orgChartData"
                 :display-flags="displayFlags"
                 :group-scale="groupScale"
+                :max-render-depth="maxRenderDepth"
+                :reporting-chain-slack-ids="slackIdsInChain"
                 :is-highlighted="highlightedSlackId === orgChartData.slackId"
                 :highlighted-slack-id="highlightedSlackId"
                 @node-click="handleNodeClick"
                 @select-node="handleSelectNode"
               />
         </OrgChartContainer>
+
+        <button @click="toggleExpandedView" class="view-toggle-btn">
+          <ion-icon :icon="isExpandedView ? contractOutline : expandOutline"></ion-icon>
+          {{ isExpandedView ? 'Focused View' : 'Full Org Chart' }}
+        </button>
       </div>
 
       <!-- Empty State -->
-      <div v-else-if="!loading && !error" class="org-chart-empty">
+      <div v-else class="org-chart-empty">
         <p>Org chart will appear here once data is loaded.</p>
       </div>
 
@@ -112,10 +119,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch, provide, reactive } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { IonPage, IonHeader, IonToolbar, IonTitle, IonContent, IonIcon, IonButton, IonSpinner, alertController } from '@ionic/vue';
-import { search, close, alertCircle } from 'ionicons/icons';
+import { search, close, alertCircle, expandOutline, contractOutline } from 'ionicons/icons';
 import { communityService } from '@/services/community.service';
 import { orgChartAuthService } from '@/services/org-chart-auth.service';
 import { slackSessionService } from '@/services/slack-session.service';
@@ -142,7 +149,7 @@ const secretId = ref<string>('');
 
 // State
 const loading = ref(true);
-const error = ref<string | null>(null);
+const orgChartError = ref<{ title: string; detail: string } | null>(null);
 const orgChartData = ref<OrgNode | null>(null);
 const allUsers = ref<OrgUser[]>([]);
 const slackIdsInChain = ref<string[]>([]);
@@ -158,6 +165,14 @@ const displayFlags = ref({
 const chartScale = ref(1.0);
 const chartTranslateX = ref(0);
 const chartTranslateY = ref(0);
+
+// Depth-limited rendering
+const maxRenderDepth = ref<number>(2);
+const isExpandedView = ref(false);
+
+/** Slack IDs of nodes the user manually expanded — bypasses depth filter for that subtree root. */
+const manualDepthBypassSlackIds = reactive<Record<string, boolean>>({});
+provide('orgChartManualDepthBypass', manualDepthBypassSlackIds);
 
 // Search
 const searchQuery = ref('');
@@ -228,14 +243,20 @@ function extractQueryParams() {
   // For authenticated users, slackUserId is optional (we'll use user ID as fallback)
   // For Slack link users, slackUserId is required
   if (!communityId.value) {
-    error.value = 'Missing required parameters: communityId';
+    orgChartError.value = {
+      title: 'Missing information',
+      detail: 'communityId is required to load the org chart.',
+    };
     console.error('[OrgChartPage] Missing required parameters: communityId');
     loading.value = false;
     return false;
   }
 
   if (!isFullyAuthenticated && !slackUserId.value) {
-    error.value = 'Missing required parameters: slackUserId';
+    orgChartError.value = {
+      title: 'Missing information',
+      detail: 'slackUserId is required for this link.',
+    };
     console.error('[OrgChartPage] Missing required parameters: slackUserId');
     loading.value = false;
     return false;
@@ -279,7 +300,7 @@ async function initOrg(isInitialPageLoad: boolean = true) {
   }
 
   loading.value = true;
-  error.value = null;
+  orgChartError.value = null;
 
   // Check if user is fully authenticated (has Firebase auth + user profile)
   const isFullyAuthenticated = authStore.isAuthenticated && authStore.user?.id;
@@ -294,22 +315,32 @@ async function initOrg(isInitialPageLoad: boolean = true) {
   }
 
   try {
-    const keyDocRefId = await orgChartAuthService.createSecretCode(
-      communityId.value!,
-      slackUserId.value
-    );
+    // For Firebase super admins the Firestore secret code is not required;
+    // the backend will authenticate via the Authorization header instead.
+    let keyDocRefId = '';
+    try {
+      keyDocRefId = await orgChartAuthService.createSecretCode(
+        communityId.value!,
+        slackUserId.value
+      );
+    } catch (secretErr) {
+      if (!isFullyAuthenticated) throw secretErr;
+    }
 
     const slackSecretId = secretId.value || '';
     let secretIdToSend = '';
     if (isFullyAuthenticated) {
       secretIdToSend = '';
     } else if (slackSecretId) {
-      const isValidated = slackSessionService.isSecretIdValidated(slackSecretId);
-      secretIdToSend = isValidated ? '' : slackSecretId;
-    } else {
-      secretIdToSend = slackSessionService.hasValidatedSession() ? '' : '';
+      // Always send the secret so the backend can identify the caller.
+      // The "validated" flag only tracks initial handshake; the backend
+      // still needs `s` on every request for Slack-only users.
+      secretIdToSend = slackSecretId;
+      if (communityId.value != null) {
+        slackSessionService.setValidatedContext(slackSecretId, communityId.value, slackUserId.value);
+      }
     }
-    
+
     // When coming from Slack directory, otherSlackUserId is the clicked user. When missing, focus on viewer (self).
     const otherSlackUserIdToSend = otherSlackUserId.value || slackUserId.value;
 
@@ -339,28 +370,80 @@ async function initOrg(isInitialPageLoad: boolean = true) {
     
     handleOrgDataResponse(response);
   } catch (err: any) {
-    console.error('[OrgChartPage] Failed to load org chart:', err?.message ?? err);
+    console.error('[OrgChartPage] Failed to load org chart:', err?.message ?? err, err);
 
     const errorMessage = err.message || err.response?.data?.message || '';
     const status = err.status || err.response?.status;
-    
+
     // Check if error is due to expired secretId from Slack link
     // Only show Slack expiration alert if user came from Slack link
-    if ((status === 401 || 
-         errorMessage.toLowerCase().includes('expired') || 
-         errorMessage.toLowerCase().includes('invalid') || 
-         errorMessage.toLowerCase().includes('secret')) 
-        && slackSessionService.isSlackLinkUser()) {
+    if ((status === 401 ||
+         errorMessage.toLowerCase().includes('expired') ||
+         errorMessage.toLowerCase().includes('invalid') ||
+         errorMessage.toLowerCase().includes('secret')) &&
+        slackSessionService.isSlackLinkUser()) {
       loading.value = false;
       await showSlackSessionExpiredAlert();
     } else {
-      error.value = errorMessage || 'Failed to load org chart. Authentication may have expired.';
+      orgChartError.value = parseOrgChartApiError(err);
       loading.value = false;
     }
   }
 }
 
+/** User-facing copy; never dump raw JSON / DB errors. */
+function parseOrgChartApiError(err: any): { title: string; detail: string } {
+  const status = err?.status ?? err?.response?.status;
+  const data = err?.response?.data;
+  const msg =
+    (typeof data === 'string' ? data : (data as { message?: string })?.message) ||
+    err?.message ||
+    '';
+  const blob =
+    typeof data === 'object' && data !== null
+      ? JSON.stringify(data)
+      : String(data || '');
+  const haystack = `${msg} ${blob}`.toLowerCase();
+
+  const isServerOrDb =
+    (typeof status === 'number' && status >= 500) ||
+    haystack.includes('dberror') ||
+    haystack.includes('xx000') ||
+    haystack.includes('internal_load') ||
+    haystack.includes('postgres') ||
+    haystack.includes('parallel worker');
+
+  if (status === 401) {
+    return {
+      title: 'Authentication required',
+      detail:
+        'Your session may have expired. Sign in again, or tap Retry after refreshing your session.',
+    };
+  }
+
+  if (isServerOrDb) {
+    return {
+      title: 'Could not load org chart',
+      detail:
+        'The server hit an error while loading this view. Try Retry in a moment. If it keeps happening, contact support.',
+    };
+  }
+
+  const short =
+    msg && msg.length < 180 && !msg.trim().startsWith('{')
+      ? msg
+      : 'Something went wrong. Try Retry.';
+  return {
+    title: 'Unable to load org chart',
+    detail: short,
+  };
+}
+
 function handleOrgDataResponse(response: OrgChartResponse) {
+  for (const k of Object.keys(manualDepthBypassSlackIds)) {
+    delete manualDepthBypassSlackIds[k];
+  }
+
   allUsers.value = response.users || [];
   slackIdsInChain.value = response.slackIdsInChain || [];
   
@@ -373,18 +456,27 @@ function handleOrgDataResponse(response: OrgChartResponse) {
   };
 
   // Focus user: from Slack directory (otherSlackUserId) or viewer (slackUserId) when no other specified
-  const focusSlackId = otherSlackUserId.value || slackUserId.value;
+  let focusSlackId = otherSlackUserId.value || slackUserId.value;
 
   // Restructure the tree to show full context around the focus user
   // (manager, teammates/siblings, and direct reports). API already expanded path via slackIdsInChain.
   orgChartData.value = restructureTreeForUser(response.dataSource, focusSlackId);
 
+  // If the focus user wasn't found in the tree (e.g. super admin with numeric user ID),
+  // fall back to the root node so the chart opens expanded at the top.
+  if (!findNodeInTree(orgChartData.value, focusSlackId)) {
+    focusSlackId = orgChartData.value.slackId;
+  }
+
+  annotateDepthFromFocus(orgChartData.value, focusSlackId);
+
+  // Set highlight BEFORE clearing loading so nodes mount with the correct expanded state
+  highlightedSlackId.value = focusSlackId;
   loading.value = false;
 
-  // Center the chart on the focus user and highlight that node
+  // Center the chart after DOM renders
   setTimeout(() => {
     centerOnUser(focusSlackId);
-    highlightedSlackId.value = focusSlackId;
   }, 200);
 }
 
@@ -652,6 +744,84 @@ function retryLoad() {
   initOrg(true);
 }
 
+function findNodeInTree(node: OrgNode, slackId: string): boolean {
+  if (node.slackId === slackId) return true;
+  if (node.children) {
+    for (const child of node.children) {
+      if (findNodeInTree(child, slackId)) return true;
+    }
+  }
+  return false;
+}
+
+function toggleExpandedView() {
+  isExpandedView.value = !isExpandedView.value;
+  maxRenderDepth.value = isExpandedView.value ? Infinity : 2;
+  for (const k of Object.keys(manualDepthBypassSlackIds)) {
+    delete manualDepthBypassSlackIds[k];
+  }
+}
+
+/**
+ * BFS from the focused user outward, assigning each node its distance
+ * from the focus. Used by OrgChartNode to gate rendering by depth.
+ */
+function annotateDepthFromFocus(root: OrgNode, focusSlackId: string): void {
+  const parentMap = new Map<string, OrgNode>();
+  const nodeMap = new Map<string, OrgNode>();
+
+  function mapNodes(node: OrgNode) {
+    nodeMap.set(node.slackId, node);
+    if (node.children) {
+      for (const child of node.children) {
+        parentMap.set(child.slackId, node);
+        mapNodes(child);
+      }
+    }
+  }
+  mapNodes(root);
+
+  const focusNode = nodeMap.get(focusSlackId);
+  if (!focusNode) {
+    function setZero(node: OrgNode) {
+      node._depthFromFocus = 0;
+      node.children?.forEach(setZero);
+    }
+    setZero(root);
+    return;
+  }
+
+  const visited = new Set<string>();
+  const queue: Array<{ node: OrgNode; depth: number }> = [{ node: focusNode, depth: 0 }];
+  visited.add(focusSlackId);
+
+  while (queue.length > 0) {
+    const { node, depth } = queue.shift()!;
+    node._depthFromFocus = depth;
+
+    const parent = parentMap.get(node.slackId);
+    if (parent && !visited.has(parent.slackId)) {
+      visited.add(parent.slackId);
+      queue.push({ node: parent, depth: depth + 1 });
+    }
+
+    if (node.children) {
+      for (const child of node.children) {
+        if (!visited.has(child.slackId)) {
+          visited.add(child.slackId);
+          queue.push({ node: child, depth: depth + 1 });
+        }
+      }
+    }
+  }
+
+  function setUnvisited(node: OrgNode) {
+    if (node._depthFromFocus === undefined) node._depthFromFocus = Infinity;
+    node.children?.forEach(setUnvisited);
+  }
+  setUnvisited(root);
+}
+
 // Helper function to enrich org chart data with profile pictures from users
 async function enrichWithProfilePictures(response: OrgChartResponse) {
   // Try to get profile pictures from the users array
@@ -895,6 +1065,35 @@ watch(() => route.query, () => {
   color: #6b7280;
 }
 
+.view-toggle-btn {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: #ffffff;
+  border: 2px solid #2d7a4e;
+  border-radius: 24px;
+  color: #2d7a4e;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  transition: background 0.2s ease, color 0.2s ease;
+  z-index: 50;
+}
+
+.view-toggle-btn:hover {
+  background: #2d7a4e;
+  color: #ffffff;
+}
+
+.view-toggle-btn ion-icon {
+  font-size: 18px;
+}
+
 @media (max-width: 768px) {
   .org-chart-search-container {
     padding: 12px;
@@ -908,6 +1107,13 @@ watch(() => route.query, () => {
   .org-chart-wrapper {
     height: calc(100vh - 180px);
     min-height: 400px;
+  }
+
+  .view-toggle-btn {
+    bottom: 12px;
+    right: 12px;
+    padding: 8px 12px;
+    font-size: 12px;
   }
 }
 </style>

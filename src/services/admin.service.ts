@@ -1,9 +1,7 @@
 import { apiService } from './api.service';
 import type { User } from '../stores/auth.store';
 import type { Community } from './community.service';
-
-/** No-op in production; only logs in development. */
-const devLog: (...args: unknown[]) => void = import.meta.env.DEV ? (...args: unknown[]) => console.log(...args) : () => {};
+import { devLog, devWarn } from '../utils/logger';
 import { 
   collection, 
   query, 
@@ -128,6 +126,15 @@ export interface ConversationStarted {
   createdAt: string;
   messageCount: number;
   participants: string;
+  participantUserIds?: number[];
+  participantUsers?: Array<{
+    userId: number;
+    name?: string | null;
+    email?: string | null;
+    profilePicture?: string | null;
+    messageCount: number;
+  }>;
+  distinctHumanSpeakers?: number;
 }
 
 export interface ConversationsStartedResponse {
@@ -137,10 +144,14 @@ export interface ConversationsStartedResponse {
 }
 
 export class AdminService {
+  private managersCheckEndpointMissing = false;
   // Cache for expensive operations
   private matchesCache = new Map<string, { data: any[]; timestamp: number }>();
   private conversationsCache = new Map<string, { data: any; timestamp: number }>();
   private profilesCache = new Map<number, { data: any[]; timestamp: number }>();
+  private magicIntrosByDateCache = new Map<string, { data: Array<{ date: string; dateDisplay: string; totalPairings: number; engagedPairings: number; engagementRate: number }>; timestamp: number }>();
+  private magicIntroPairingsCache = new Map<string, { data: any[]; timestamp: number }>();
+  private conversationsStartedCache = new Map<string, { data: ConversationsStartedResponse; timestamp: number }>();
   private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
   private readonly FIREBASE_CACHE_TTL = 10 * 60 * 1000; // 10 minutes for Firebase queries
   
@@ -159,6 +170,68 @@ export class AdminService {
    */
   private getConversationsCacheKey(communityId: number): string {
     return `conversations_${communityId}`;
+  }
+
+  private getConversationsStartedCacheKey(communityId: number, startDate?: string, endDate?: string): string {
+    return `conversationsStarted_${communityId}_${startDate || 'all'}_${endDate || 'all'}`;
+  }
+
+  private parseParticipantIds(participants: unknown): number[] {
+    if (Array.isArray(participants)) {
+      return participants.map((p) => (typeof p === 'number' ? p : Number(p))).filter((n) => Number.isFinite(n));
+    }
+    if (typeof participants !== 'string') return [];
+    const matches = participants.match(/\d+/g);
+    if (!matches) return [];
+    return matches.map((s) => Number(s)).filter((n) => Number.isFinite(n));
+  }
+
+  private getConversationParticipantUserIds(convo: ConversationStarted): number[] {
+    if (Array.isArray(convo.participantUserIds) && convo.participantUserIds.length > 0) {
+      return convo.participantUserIds.map(Number).filter((n) => Number.isFinite(n));
+    }
+    if (Array.isArray(convo.participantUsers) && convo.participantUsers.length > 0) {
+      return convo.participantUsers
+        .map((p) => Number(p.userId))
+        .filter((n) => Number.isFinite(n));
+    }
+    // Fallback (legacy): attempt to parse numeric IDs out of the participants string.
+    return this.parseParticipantIds(convo.participants);
+  }
+
+  private isChannelPairingConversation(convo: ConversationStarted): boolean {
+    const raw = (convo as any)?.conversationType;
+    const t = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+    return (
+      t === 'channel_pairing' ||
+      t === 'channel-pairing' ||
+      t === 'channelpairing' ||
+      t === 'channelpairings' ||
+      t === 'channelpairinggroup'
+    );
+  }
+
+  private async getConversationsStartedCached(
+    communityId: number,
+    startDate?: string,
+    endDate?: string,
+    opts?: { forceRefresh?: boolean }
+  ): Promise<ConversationsStartedResponse | null> {
+    const cacheKey = this.getConversationsStartedCacheKey(communityId, startDate, endDate);
+    if (opts?.forceRefresh) {
+      this.conversationsStartedCache.delete(cacheKey);
+    } else {
+      const cached = this.conversationsStartedCache.get(cacheKey);
+      if (cached && this.isCacheValid(cached.timestamp)) {
+        devLog(`[AdminService] ✅ Using cached conversations-started for community ${communityId}`);
+        return cached.data;
+      }
+    }
+    const data = await this.getConversationsStarted(communityId, startDate, endDate);
+    if (data) {
+      this.conversationsStartedCache.set(cacheKey, { data, timestamp: Date.now() });
+    }
+    return data;
   }
 
   /**
@@ -188,6 +261,35 @@ export class AdminService {
         this.profilesCache.delete(key);
       }
     }
+    for (const [key, value] of this.magicIntrosByDateCache.entries()) {
+      if (!this.isCacheValid(value.timestamp)) {
+        this.magicIntrosByDateCache.delete(key);
+      }
+    }
+    for (const [key, value] of this.magicIntroPairingsCache.entries()) {
+      if (!this.isCacheValid(value.timestamp)) {
+        this.magicIntroPairingsCache.delete(key);
+      }
+    }
+    for (const [key, value] of this.conversationsStartedCache.entries()) {
+      if (!this.isCacheValid(value.timestamp)) {
+        this.conversationsStartedCache.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Public: clear all stats-related caches so the next load uses fresh data.
+   * Used when the admin hits the refresh button in the console.
+   */
+  clearStatsCaches(): void {
+    this.matchesCache.clear();
+    this.conversationsCache.clear();
+    this.profilesCache.clear();
+    this.magicIntrosByDateCache.clear();
+    this.magicIntroPairingsCache.clear();
+    this.conversationsStartedCache.clear();
+    this.pendingRequests.clear();
   }
 
   /**
@@ -221,14 +323,21 @@ export class AdminService {
       return true;
     }
 
+    if (this.managersCheckEndpointMissing) return false;
+
     try {
       const response = await apiService.get<{ isManager: boolean }>(
         `/communities/${communityId}/managers/${userId}/check`
       );
       return response?.isManager || false;
-    } catch (error) {
+    } catch (error: any) {
       if (community && community.leaderId === userId) {
         return true;
+      }
+      // Some deployments do not implement this endpoint; treat as "not a manager" without noise.
+      if (error.status === 404 || error.response?.status === 404) {
+        this.managersCheckEndpointMissing = true;
+        return false;
       }
       console.error('Failed to check manager status:', error);
       return false;
@@ -260,18 +369,12 @@ export class AdminService {
   }
 
   /**
-   * Check if user is a super admin
-   * Super admin IDs:
-   * Production: [4147, 3113, 4136, 14453]
-   * Non-production: [3434, 3296, 3422, 2920, 2583, 2935]
+   * Check if user is a super admin.
+   * Reads the `isSuperAdmin` flag set by the backend on the user object
+   * (from the `is_super_admin` DB column). No client-side ID lists.
    */
-  isSuperAdmin(userId: number): boolean {
-    const isProduction = environment.production;
-    const productionSuperAdmins = [4147, 3113, 4136, 14453];
-    const nonProductionSuperAdmins = [3434, 3296, 3422, 2920, 2583, 2935];
-    
-    const superAdminIds = isProduction ? productionSuperAdmins : nonProductionSuperAdmins;
-    return superAdminIds.includes(userId);
+  isSuperAdmin(user: { isSuperAdmin?: boolean } | null | undefined): boolean {
+    return !!user?.isSuperAdmin;
   }
 
   /**
@@ -289,6 +392,36 @@ export class AdminService {
       console.error('Failed to fetch all communities for super admin:', error);
       return [];
     }
+  }
+
+  /**
+   * Super admin: Engagement summary across communities (intros + Slack opens)
+   */
+  async getSuperAdminCommunityEngagementSummary(userId: number, days: number = 90): Promise<any[]> {
+    const safeDays = Math.max(1, Math.min(days, 365));
+    const response = await apiService.get<{ rows: any[] }>(
+      `/users/${userId}/super-admin/community-engagement`,
+      { days: safeDays } as any,
+    );
+    return response?.rows || [];
+  }
+
+  async getSuperAdminSelfIntroEmails(userId: number, communityId: number, days: number = 90): Promise<any[]> {
+    const safeDays = Math.max(1, Math.min(days, 365));
+    const response = await apiService.get<{ rows: any[] }>(
+      `/users/${userId}/super-admin/community-engagement/${communityId}/self-intros`,
+      { days: safeDays } as any,
+    );
+    return response?.rows || [];
+  }
+
+  async getSuperAdminSlackOpenEmails(userId: number, communityId: number, days: number = 90): Promise<any[]> {
+    const safeDays = Math.max(1, Math.min(days, 365));
+    const response = await apiService.get<{ rows: any[] }>(
+      `/users/${userId}/super-admin/community-engagement/${communityId}/slack-opens`,
+      { days: safeDays } as any,
+    );
+    return response?.rows || [];
   }
 
   /**
@@ -321,7 +454,7 @@ export class AdminService {
               const { userService } = await import('./user.service');
               usersMap = await userService.getUsersByIds(userIds);
             } catch (userError) {
-              console.warn('[AdminService] Failed to fetch user emails:', userError);
+              devWarn('[AdminService] Failed to fetch user emails:', userError);
               // Continue without emails if user service fails
             }
           }
@@ -436,27 +569,14 @@ export class AdminService {
   }
 
   /**
-   * Upload driver data CSV
+   * Upload reports-to data CSV.
+   * Reads the file as text and sends the raw CSV string as JSON.
+   * Backend: POST /communities/:id/upload-reporting-data { csvData }.
+   * (Do not use /communities/:id/data/reports-to — that path is not implemented on the API.)
    */
-  async uploadDriverData(communityId: number, file: File): Promise<void> {
+  async uploadReportsToData(communityId: number, csvData: string): Promise<void> {
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      await apiService.post(`/communities/${communityId}/data/drivers`, formData);
-    } catch (error) {
-      console.error('Failed to upload driver data:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Upload reports-to data CSV
-   */
-  async uploadReportsToData(communityId: number, file: File): Promise<void> {
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      await apiService.post(`/communities/${communityId}/data/reports-to`, formData);
+      await apiService.post(`/communities/${communityId}/upload-reporting-data`, { csvData });
     } catch (error) {
       console.error('Failed to upload reports-to data:', error);
       throw error;
@@ -464,13 +584,13 @@ export class AdminService {
   }
 
   /**
-   * Upload mapped pairings CSV
+   * Upload mapped pairings CSV.
+   * Sends raw CSV string + original file name as JSON — matches the Ionic client
+   * and backend contract (POST /upload-pairing-csv { csvData, fileName }).
    */
-  async uploadMappedPairings(communityId: number, file: File): Promise<void> {
+  async uploadMappedPairings(communityId: number, csvData: string, fileName: string): Promise<void> {
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      await apiService.post(`/communities/${communityId}/data/pairings`, formData);
+      await apiService.post(`/communities/${communityId}/upload-pairing-csv`, { csvData, fileName });
     } catch (error) {
       console.error('Failed to upload mapped pairings:', error);
       throw error;
@@ -579,7 +699,7 @@ export class AdminService {
           fieldId: response.fieldId
         };
       } else {
-        console.warn(`[AdminService] Unexpected response format for custom field ${customFieldId}:`, response);
+        devWarn(`[AdminService] Unexpected response format for custom field ${customFieldId}:`, response);
         return [];
       }
     } catch (error) {
@@ -629,7 +749,7 @@ export class AdminService {
         pagination = response.pagination;
       } else {
         // Unexpected format
-        console.warn(`[AdminService] Unexpected response format for ${attributeType}:${attributeValue}`);
+        devWarn(`[AdminService] Unexpected response format for ${attributeType}:${attributeValue}`);
         data = [];
       }
       
@@ -658,7 +778,7 @@ export class AdminService {
             const pageData = Array.isArray(pageResponse) ? pageResponse : (pageResponse?.data || []);
             allUsers.push(...pageData);
           } catch (error) {
-            console.warn(`[AdminService] Failed to load page ${page} for ${attributeType}:${attributeValue}:`, error);
+            devWarn(`[AdminService] Failed to load page ${page} for ${attributeType}:${attributeValue}:`, error);
             // Continue loading other pages even if one fails
           }
         }
@@ -704,7 +824,7 @@ export class AdminService {
       
       // For 400 errors, it might be an unsupported type - try fallback
       if (status === 400) {
-        console.warn(`[AdminService] 400 Bad Request for ${attributeType}:${attributeValue}, attempting fallback`);
+        devWarn(`[AdminService] 400 Bad Request for ${attributeType}:${attributeValue}, attempting fallback`);
         return this.getUsersByAttributeFallback(communityId, attributeType, attributeValue, onlyActive);
       }
       
@@ -716,7 +836,7 @@ export class AdminService {
       }
       
       // For other errors, still try fallback but log the error
-      console.warn(`[AdminService] Error ${status} for ${attributeType}:${attributeValue}, attempting fallback`);
+      devWarn(`[AdminService] Error ${status} for ${attributeType}:${attributeValue}, attempting fallback`);
       return this.getUsersByAttributeFallback(communityId, attributeType, attributeValue, onlyActive);
     }
   }
@@ -1119,7 +1239,7 @@ export class AdminService {
                 }));
               } else {
                 // If verification filtered everyone out, return unverified (better than empty)
-                console.warn(`[AdminService] ⚠️ Verification filtered all users, returning unverified list`);
+                devWarn(`[AdminService] ⚠️ Verification filtered all users, returning unverified list`);
                 return recovered.map((profile: any) => ({
                   id: profile.userId || profile.id,
                   fname: profile.fname,
@@ -1134,11 +1254,11 @@ export class AdminService {
               }
             }
           } else {
-            console.warn(`[AdminService] ⚠️ No user IDs found in unconsolidated data for ${attributeType}:${attributeValue} (matched ${matchedRows} rows but none had user IDs)`);
+            devWarn(`[AdminService] ⚠️ No user IDs found in unconsolidated data for ${attributeType}:${attributeValue} (matched ${matchedRows} rows but none had user IDs)`);
           }
         } catch (e) {
           // If this recovery path fails, continue to return the profile-filter result (empty)
-          console.warn(`[AdminService] Attribute fallback recovery via unconsolidated endpoint failed for ${attributeType}:${attributeValue}`, e);
+          devWarn(`[AdminService] Attribute fallback recovery via unconsolidated endpoint failed for ${attributeType}:${attributeValue}`, e);
         }
       }
 
@@ -1209,7 +1329,7 @@ export class AdminService {
           // Try next endpoint
           continue;
         } else {
-          console.warn(`[AdminService] Error fetching users for skill ${skillType}:${skillValue} from ${url}:`, error);
+          devWarn(`[AdminService] Error fetching users for skill ${skillType}:${skillValue} from ${url}:`, error);
         }
       }
     }
@@ -1416,7 +1536,7 @@ export class AdminService {
               devLog(`[AdminService] ✅ Found ${filtered.length} members with skill "${skillValue}"`);
               return filtered;
             } catch (memberError) {
-              console.warn(`[AdminService] Failed to fetch community members:`, memberError);
+              devWarn(`[AdminService] Failed to fetch community members:`, memberError);
             }
           }
         }
@@ -1625,7 +1745,7 @@ export class AdminService {
           // Try next endpoint
           continue;
         } else {
-          console.warn(`[AdminService] Error fetching users for business topic ${topicValue} from ${url}:`, error);
+          devWarn(`[AdminService] Error fetching users for business topic ${topicValue} from ${url}:`, error);
         }
       }
     }
@@ -1778,7 +1898,7 @@ export class AdminService {
             devLog(`[AdminService] Members endpoint not available or failed`);
           }
         } catch (e) {
-          console.warn(`[AdminService] Member query approach failed:`, e);
+          devWarn(`[AdminService] Member query approach failed:`, e);
         }
 
         // Third, try unconsolidated endpoint recovery (but this returns aggregated data, not user rows)
@@ -1807,7 +1927,7 @@ export class AdminService {
           // We need a backend endpoint that returns the actual join table data
           devLog(`[AdminService] ⚠️ Unconsolidated endpoint returns aggregated data without user IDs. Need backend endpoint fix.`);
         } catch (e) {
-          console.warn(`[AdminService] Business topic unconsolidated endpoint recovery failed:`, e);
+          devWarn(`[AdminService] Business topic unconsolidated endpoint recovery failed:`, e);
         }
 
         // Fourth: Since we can't get user IDs from aggregated data, we need to inform the user
@@ -1850,7 +1970,7 @@ export class AdminService {
         data = response.data;
         pagination = response.pagination;
       } else {
-        console.warn(`[AdminService] Unexpected response format for custom field ${customFieldId}:${fieldValue}`);
+        devWarn(`[AdminService] Unexpected response format for custom field ${customFieldId}:${fieldValue}`);
         data = [];
       }
       
@@ -1871,7 +1991,7 @@ export class AdminService {
             const pageData = Array.isArray(pageResponse) ? pageResponse : (pageResponse?.data || []);
             allUsers.push(...pageData);
           } catch (error) {
-            console.warn(`[AdminService] Failed to load page ${page} for custom field ${customFieldId}:${fieldValue}:`, error);
+            devWarn(`[AdminService] Failed to load page ${page} for custom field ${customFieldId}:${fieldValue}:`, error);
           }
         }
         
@@ -1936,12 +2056,12 @@ export class AdminService {
     });
 
     if (suspiciousPatterns.length > 0) {
-      console.warn(
+      devWarn(
         `[AdminService] ⚠️ Potential issue: ${type} data appears to contain per-user responses instead of consolidated data.`,
         `Found ${suspiciousPatterns.length} items with suspicious patterns:`,
         suspiciousPatterns.slice(0, 3)
       );
-      console.warn(
+      devWarn(
         `[AdminService] Expected format: [{ name: "ChatGPT", value: 5 }] (cumulative count)`,
         `Found format: Items with pipe-separated or user-specific values`
       );
@@ -1949,7 +2069,7 @@ export class AdminService {
       // Check if values are reasonable (should be counts, not just 1s)
       const singleValueItems = data.filter(item => item.value === 1);
       if (singleValueItems.length === data.length && data.length > 1) {
-        console.warn(
+        devWarn(
           `[AdminService] ⚠️ Potential issue: All ${type} data items have value=1.`,
           `This might indicate per-user data instead of consolidated counts.`
         );
@@ -1986,48 +2106,16 @@ export class AdminService {
 
   /**
    * Get comprehensive engagement statistics
-   * Tries backend endpoint first, then calculates from existing data sources
+   * Calculates from existing data sources (profiles, events, matches, conversations).
+   * Note: getUserActionsStats is NOT called here — the caller (loadStats) handles it
+   * to avoid duplicate requests and enable full parallelism.
    */
   async getEngagementStats(communityId: number, startDate?: string, endDate?: string): Promise<UserStats | null> {
-    // Try backend endpoint with timeout to avoid long waits
-    const backendPromise = apiService.get<UserStats>(
-      `/communities/${communityId}/stats/engagement${startDate && endDate ? `?startDate=${startDate}&endDate=${endDate}` : ''}`
-    ).catch((error: any) => {
-      if (error?.status === 404 || error?.response?.status === 404) {
-        return null; // Endpoint doesn't exist
-      }
-      throw error;
-    });
-
-    // Calculate from existing data in parallel (don't wait for backend)
-    const calculatedPromise = this.calculateEngagementStatsFromData(communityId, startDate, endDate);
-
-    // Use whichever completes first, prefer backend if available
     try {
-      const [backendStats, calculatedStats] = await Promise.allSettled([
-        backendPromise,
-        calculatedPromise,
-      ]);
-      
-      if (backendStats.status === 'fulfilled' && backendStats.value) {
-        // Note: calculatedStats should still have run in parallel, so matches fetch should have happened
-        return backendStats.value;
-      }
-
-      if (calculatedStats.status === 'fulfilled' && calculatedStats.value) {
-        return calculatedStats.value;
-      }
-
-      return null;
+      return await this.calculateEngagementStatsFromData(communityId, startDate, endDate);
     } catch (error) {
-      console.error('[AdminService] Error getting engagement stats:', error);
-      // Fallback to calculated stats
-      try {
-        return await this.calculateEngagementStatsFromData(communityId, startDate, endDate);
-      } catch (calcError) {
-        console.error('[AdminService] Error calculating stats:', calcError);
-        return null;
-      }
+      console.error('[AdminService] Error calculating engagement stats:', error);
+      return null;
     }
   }
 
@@ -2114,7 +2202,7 @@ export class AdminService {
         devLog(`[AdminService] Profile completion: ${completedProfiles}/${profileList.length} (${stats.profileCompletionRate.toFixed(1)}%)`);
       } else {
         const errorReason = profiles.status === 'rejected' ? profiles.reason : 'unknown';
-        console.warn('[AdminService] Profiles fetch failed:', errorReason);
+        devWarn('[AdminService] Profiles fetch failed:', errorReason);
         if (profiles.status === 'rejected') {
           console.error('[AdminService] Profiles error details:', errorReason);
         }
@@ -2153,9 +2241,7 @@ export class AdminService {
                   }
                 } else {
                   excludedByDate++;
-                  if (index < 3) { // Log first 3 excluded events for debugging
-                    console.error(`[AdminService] 📅 Event "${event.name}" excluded: date ${eventDate.toISOString()} not in range ${start?.toISOString()} to ${end?.toISOString()}`);
-                  }
+                  // Too noisy for production – rely on devLog if we need to debug ranges
                 }
               } else {
                 noDateField++;
@@ -2224,9 +2310,7 @@ export class AdminService {
                   }
                 } else {
                   excludedByDate++;
-                  if (index < 3) {
-                    console.error(`[AdminService] 👥 Group "${group.name}" excluded: date ${groupDate.toISOString()} not in range ${start?.toISOString()} to ${end?.toISOString()}`);
-                  }
+                  // Too noisy for production – rely on devLog if we need to debug ranges
                 }
               } else {
                 noDateField++;
@@ -2257,14 +2341,14 @@ export class AdminService {
         // Use unique members count if available, otherwise use total memberships
         stats.groupsJoined = uniqueMembers.size > 0 ? uniqueMembers.size : totalMembers;
       } else if (groups.status === 'rejected') {
-        console.warn('[AdminService] Groups fetch failed:', groups.reason);
+        devWarn('[AdminService] Groups fetch failed:', groups.reason);
       }
 
       // Connections Made (Matches)
       if (matches.status === 'fulfilled') {
         const matchList = matches.value || [];
         if (matchList.length === 0) {
-          console.warn('[AdminService] No matches returned from endpoint');
+          devWarn('[AdminService] No matches returned from endpoint');
         }
         
         // Filter matches by community if needed
@@ -2304,7 +2388,7 @@ export class AdminService {
           if (backendResult && typeof backendResult.connectionsMade === 'number') {
             // If backend returns 0 but we have matches, it's likely incorrect - use client-side fallback
             if (backendResult.connectionsMade === 0 && communityMatches && communityMatches.length > 0) {
-              console.warn(`[AdminService] ⚠️ Backend returned 0 connections but we have ${communityMatches.length} matches - using client-side calculation`);
+              devWarn(`[AdminService] ⚠️ Backend returned 0 connections but we have ${communityMatches.length} matches - using client-side calculation`);
             } else {
               connectionsMade = backendResult.connectionsMade;
               useBackendResult = true;
@@ -2316,7 +2400,7 @@ export class AdminService {
           if (error?.status === 404 || error?.response?.status === 404) {
             devLog(`[AdminService] Connections count endpoint not found, using client-side calculation`);
           } else {
-            console.warn(`[AdminService] Failed to fetch connections count from backend, using client-side calculation:`, error);
+            devWarn(`[AdminService] Failed to fetch connections count from backend, using client-side calculation:`, error);
           }
         }
         
@@ -2460,7 +2544,7 @@ export class AdminService {
           const responseRate = await this.calculateMatchResponseRate(communityId, communityMatches, startDate, endDate);
           stats.matchResponseRate = responseRate;
         } catch (error) {
-          console.warn('[AdminService] Could not calculate match response rate:', error);
+          devWarn('[AdminService] Could not calculate match response rate:', error);
           stats.matchResponseRate = 0;
         }
       } else if (matches.status === 'rejected') {
@@ -2469,47 +2553,32 @@ export class AdminService {
         stats.connectionsMade = 0;
       }
 
-      // Messages Sent
-      try {
-        const messageStats = await this.getMessageStats(communityId, startDate, endDate);
-        if (messageStats) {
-          stats.totalMessagesSent = messageStats.totalMessagesSent;
-        }
-      } catch (error) {
-        console.error('[AdminService] Error calculating message stats:', error);
+      // Fetch messages, active users, and match engagement in parallel
+      const [messageResult, activeUserResult, matchEngagementResult] = await Promise.allSettled([
+        this.getMessageStats(communityId, startDate, endDate),
+        this.getActiveUserStats(communityId, startDate, endDate),
+        this.calculateMatchEngagementStats(communityId, startDate, endDate),
+      ]);
+
+      if (messageResult.status === 'fulfilled' && messageResult.value) {
+        stats.totalMessagesSent = messageResult.value.totalMessagesSent;
+      } else if (messageResult.status === 'rejected') {
+        console.error('[AdminService] Error calculating message stats:', messageResult.reason);
       }
 
-      // Daily/Weekly Active Users
-      try {
-        const activeUserStats = await this.getActiveUserStats(communityId, startDate, endDate);
-        if (activeUserStats) {
-          stats.dailyActiveUsers = activeUserStats.dailyActiveUsers;
-          stats.weeklyActiveUsers = activeUserStats.weeklyActiveUsers;
-        }
-      } catch (error) {
-        console.error('[AdminService] Error calculating active user stats:', error);
+      if (activeUserResult.status === 'fulfilled' && activeUserResult.value) {
+        stats.dailyActiveUsers = activeUserResult.value.dailyActiveUsers;
+        stats.weeklyActiveUsers = activeUserResult.value.weeklyActiveUsers;
+      } else if (activeUserResult.status === 'rejected') {
+        console.error('[AdminService] Error calculating active user stats:', activeUserResult.reason);
       }
 
-      // Also calculate match engagement stats (Trova Magic, Channel Pairing, Mentor/Mentee)
-      // This ensures channelPairingMatches, channelPairingEngagements, mentorMenteeMatches, etc. are set
-      try {
-        const matchEngagementStats = await this.calculateMatchEngagementStats(communityId, startDate, endDate);
-        if (matchEngagementStats) {
-          // Merge match engagement stats into the main stats object
-          Object.assign(stats, matchEngagementStats);
-        } else {
-          console.error('[AdminService] ⚠️⚠️⚠️ calculateMatchEngagementStats returned null/undefined - initializing to 0');
-          // Initialize to 0 so UI can still display the cards (even if empty)
-          stats.channelPairingMatches = stats.channelPairingMatches ?? 0;
-          stats.channelPairingEngagements = stats.channelPairingEngagements ?? 0;
-          stats.mentorMenteeMatches = stats.mentorMenteeMatches ?? 0;
-          stats.mentorMenteeUniquePairs = stats.mentorMenteeUniquePairs ?? 0;
-          stats.trovaMagicMatches = stats.trovaMagicMatches ?? 0;
-          stats.trovaMagicEngagements = stats.trovaMagicEngagements ?? 0;
+      if (matchEngagementResult.status === 'fulfilled' && matchEngagementResult.value) {
+        Object.assign(stats, matchEngagementResult.value);
+      } else {
+        if (matchEngagementResult.status === 'rejected') {
+          console.error('[AdminService] Could not calculate match engagement stats:', matchEngagementResult.reason);
         }
-      } catch (error) {
-        console.error('[AdminService] Could not calculate match engagement stats:', error);
-        // Initialize to 0 so UI can still display the cards (even if empty)
         stats.channelPairingMatches = stats.channelPairingMatches ?? 0;
         stats.channelPairingEngagements = stats.channelPairingEngagements ?? 0;
         stats.mentorMenteeMatches = stats.mentorMenteeMatches ?? 0;
@@ -2535,7 +2604,7 @@ export class AdminService {
       const { profileService } = await import('./profile.service');
       return await profileService.getProfilesForUserAndCommunity(communityId);
     } catch (error) {
-      console.warn('[AdminService] Could not fetch profiles:', error);
+      devWarn('[AdminService] Could not fetch profiles:', error);
       return [];
     }
   }
@@ -2553,7 +2622,7 @@ export class AdminService {
       }
       return [];
     } catch (error) {
-      console.warn('[AdminService] Could not fetch events:', error);
+      devWarn('[AdminService] Could not fetch events:', error);
       return [];
     }
   }
@@ -2571,7 +2640,7 @@ export class AdminService {
       }
       return [];
     } catch (error) {
-      console.warn('[AdminService] Could not fetch groups:', error);
+      devWarn('[AdminService] Could not fetch groups:', error);
       return [];
     }
   }
@@ -2589,17 +2658,22 @@ export class AdminService {
     communityId: number,
     startDate?: string,
     endDate?: string,
-    type?: string
+    type?: string,
+    opts?: { forceRefresh?: boolean }
   ): Promise<any[]> {
     // Clear expired cache entries periodically
     this.clearExpiredCache();
 
     // Check cache first
     const cacheKey = this.getMatchesCacheKey(communityId, startDate, endDate, type);
-    const cached = this.matchesCache.get(cacheKey);
-    if (cached && this.isCacheValid(cached.timestamp)) {
-      devLog(`[AdminService] ✅ Using cached matches for ${cacheKey} (${cached.data.length} matches)`);
-      return cached.data;
+    if (opts?.forceRefresh) {
+      this.matchesCache.delete(cacheKey);
+    } else {
+      const cached = this.matchesCache.get(cacheKey);
+      if (cached && this.isCacheValid(cached.timestamp)) {
+        devLog(`[AdminService] ✅ Using cached matches for ${cacheKey} (${cached.data.length} matches)`);
+        return cached.data;
+      }
     }
 
     // Check if there's already a pending request for this data
@@ -2656,6 +2730,7 @@ export class AdminService {
       { url: `/matches`, name: `/matches (middleware - user's session community)`, useHeader: true },
     ];
     
+    let stoppedDueTo401 = false;
     for (const endpoint of endpointsToTry) {
       try {
         devLog(`[AdminService] 📡 Trying GET ${endpoint.name}...`);
@@ -2668,11 +2743,12 @@ export class AdminService {
         devLog(`[AdminService] ✅ Fetched ${matches?.length || 0} matches from ${endpoint.name}`);
         
         if (matches && matches.length > 0) {
-          // Filter by communityId first if available
+          // Always filter by communityId — API may return cross-community matches
           let filteredMatches = matches;
-          if (matches[0].communityId !== undefined || matches[0].community_id !== undefined) {
+          const hasCommunityField = matches.some((m: any) => m.communityId !== undefined || m.community_id !== undefined);
+          if (hasCommunityField) {
             filteredMatches = filteredMatches.filter((match: any) => {
-              const matchCommunityId = match.communityId || match.community_id;
+              const matchCommunityId = Number(match.communityId || match.community_id);
               return matchCommunityId === communityId;
             });
             if (filteredMatches.length !== matches.length) {
@@ -2705,19 +2781,25 @@ export class AdminService {
         }
         return result;
       } catch (error: any) {
-        // 404 means endpoint doesn't exist, try next one
-        if (error.response?.status === 404) {
+        const status = error.response?.status;
+        if (status === 404) {
           devLog(`[AdminService] ⚠️ ${endpoint.name} returned 404, trying next endpoint...`);
           continue;
         }
-        // Other errors - log and try next
-        console.warn(`[AdminService] ⚠️ ${endpoint.name} failed:`, error.response?.status || error.message);
+        // 401: auth failed (e.g. Slack link); session-based fallback endpoints will also 401, so stop
+        if (status === 401) {
+          stoppedDueTo401 = true;
+          devLog(`[AdminService] ⚠️ ${endpoint.name} returned 401 (auth), skipping remaining endpoints`);
+          break;
+        }
+        devWarn(`[AdminService] ⚠️ ${endpoint.name} failed:`, status || error.message);
         continue;
       }
     }
-    
-    // If all endpoints failed or returned 0, return empty array
-    console.warn('[AdminService] ❌ All match endpoints failed or returned 0 matches');
+
+    if (!stoppedDueTo401) {
+      devWarn('[AdminService] ❌ All match endpoints failed or returned 0 matches');
+    }
     const emptyResult: any[] = [];
     if (cacheKey) {
       this.matchesCache.set(cacheKey, { data: emptyResult, timestamp: Date.now() });
@@ -2738,24 +2820,10 @@ export class AdminService {
     const queryParams = dateParams ? `?${dateParams}` : '';
     const queryParamsWithAmp = dateParams ? `&${dateParams}` : '';
     
-    // Try multiple endpoint patterns (expanded list based on common console patterns)
-    // Primary endpoint from other frontend: /communities/{communityId}/slack-user-stats
+    // This API only exposes /communities/{communityId}/slack-user-stats.
+    // Remove legacy/user-actions probes and rely solely on slack-user-stats.
     const endpoints = [
-      // Primary endpoint from other frontend (slack-user-stats)
       `/communities/${communityId}/slack-user-stats${queryParams}`,
-      // Standard community endpoints
-      `/communities/${communityId}/stats/user-actions${queryParams}`,
-      `/communities/${communityId}/user-actions${queryParams}`,
-      `/communities/${communityId}/stats/userActions${queryParams}`,
-      // Console endpoints (common pattern for admin/console)
-      `/console/user-actions?communityId=${communityId}${queryParamsWithAmp}`,
-      `/console/stats/user-actions?communityId=${communityId}${queryParamsWithAmp}`,
-      `/console/stats/userActions?communityId=${communityId}${queryParamsWithAmp}`,
-      `/console/communities/${communityId}/user-actions${queryParams}`,
-      `/console/communities/${communityId}/stats/user-actions${queryParams}`,
-      // Alternative patterns
-      `/stats/user-actions?communityId=${communityId}${queryParamsWithAmp}`,
-      `/api/console/user-actions?communityId=${communityId}${queryParamsWithAmp}`,
     ];
 
     for (const url of endpoints) {
@@ -2780,7 +2848,7 @@ export class AdminService {
             devLog(`[AdminService] ✅ User actions stats aggregated from slack-user-stats (using backend introsLedToConvos):`, aggregatedStats);
             return aggregatedStats;
           } else {
-            console.warn(`[AdminService] ⚠️ aggregateSlackUserStats returned null, continuing to next endpoint`);
+            devWarn(`[AdminService] ⚠️ aggregateSlackUserStats returned null, continuing to next endpoint`);
           }
         }
         
@@ -2817,7 +2885,7 @@ export class AdminService {
         if (status === 404) {
           // Silently continue for 404s
         } else {
-          console.warn(`[AdminService] Error fetching user actions from ${url}:`, {
+          devWarn(`[AdminService] Error fetching user actions from ${url}:`, {
             status,
             message: error?.message,
             response: error?.response?.data,
@@ -2827,9 +2895,13 @@ export class AdminService {
       }
     }
 
-    // If all endpoints fail, try to calculate from available data
-    const calculatedStats = await this.calculateUserActionsStats(communityId, startDate, endDate);
-    
+    // If all endpoints fail, try to calculate from available data.
+    // Skip events/user for Slack-only users (no Firebase) — that endpoint returns 401 for console.
+    let calculatedStats: Partial<UserStats> | null = null;
+    if (useFirebase().auth?.currentUser) {
+      calculatedStats = await this.calculateUserActionsStats(communityId, startDate, endDate);
+    }
+
     // Calculate introsLedToConvos from matches only if backend didn't provide it
     // Backend now provides accurate per-user introsLedToConvos, so prefer that
     if (calculatedStats) {
@@ -2875,7 +2947,7 @@ export class AdminService {
         // Sum engaged pairings from valid dates
         trovaMagicEngaged = validDates.reduce((sum, day) => sum + day.engagedPairings, 0);
       } catch (error) {
-        console.warn('[AdminService] Could not fetch Trova Magic engaged count:', error);
+        devWarn('[AdminService] Could not fetch Trova Magic engaged count:', error);
       }
       
       // 2. Channel Pairing: Count unique groups (same as displayed card)
@@ -2898,7 +2970,7 @@ export class AdminService {
           }
         }
       } catch (error) {
-        console.warn('[AdminService] Could not calculate Channel Pairing engaged count:', error);
+        devWarn('[AdminService] Could not calculate Channel Pairing engaged count:', error);
       }
       
       // 3. Mentor/Mentee: Count unique pairs (same logic as other types)
@@ -2943,7 +3015,7 @@ export class AdminService {
           }
         }
       } catch (error) {
-        console.warn('[AdminService] Could not calculate Mentor/Mentee engaged count:', error);
+        devWarn('[AdminService] Could not calculate Mentor/Mentee engaged count:', error);
       }
       
       const totalEngaged = trovaMagicEngaged + channelPairingEngaged + mentorMenteeEngaged;
@@ -2956,7 +3028,7 @@ export class AdminService {
       
       return totalEngaged;
     } catch (error) {
-      console.warn('[AdminService] Could not calculate Intros Led To Convos:', error);
+      devWarn('[AdminService] Could not calculate Intros Led To Convos:', error);
       return 0;
     }
   }
@@ -2982,7 +3054,7 @@ export class AdminService {
     totalUserCount?: number;
   }): Partial<UserStats> | null {
     if (!response.rows || !Array.isArray(response.rows)) {
-      console.warn('[AdminService] ⚠️ aggregateSlackUserStats: response.rows is missing or not an array, returning zeros');
+      devWarn('[AdminService] ⚠️ aggregateSlackUserStats: response.rows is missing or not an array, returning zeros');
       // Return zeros instead of null so UI can display the section
       return {
         openedTrova: 0,
@@ -3116,40 +3188,20 @@ export class AdminService {
       devLog(`[AdminService] 📊 Calculating user actions stats for community ${communityId}`);
       const stats: Partial<UserStats> = {};
 
-      // Try to get user events from various endpoints
+      // Try to get user events from the canonical endpoint
       const dateParams = startDate && endDate ? `startDate=${startDate}&endDate=${endDate}` : '';
       const queryParams = dateParams ? `?${dateParams}` : '';
-      const queryParamsWithAmp = dateParams ? `&${dateParams}` : '';
-      
-      const userEventsEndpoints = [
-        // Standard endpoints
-        `/communities/${communityId}/user-events${queryParams}`,
-        `/communities/${communityId}/events/user${queryParams}`,
-        `/user-events?communityId=${communityId}${queryParamsWithAmp}`,
-        // Console endpoints
-        `/console/user-events?communityId=${communityId}${queryParamsWithAmp}`,
-        `/console/communities/${communityId}/user-events${queryParams}`,
-        `/console/events/user?communityId=${communityId}${queryParamsWithAmp}`,
-        // Alternative patterns
-        `/api/user-events?communityId=${communityId}${queryParamsWithAmp}`,
-        `/events/user?communityId=${communityId}${queryParamsWithAmp}`,
-      ];
+      const url = `/communities/${communityId}/user-events${queryParams}`;
 
       let userEvents: any[] = [];
-      for (const url of userEventsEndpoints) {
-        try {
-          const events = await apiService.get<any[]>(url);
-          if (events && Array.isArray(events)) {
-            userEvents = events;
-            devLog(`[AdminService] ✅ Found ${userEvents.length} user events from ${url}`);
-            break;
-          }
-        } catch (error: any) {
-          // Continue to next endpoint
-          if (error?.status !== 404 && error?.response?.status !== 404) {
-            console.warn(`[AdminService] Error fetching user events from ${url}:`, error);
-          }
+      try {
+        const events = await apiService.get<any[]>(url);
+        if (events && Array.isArray(events)) {
+          userEvents = events;
+          devLog(`[AdminService] ✅ Found ${userEvents.length} user events from ${url}`);
         }
+      } catch (error: any) {
+        devLog(`[AdminService] No user events found, returning zeros`);
       }
 
       // Calculate stats from user events
@@ -3213,7 +3265,7 @@ export class AdminService {
         stats.spotlightsCreated = 0;
         stats.recWallsGiven = 0;
         stats.recWallsReceived = 0;
-        console.warn('[AdminService] No user events found, returning zeros');
+        devWarn('[AdminService] No user events found, returning zeros');
       }
 
       return stats;
@@ -3291,7 +3343,7 @@ export class AdminService {
             }
           }
         } catch (error) {
-          console.warn(`[AdminService] Error fetching ${matchType} matches for unique introductions:`, error);
+          devWarn(`[AdminService] Error fetching ${matchType} matches for unique introductions:`, error);
         }
       }
       
@@ -3408,85 +3460,63 @@ export class AdminService {
   }
 
   /**
+   * Lightweight profile completion via aggregate backend query.
+   * Returns completed/total counts without fetching full profile data.
+   */
+  async getProfileCompletionStats(communityId: number): Promise<{ completed: number; total: number } | null> {
+    try {
+      const url = `/communities/${communityId}/stats/profile-completion`;
+      devLog(`[AdminService] Fetching profile completion stats: ${url}`);
+      const result = await apiService.get<{ completed: number; total: number }>(url);
+      devLog(`[AdminService] Profile completion: ${result.completed}/${result.total}`);
+      return result;
+    } catch (error) {
+      devWarn('[AdminService] Profile completion endpoint failed, will fall back to client-side:', error);
+      return null;
+    }
+  }
+
+  /**
    * Get Skills stats
-   * Tries backend endpoint first, then calculates from skills data
+   * Tries the dedicated backend endpoint first, then falls back to client-side calculation.
    */
   async getSkillsStats(communityId: number): Promise<Partial<UserStats> | null> {
-    // Try multiple endpoint patterns
-    const endpoints = [
-      // Standard endpoints
-      `/communities/${communityId}/stats/skills`,
-      `/communities/${communityId}/skills/stats`,
-      // Console endpoints
-      `/console/stats/skills?communityId=${communityId}`,
-      `/console/skills/stats?communityId=${communityId}`,
-      `/console/communities/${communityId}/stats/skills`,
-      // Alternative patterns
-      `/stats/skills?communityId=${communityId}`,
-      `/api/console/stats/skills?communityId=${communityId}`,
-    ];
+    // Try the dedicated backend endpoint first
+    try {
+      const url = `/communities/${communityId}/stats/skills`;
+      devLog(`[AdminService] Fetching skills stats: ${url}`);
+      const stats = await apiService.get<Partial<UserStats>>(url);
+      if (stats && Object.keys(stats).length > 0) {
+        devLog(`[AdminService] Skills stats fetched from backend`, stats);
 
-    for (const url of endpoints) {
-      try {
-        devLog(`[AdminService] 🎓 Trying skills stats endpoint: ${url}`);
-        const stats = await apiService.get<Partial<UserStats>>(url);
-        if (stats && Object.keys(stats).length > 0) {
-          // Check if stats actually have meaningful values
-          const hasNonZeroValues = Object.values(stats).some((val: any) => 
-            typeof val === 'number' && val > 0
-          );
-          if (hasNonZeroValues || Object.keys(stats).length > 0) {
-            devLog(`[AdminService] ✅ Skills stats fetched from: ${url}`, stats);
-            
-            // If mentor/mentee stats are missing, try to fetch them separately
-            if (stats.usersCanMentor === undefined || stats.usersWantMentor === undefined) {
-              const mentorStats = await this.getMentorMenteeStats(communityId);
-              if (mentorStats) {
-                // Always set values if returned (including 0, which is a valid count)
-                if (mentorStats.usersCanMentor !== undefined) {
-                  stats.usersCanMentor = mentorStats.usersCanMentor;
-                }
-                if (mentorStats.usersWantMentor !== undefined) {
-                  stats.usersWantMentor = mentorStats.usersWantMentor;
-                }
-              }
-            }
-            
-            return stats;
-          } else {
-            devLog(`[AdminService] ⚠️ Endpoint ${url} returned empty stats, trying next...`);
+        if (stats.usersCanMentor === undefined || stats.usersWantMentor === undefined) {
+          const mentorStats = await this.getMentorMenteeStats(communityId);
+          if (mentorStats) {
+            if (mentorStats.usersCanMentor !== undefined) stats.usersCanMentor = mentorStats.usersCanMentor;
+            if (mentorStats.usersWantMentor !== undefined) stats.usersWantMentor = mentorStats.usersWantMentor;
           }
         }
-      } catch (error: any) {
-        const status = error?.status || error?.response?.status;
-        if (status === 404) {
-          // Silently continue for 404s
-        } else {
-          console.warn(`[AdminService] Error fetching skills from ${url}:`, {
-            status,
-            message: error?.message,
-            response: error?.response?.data,
-          });
-        }
+
+        return stats;
+      }
+    } catch (error: any) {
+      const status = error?.status || error?.response?.status;
+      if (status !== 404) {
+        devWarn(`[AdminService] Error fetching skills stats:`, { status, message: error?.message });
       }
     }
 
-    // Calculate from available data
-    devLog('[AdminService] All skills endpoints failed, trying client-side calculation');
-    const calculatedStats = await this.calculateSkillsStats(communityId);
-    
-    // Always try to get mentor/mentee stats from backend
-    const mentorStats = await this.getMentorMenteeStats(communityId);
+    // Backend endpoint unavailable; calculate from available data
+    const [calculatedStats, mentorStats] = await Promise.all([
+      this.calculateSkillsStats(communityId),
+      this.getMentorMenteeStats(communityId),
+    ]);
+
     if (mentorStats && calculatedStats) {
-      // Always set values if returned (including 0, which is a valid count)
-      if (mentorStats.usersCanMentor !== undefined) {
-        calculatedStats.usersCanMentor = mentorStats.usersCanMentor;
-      }
-      if (mentorStats.usersWantMentor !== undefined) {
-        calculatedStats.usersWantMentor = mentorStats.usersWantMentor;
-      }
+      if (mentorStats.usersCanMentor !== undefined) calculatedStats.usersCanMentor = mentorStats.usersCanMentor;
+      if (mentorStats.usersWantMentor !== undefined) calculatedStats.usersWantMentor = mentorStats.usersWantMentor;
     }
-    
+
     return calculatedStats;
   }
 
@@ -3517,17 +3547,89 @@ export class AdminService {
         };
       }
       
-      console.warn(`[AdminService] Weekly introductions stats endpoint returned invalid response for community ${communityId}`);
+      devWarn(`[AdminService] Weekly introductions stats endpoint returned invalid response for community ${communityId}`);
       return null;
     } catch (error: any) {
       const status = error?.status || error?.response?.status;
       if (status === 404) {
         devLog(`[AdminService] Weekly introductions stats endpoint not found for community ${communityId} (404)`);
       } else if (status === 500) {
-        console.warn(`[AdminService] Weekly introductions stats endpoint returned 500 error for community ${communityId}:`, error?.response?.data || error?.message);
+        devWarn(`[AdminService] Weekly introductions stats endpoint returned 500 error for community ${communityId}:`, error?.response?.data || error?.message);
       } else {
-        console.warn(`[AdminService] Failed to fetch weekly introductions stats for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
+        devWarn(`[AdminService] Failed to fetch weekly introductions stats for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
       }
+      return null;
+    }
+  }
+
+  /**
+   * Introductions created: distinct Trova-created channels from user_match.
+   * Returns total count, breakdown by type, and participant details for drill-down.
+   */
+  async getIntroductionsCreatedStats(
+    communityId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<{
+    total: number;
+    breakdown: Record<string, number>;
+    groups: Array<{
+      channelId: string;
+      source: string;
+      createdAt: string;
+      participants: Array<{ userId: number; name: string; email: string }>;
+    }>;
+  } | null> {
+    try {
+      let url = `/communities/${communityId}/stats/introductions-created`;
+      const params = new URLSearchParams();
+      if (startDate) params.set('startDate', startDate);
+      if (endDate) params.set('endDate', endDate);
+      const qs = params.toString();
+      if (qs) url += `?${qs}`;
+
+      devLog(`[AdminService] Fetching introductions created: ${url}`);
+      const result = await apiService.get<{
+        total: number;
+        breakdown: Record<string, number>;
+        groups: Array<{
+          channelId: string;
+          source: string;
+          createdAt: string;
+          participants: Array<{ userId: number; name: string; email: string }>;
+        }>;
+      }>(url);
+      devLog(`[AdminService] Introductions created: ${result.total}`, result.breakdown);
+      return result;
+    } catch (error) {
+      devWarn('[AdminService] Introductions created endpoint failed:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Messages exchanged in Trova-created channels only (user_match-based).
+   * Date filtering applies to messages, not channel creation.
+   */
+  async getMessagesExchangedStats(
+    communityId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<{ total: number; breakdown: Record<string, number> } | null> {
+    try {
+      let url = `/communities/${communityId}/stats/messages-exchanged`;
+      const params = new URLSearchParams();
+      if (startDate) params.set('startDate', startDate);
+      if (endDate) params.set('endDate', endDate);
+      const qs = params.toString();
+      if (qs) url += `?${qs}`;
+
+      devLog(`[AdminService] Fetching messages exchanged: ${url}`);
+      const result = await apiService.get<{ total: number; breakdown: Record<string, number> }>(url);
+      devLog(`[AdminService] Messages exchanged: ${result.total}`, result.breakdown);
+      return result;
+    } catch (error) {
+      devWarn('[AdminService] Messages exchanged endpoint failed, falling back:', error);
       return null;
     }
   }
@@ -3572,9 +3674,9 @@ export class AdminService {
       if (status === 404) {
         devLog(`[AdminService] Conversations started endpoint not found for community ${communityId} (404)`);
       } else if (status === 500) {
-        console.warn(`[AdminService] Conversations started endpoint returned 500 error for community ${communityId}:`, error?.response?.data || error?.message);
+        devWarn(`[AdminService] Conversations started endpoint returned 500 error for community ${communityId}:`, error?.response?.data || error?.message);
       } else {
-        console.warn(`[AdminService] Failed to fetch conversations started for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
+        devWarn(`[AdminService] Failed to fetch conversations started for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
       }
       return null;
     }
@@ -3600,7 +3702,7 @@ export class AdminService {
   ): Promise<WeeklyIntroductionsUserRow[] | null> {
     try {
       if (!startDate || !endDate) {
-        console.warn('[AdminService] startDate and endDate are required for weekly introductions users');
+        devWarn('[AdminService] startDate and endDate are required for weekly introductions users');
         return null;
       }
 
@@ -3617,7 +3719,7 @@ export class AdminService {
       // Handle both array response and { rows: [...] } response format
       const rowsRaw = Array.isArray(response) ? response : response?.rows;
       if (!Array.isArray(rowsRaw)) {
-        console.warn(`[AdminService] Weekly introductions users endpoint returned unexpected format or no rows for community ${communityId}`);
+        devWarn(`[AdminService] Weekly introductions users endpoint returned unexpected format or no rows for community ${communityId}`);
         return [];
       }
 
@@ -3644,11 +3746,11 @@ export class AdminService {
     } catch (error: any) {
       const status = error?.status || error?.response?.status;
       if (status === 400) {
-        console.warn(`[AdminService] Weekly introductions users endpoint returned 400 (Bad Request) for community ${communityId}:`, error?.response?.data?.error || error?.message);
+        devWarn(`[AdminService] Weekly introductions users endpoint returned 400 (Bad Request) for community ${communityId}:`, error?.response?.data?.error || error?.message);
       } else if (status === 404) {
         devLog(`[AdminService] Weekly introductions users endpoint not found for community ${communityId}`);
       } else {
-        console.warn(`[AdminService] Failed to fetch weekly introductions users for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
+        devWarn(`[AdminService] Failed to fetch weekly introductions users for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
       }
       return null;
     }
@@ -3698,16 +3800,16 @@ export class AdminService {
         };
       }
       
-      console.warn(`[AdminService] Self-introduced stats endpoint returned invalid response for community ${communityId}`);
+      devWarn(`[AdminService] Self-introduced stats endpoint returned invalid response for community ${communityId}`);
       return null;
     } catch (error: any) {
       const status = error?.status || error?.response?.status;
       if (status === 404) {
         devLog(`[AdminService] Self-introduced stats endpoint not found for community ${communityId} (404)`);
       } else if (status === 500) {
-        console.warn(`[AdminService] Self-introduced stats endpoint returned 500 for community ${communityId}`);
+        devWarn(`[AdminService] Self-introduced stats endpoint returned 500 for community ${communityId}`);
       } else {
-        console.warn(`[AdminService] Failed to fetch self-introduced stats for community ${communityId}:`, error?.message || error);
+        devWarn(`[AdminService] Failed to fetch self-introduced stats for community ${communityId}:`, error?.message || error);
       }
       return null;
     }
@@ -3731,7 +3833,7 @@ export class AdminService {
   ): Promise<SelfIntroducedUserRow[] | null> {
     try {
       if (!startDate || !endDate) {
-        console.warn('[AdminService] startDate and endDate are required for self-introduced users');
+        devWarn('[AdminService] startDate and endDate are required for self-introduced users');
         return null;
       }
 
@@ -3753,7 +3855,7 @@ export class AdminService {
         : response?.rows ?? response?.data ?? response?.users;
       
       if (!Array.isArray(rowsRaw)) {
-        console.warn(`[AdminService] Self-introduced users endpoint returned unexpected format or no rows for community ${communityId}`);
+        devWarn(`[AdminService] Self-introduced users endpoint returned unexpected format or no rows for community ${communityId}`);
         return [];
       }
 
@@ -3782,11 +3884,11 @@ export class AdminService {
     } catch (error: any) {
       const status = error?.status || error?.response?.status;
       if (status === 400) {
-        console.warn(`[AdminService] Self-introduced users endpoint returned 400 (Bad Request) for community ${communityId}:`, error?.response?.data?.error || error?.message);
+        devWarn(`[AdminService] Self-introduced users endpoint returned 400 (Bad Request) for community ${communityId}:`, error?.response?.data?.error || error?.message);
       } else if (status === 404) {
         devLog(`[AdminService] Self-introduced users endpoint not found for community ${communityId}`);
       } else {
-        console.warn(`[AdminService] Failed to fetch self-introduced users for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
+        devWarn(`[AdminService] Failed to fetch self-introduced users for community ${communityId} (status: ${status}):`, error?.response?.data || error?.message || error);
       }
       return null;
     }
@@ -3815,62 +3917,28 @@ export class AdminService {
    * WHERE m.community_id = $1 AND m.is_active = TRUE AND uc.is_active_mentee = TRUE;
    */
   async getMentorMenteeStats(communityId: number): Promise<Partial<UserStats> | null> {
-    const endpoints = [
-      // Primary endpoint pattern (should match backend implementation)
-      `/communities/${communityId}/stats/mentor-mentee`,
-      `/communities/${communityId}/stats/mentors`,
-      `/communities/${communityId}/mentor-mentee/stats`,
-      // Console endpoints
-      `/console/stats/mentor-mentee?communityId=${communityId}`,
-      `/console/stats/mentors?communityId=${communityId}`,
-      `/console/communities/${communityId}/stats/mentor-mentee`,
-      `/console/communities/${communityId}/stats/mentors`,
-      // Alternative patterns
-      `/stats/mentor-mentee?communityId=${communityId}`,
-      `/api/console/stats/mentor-mentee?communityId=${communityId}`,
-    ];
+    const url = `/communities/${communityId}/stats/mentor-mentee`;
+    try {
+      devLog(`[AdminService] Fetching mentor/mentee stats: ${url}`);
+      const response = await apiService.get<any>(url);
 
-    for (const url of endpoints) {
-      try {
-        devLog(`[AdminService] 🎓 Trying mentor/mentee stats endpoint: ${url}`);
-        const response = await apiService.get<any>(url);
-        
-        // Handle different response formats
-        let mentorCount = 0;
-        let menteeCount = 0;
-        
-        if (response && typeof response === 'object') {
-          // Try various field name patterns
-          mentorCount = response.usersCanMentor ?? response.canMentor ?? response.mentorCount ?? response.mentors ?? 0;
-          menteeCount = response.usersWantMentor ?? response.wantMentor ?? response.menteeCount ?? response.mentees ?? 0;
-          
-          // If response has direct counts (including 0, which is a valid count)
-          if (typeof mentorCount === 'number' || typeof menteeCount === 'number') {
-            devLog(`[AdminService] ✅ Mentor/mentee stats fetched from: ${url}`, {
-              usersCanMentor: mentorCount,
-              usersWantMentor: menteeCount,
-            });
-            return {
-              usersCanMentor: mentorCount,
-              usersWantMentor: menteeCount,
-            };
-          }
+      if (response && typeof response === 'object') {
+        const mentorCount = response.usersCanMentor ?? response.canMentor ?? 0;
+        const menteeCount = response.usersWantMentor ?? response.wantMentor ?? 0;
+
+        if (typeof mentorCount === 'number' || typeof menteeCount === 'number') {
+          devLog(`[AdminService] Mentor/mentee stats fetched`, { usersCanMentor: mentorCount, usersWantMentor: menteeCount });
+          return { usersCanMentor: mentorCount, usersWantMentor: menteeCount };
         }
-      } catch (error: any) {
-        const status = error?.status || error?.response?.status;
-        if (status === 404) {
-          // Silently continue for 404s
-        } else {
-          console.warn(`[AdminService] Error fetching mentor/mentee stats from ${url}:`, {
-            status,
-            message: error?.message,
-          });
-        }
+      }
+    } catch (error: any) {
+      const status = error?.status || error?.response?.status;
+      if (status !== 404) {
+        devWarn(`[AdminService] Error fetching mentor/mentee stats:`, { status, message: error?.message });
       }
     }
 
-    // Fallback: calculate from profiles
-    devLog(`[AdminService] ⚠️ All mentor/mentee stats endpoints failed, trying profile fallback`);
+    devLog(`[AdminService] Mentor/mentee backend endpoint unavailable, trying profile fallback`);
     return this.getMentorMenteeStatsFallback(communityId);
   }
 
@@ -4101,7 +4169,7 @@ export class AdminService {
         if (status === 404) {
           // Silently continue for 404s
         } else {
-          console.warn(`[AdminService] Error fetching mentor/mentee users from ${url}:`, {
+          devWarn(`[AdminService] Error fetching mentor/mentee users from ${url}:`, {
             status,
             message: error?.message,
           });
@@ -4531,7 +4599,7 @@ export class AdminService {
             // Note: usersCanMentor and usersWantMentor come from backend endpoint, not profiles
           });
         } catch (profileError) {
-          console.warn('[AdminService] Could not get profile data for skills calculation:', profileError);
+          devWarn('[AdminService] Could not get profile data for skills calculation:', profileError);
           // Fallback: estimate from skills data
           // If we have skills with values > 0, we know at least some users have skills
           const skillsWithUsers = allSkills.filter((s: AttributeModel) => s.value && s.value > 0);
@@ -4543,7 +4611,7 @@ export class AdminService {
 
         devLog(`[AdminService] 🎓 Skills stats calculated:`, stats);
       } catch (error) {
-        console.warn('[AdminService] Could not calculate skills stats:', error);
+        devWarn('[AdminService] Could not calculate skills stats:', error);
       }
 
       return stats;
@@ -4578,7 +4646,7 @@ export class AdminService {
         // Calculate from available data
         return this.calculateMatchEngagementStats(communityId, startDate, endDate);
       }
-      console.warn('[AdminService] Error fetching match engagement stats:', error);
+      devWarn('[AdminService] Error fetching match engagement stats:', error);
       return null;
     }
   }
@@ -4603,29 +4671,27 @@ export class AdminService {
         matchEngagementRate: 0,
       };
 
-      // Use daily breakdown for both total and engaged, excluding dates with >1000 pairings (data issues)
-      // This ensures consistency and accuracy - total should be sum of all valid daily pairings
+      // Trova Magic: prefer backend API for engaged count (works for Slack-only; avoids Firestore)
       let trovaMagicTotal = 0;
       let trovaMagicEngaged = 0;
       let trovaMagicSessions = 0;
       try {
+        const apiEngaged = await this.getTrovaMagicEngagedFromApi(communityId, startDate, endDate);
+        if (apiEngaged !== null) {
+          trovaMagicEngaged = apiEngaged;
+          devLog(`[AdminService] 🔗 Trova Magic engaged from API: ${trovaMagicEngaged}`);
+        }
         const magicIntrosByDate = await this.getMagicIntrosByDate(communityId, startDate, endDate);
-        // Filter out dates with >1000 pairings (data issues like June 24, 2025 with 17,005)
         const validDates = magicIntrosByDate.filter(day => day.totalPairings <= 1000);
-        
-        // Sum total pairings from valid dates (this matches what user sees in the list: 2+2+5+2+4+5+...)
         trovaMagicTotal = validDates.reduce((sum, day) => sum + day.totalPairings, 0);
-        
-        // Sum engaged pairings from valid dates
-        trovaMagicEngaged = validDates.reduce((sum, day) => sum + day.engagedPairings, 0);
-        
-        // Get total sessions (match records) by fetching all matches
+        if (apiEngaged === null) {
+          trovaMagicEngaged = validDates.reduce((sum, day) => sum + day.engagedPairings, 0);
+        }
         const trovaMagicMatchRecords = await this.getMatchesForCommunity(communityId, startDate, endDate, 'trova_magic');
         trovaMagicSessions = trovaMagicMatchRecords?.length || 0;
-        
-        devLog(`[AdminService] 🔗 Trova Magic: ${trovaMagicSessions} sessions → ${trovaMagicTotal} unique pairs, ${trovaMagicEngaged} engaged (${validDates.length} valid dates, ${magicIntrosByDate.length - validDates.length} dates excluded)`);
+        devLog(`[AdminService] 🔗 Trova Magic: ${trovaMagicSessions} sessions → ${trovaMagicTotal} unique pairs, ${trovaMagicEngaged} engaged`);
       } catch (error) {
-        console.warn('[AdminService] Could not fetch Trova Magic from daily breakdown:', error);
+        devWarn('[AdminService] Could not fetch Trova Magic from daily breakdown:', error);
       }
       
       stats.trovaMagicMatches = trovaMagicTotal;
@@ -4659,20 +4725,18 @@ export class AdminService {
 
       stats.channelPairingMatches = channelPairingGroups.size;
       stats.channelPairingSessions = channelPairingMatches?.length || 0;
-      
-      // Calculate engagement for Channel Pairing matches
-      // A match is "engaged" if any users in that match group have a conversation
+
+      // Channel Pairing engaged: compute from the same by-date grouping used by the drill-down UI.
+      // This avoids mismatches where the card shows engaged groups that cannot be found in the modal.
       let channelPairingEngaged = 0;
-      if (channelPairingGroups.size > 0) {
-        try {
-          // Check if any users in each group have conversations
-          channelPairingEngaged = await this.countEngagedMatchesByGroup(communityId, channelPairingMatches, channelPairingGroups);
-        } catch (error) {
-          console.warn('[AdminService] Could not calculate channel pairing engagement:', error);
-        }
+      try {
+        const byDate = await this.getChannelPairingsByDate(communityId, startDate, endDate);
+        channelPairingEngaged = byDate.reduce((sum, r) => sum + (r.engagedPairings || 0), 0);
+        devLog(`[AdminService] 🔗 Channel Pairing engaged from by-date: ${channelPairingEngaged}`);
+      } catch (error) {
+        devWarn('[AdminService] Could not calculate channel pairing engagement:', error);
       }
-      
-      // Store channel pairing engagements for display
+
       stats.channelPairingEngagements = channelPairingEngaged;
       
       // Get Mentor/Mentee matches - count total matches and unique pairs
@@ -4722,9 +4786,45 @@ export class AdminService {
 
       return stats;
     } catch (error) {
-      console.warn('[AdminService] Error calculating match engagement stats:', error);
+      devWarn('[AdminService] Error calculating match engagement stats:', error);
       return null;
     }
+  }
+
+  /**
+   * Get Trova Magic engaged count from backend (no Firestore).
+   * Tries: 1) GET stats/trova-magic-engaged, 2) slack-user-stats aggregated introsAttributedToTrovaMagic.
+   */
+  async getTrovaMagicEngagedFromApi(
+    communityId: number,
+    startDate?: string,
+    endDate?: string
+  ): Promise<number | null> {
+    try {
+      let url = `/communities/${communityId}/stats/trova-magic-engaged`;
+      const params = new URLSearchParams();
+      if (startDate) params.set('startDate', startDate);
+      if (endDate) params.set('endDate', endDate);
+      const qs = params.toString();
+      if (qs) url += `?${qs}`;
+      const response = await apiService.get<number | Record<string, unknown>>(url);
+      if (typeof response === 'number') return response;
+      if (response && typeof response === 'object') {
+        const n = (response as Record<string, unknown>).engaged ?? (response as Record<string, unknown>).count
+          ?? (response as Record<string, unknown>).engagedCount ?? (response as Record<string, unknown>).totalEngaged;
+        if (typeof n === 'number') return n;
+      }
+    } catch (error: any) {
+      if (error?.response?.status !== 404) devLog('[AdminService] trova-magic-engaged request failed:', error?.response?.status);
+    }
+    // Fallback: slack-user-stats already works with Slack auth and aggregates introsAttributedToTrovaMagic
+    try {
+      const userActions = await this.getUserActionsStats(communityId, startDate, endDate);
+      if (userActions?.trovaMagicEngagements != null) return userActions.trovaMagicEngagements;
+    } catch (_) {
+      // ignore
+    }
+    return null;
   }
 
   /**
@@ -4735,21 +4835,8 @@ export class AdminService {
     startDate?: string,
     endDate?: string
   ): Promise<Partial<UserStats> | null> {
-    try {
-      let url = `/communities/${communityId}/stats/channel-pairing`;
-      if (startDate && endDate) {
-        url += `?startDate=${startDate}&endDate=${endDate}`;
-      }
-      const stats = await apiService.get<Partial<UserStats>>(url);
-      return stats;
-    } catch (error: any) {
-      if (error?.status === 404 || error?.response?.status === 404) {
-        // Calculate from available data
-        return this.calculateChannelPairingStats(communityId, startDate, endDate);
-      }
-      console.warn('[AdminService] Error fetching channel pairing stats:', error);
-      return null;
-    }
+    // This API does not provide /stats/channel-pairing; always calculate from matches.
+    return this.calculateChannelPairingStats(communityId, startDate, endDate);
   }
 
   /**
@@ -4827,7 +4914,7 @@ export class AdminService {
 
       return stats;
     } catch (error) {
-      console.warn('[AdminService] Error calculating channel pairing stats:', error);
+      devWarn('[AdminService] Error calculating channel pairing stats:', error);
       return null;
     }
   }
@@ -4836,21 +4923,8 @@ export class AdminService {
    * Get message statistics
    */
   async getMessageStats(communityId: number, startDate?: string, endDate?: string): Promise<{ totalMessagesSent: number } | null> {
-    try {
-      let url = `/communities/${communityId}/stats/messages`;
-      if (startDate && endDate) {
-        url += `?startDate=${startDate}&endDate=${endDate}`;
-      }
-      const stats = await apiService.get<{ totalMessagesSent: number }>(url);
-      return stats;
-    } catch (error: any) {
-      if (error?.status === 404 || error?.response?.status === 404) {
-        // Calculate from Firebase
-        return this.calculateMessageStats(communityId, startDate, endDate);
-      }
-      console.error('Failed to fetch message stats:', error);
-      return null;
-    }
+    // This API does not expose /stats/messages; calculate from Firebase/messages collection.
+    return this.calculateMessageStats(communityId, startDate, endDate);
   }
 
   /**
@@ -4910,7 +4984,7 @@ export class AdminService {
       const firestore = firebase.firestore;
       
       if (!firestore) {
-        console.warn('[AdminService] Firestore not initialized, cannot query messages');
+        devWarn('[AdminService] Firestore not initialized, cannot query messages');
         return { totalMessagesSent: 0 };
       }
 
@@ -4957,7 +5031,7 @@ export class AdminService {
             const convSnapshot = await getDocs(convQuery);
             return convSnapshot.size;
           } catch (subcollectionError) {
-            console.debug(`[AdminService] Could not query messages subcollection for ${conversationId}:`, subcollectionError);
+            devLog(`[AdminService] Could not query messages subcollection for ${conversationId}:`, subcollectionError);
             return 0;
           }
         });
@@ -4998,7 +5072,7 @@ export class AdminService {
       const firestore = firebase.firestore;
       
       if (!firestore) {
-        console.warn('[AdminService] Firestore not initialized, cannot query messages');
+        devWarn('[AdminService] Firestore not initialized, cannot query messages');
         return { totalMessagesSent: 0 };
       }
 
@@ -5063,7 +5137,7 @@ export class AdminService {
             }
             return null;
           } catch (error) {
-            console.debug(`[AdminService] Error checking conversation ${conversationId}:`, error);
+            devLog(`[AdminService] Error checking conversation ${conversationId}:`, error);
             return null;
           }
         });
@@ -5102,7 +5176,7 @@ export class AdminService {
             const convSnapshot = await getDocs(convQuery);
             return convSnapshot.size;
           } catch (subcollectionError) {
-            console.debug(`[AdminService] Could not query messages subcollection for ${conversationId}:`, subcollectionError);
+            devLog(`[AdminService] Could not query messages subcollection for ${conversationId}:`, subcollectionError);
             return 0;
           }
         });
@@ -5165,21 +5239,8 @@ export class AdminService {
    * Get active user statistics (DAU/WAU)
    */
   async getActiveUserStats(communityId: number, startDate?: string, endDate?: string): Promise<{ dailyActiveUsers: number; weeklyActiveUsers: number } | null> {
-    try {
-      let url = `/communities/${communityId}/stats/active-users`;
-      if (startDate && endDate) {
-        url += `?startDate=${startDate}&endDate=${endDate}`;
-      }
-      const stats = await apiService.get<{ dailyActiveUsers: number; weeklyActiveUsers: number }>(url);
-      return stats;
-    } catch (error: any) {
-      if (error?.status === 404 || error?.response?.status === 404) {
-        // Calculate from available data
-        return this.calculateActiveUserStats(communityId, startDate, endDate);
-      }
-      console.error('Failed to fetch active user stats:', error);
-      return null;
-    }
+    // This API does not provide /stats/active-users; calculate from messages/events/groups/matches.
+    return this.calculateActiveUserStats(communityId, startDate, endDate);
   }
 
   /**
@@ -5232,7 +5293,7 @@ export class AdminService {
         });
         devLog(`[AdminService] 👥 After matches: ${dailyActiveUsers.size} daily, ${weeklyActiveUsers.size} weekly`);
       } catch (error) {
-        console.warn('[AdminService] Could not get matches for active users:', error);
+        devWarn('[AdminService] Could not get matches for active users:', error);
       }
 
       // 2. Get users from events
@@ -5270,7 +5331,7 @@ export class AdminService {
         });
         devLog(`[AdminService] 👥 After events: ${dailyActiveUsers.size} daily, ${weeklyActiveUsers.size} weekly`);
       } catch (error) {
-        console.warn('[AdminService] Could not get events for active users:', error);
+        devWarn('[AdminService] Could not get events for active users:', error);
       }
 
       // 3. Get users from groups
@@ -5296,16 +5357,17 @@ export class AdminService {
         });
         devLog(`[AdminService] 👥 After groups: ${dailyActiveUsers.size} daily, ${weeklyActiveUsers.size} weekly`);
       } catch (error) {
-        console.warn('[AdminService] Could not get groups for active users:', error);
+        devWarn('[AdminService] Could not get groups for active users:', error);
       }
 
       // 4. Get users from messages (Firebase) - use conversation updatedAt for activity
-      // Use cached conversation IDs to avoid redundant queries
+      // Skip when no Firebase user (e.g. Slack-only) to avoid Firestore permission errors
       try {
         const firebase = useFirebase();
+        const hasFirebaseUser = !!firebase.auth?.currentUser;
         const firestore = firebase.firestore;
-        
-        if (firestore) {
+
+        if (firestore && hasFirebaseUser) {
           const conversationIds = await this.getConversationsForCommunity(communityId);
           devLog(`[AdminService] 👥 Found ${conversationIds.size} conversations for active user calculation`);
           
@@ -5338,7 +5400,7 @@ export class AdminService {
                   }
                 }
               } catch (error) {
-                console.debug(`[AdminService] Error fetching conversation ${conversationId}:`, error);
+                devLog(`[AdminService] Error fetching conversation ${conversationId}:`, error);
               }
             });
             
@@ -5346,8 +5408,13 @@ export class AdminService {
           }
         }
         devLog(`[AdminService] 👥 After messages: ${dailyActiveUsers.size} daily, ${weeklyActiveUsers.size} weekly`);
-      } catch (error) {
-        console.warn('[AdminService] Could not get messages for active users:', error);
+      } catch (error: any) {
+        const isPermissionError = error?.code === 'permission-denied' || error?.message?.includes('insufficient permissions');
+        if (isPermissionError) {
+          devLog('[AdminService] Skipping message-based active users (Firestore not available for this session)');
+        } else {
+          devWarn('[AdminService] Could not get messages for active users:', error);
+        }
       }
 
       const stats = {
@@ -5360,23 +5427,6 @@ export class AdminService {
     } catch (error) {
       console.error('[AdminService] Error calculating active user stats:', error);
       return { dailyActiveUsers: 0, weeklyActiveUsers: 0 };
-    }
-  }
-
-  /**
-   * Get profile completion statistics
-   */
-  async getProfileCompletionStats(communityId: number): Promise<{ profileCompletionRate: number } | null> {
-    try {
-      const stats = await apiService.get<{ profileCompletionRate: number }>(`/communities/${communityId}/stats/profile-completion`);
-      return stats;
-    } catch (error: any) {
-      if (error?.status === 404 || error?.response?.status === 404) {
-        devLog(`[AdminService] Profile completion stats endpoint not found for community ${communityId}`);
-        return null;
-      }
-      console.error('Failed to fetch profile completion stats:', error);
-      return null;
     }
   }
 
@@ -5447,20 +5497,23 @@ export class AdminService {
   }
 
   /**
-   * Get cached conversation pairs for a community
+   * Get cached conversation pairs for a community.
+   * Returns empty set when no Firebase user (Slack-only) to avoid Firestore permission errors.
    */
   private async getConversationPairs(communityId: number): Promise<Set<string>> {
     const cacheKey = `conversationPairs_${communityId}`;
     const cached = this.conversationsCache.get(cacheKey);
-    
     if (cached && this.isCacheValid(cached.timestamp, this.FIREBASE_CACHE_TTL)) {
       devLog(`[AdminService] ✅ Using cached conversation pairs for community ${communityId}`);
       return cached.data as Set<string>;
     }
 
     const firebase = useFirebase();
+    if (!firebase.auth?.currentUser) {
+      devLog(`[AdminService] No Firebase user (e.g. Slack-only); skipping Firestore conversation pairs for community ${communityId}`);
+      return new Set<string>();
+    }
     const firestore = firebase.firestore;
-    
     if (!firestore) {
       return new Set<string>();
     }
@@ -5497,7 +5550,7 @@ export class AdminService {
             }
           }
         } catch (error) {
-          console.debug(`[AdminService] Error fetching conversation ${conversationId}:`, error);
+          devLog(`[AdminService] Error fetching conversation ${conversationId}:`, error);
         }
       });
       
@@ -5538,26 +5591,29 @@ export class AdminService {
 
       return engagedCount;
     } catch (error) {
-      console.warn('[AdminService] Error counting engaged matches:', error);
+      devWarn('[AdminService] Error counting engaged matches:', error);
       return 0;
     }
   }
 
   /**
    * Count engaged matches by group_id (for multi-user matches)
-   * A match group is "engaged" if any users in that group have a conversation
+   * A match group is "engaged" if any users in that group have a conversation.
+   * Returns 0 when no Firebase user (Slack-only) to avoid Firestore permission errors.
    */
   private async countEngagedMatchesByGroup(
-    communityId: number, 
-    allMatches: any[], 
+    communityId: number,
+    allMatches: any[],
     uniqueGroups: Set<number>
   ): Promise<number> {
     try {
       if (!allMatches || allMatches.length === 0 || uniqueGroups.size === 0) {
         return 0;
       }
-
-      // Get cached conversation pairs
+      if (!useFirebase().auth?.currentUser) {
+        devLog(`[AdminService] No Firebase user; skipping Firestore for countEngagedMatchesByGroup (community ${communityId})`);
+        return 0;
+      }
       const conversationPairs = await this.getConversationPairs(communityId);
 
       // Group matches by group_id and collect all user pairs in each group
@@ -5595,7 +5651,7 @@ export class AdminService {
 
       return engagedGroups;
     } catch (error) {
-      console.warn('[AdminService] Error counting engaged matches by group:', error);
+      devWarn('[AdminService] Error counting engaged matches by group:', error);
       return 0;
     }
   }
@@ -5616,7 +5672,7 @@ export class AdminService {
       const firestore = firebase.firestore;
       
       if (!firestore) {
-        console.warn('[AdminService] Firestore not initialized, cannot query Trova chats');
+        devWarn('[AdminService] Firestore not initialized, cannot query Trova chats');
         return 0;
       }
 
@@ -5711,12 +5767,12 @@ export class AdminService {
                 }
               }
             } catch (subcollectionError) {
-              console.debug(`[AdminService] Could not query subcollection for ${conversationId}:`, subcollectionError);
+              devLog(`[AdminService] Could not query subcollection for ${conversationId}:`, subcollectionError);
             }
             
             return false;
           } catch (error) {
-            console.debug(`[AdminService] Error checking conversation ${conversationId}:`, error);
+            devLog(`[AdminService] Error checking conversation ${conversationId}:`, error);
             return false;
           }
         });
@@ -5814,10 +5870,14 @@ export class AdminService {
     engagedPairings: number;
     engagementRate: number;
   }>> {
+    const cacheKey = `magicIntrosByDate_${communityId}_${startDate || ''}_${endDate || ''}`;
+    const cached = this.magicIntrosByDateCache.get(cacheKey);
+    if (cached && this.isCacheValid(cached.timestamp)) {
+      devLog(`[AdminService] ✨ Using cached magic intros by date for community ${communityId}`);
+      return cached.data;
+    }
     try {
       devLog(`[AdminService] ✨ Fetching magic intros by date for community ${communityId}`);
-      
-      // Get all Trova Magic matches
       const matches = await this.getMatchesForCommunity(communityId, startDate, endDate, 'trova_magic');
       
       if (!matches || matches.length === 0) {
@@ -5857,7 +5917,7 @@ export class AdminService {
         // Validate date - skip if invalid
         if (isNaN(date.getTime())) {
           skippedInvalid++;
-          console.warn(`[AdminService] Invalid date for match ${match.id}:`, createdAt);
+          devWarn(`[AdminService] Invalid date for match ${match.id}:`, createdAt);
           return;
         }
         
@@ -5877,7 +5937,7 @@ export class AdminService {
         // Additional validation: ensure date string is valid (YYYY-MM-DD format)
         if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
           skippedInvalid++;
-          console.warn(`[AdminService] Invalid date string format for match ${match.id}:`, dateStr);
+          devWarn(`[AdminService] Invalid date string format for match ${match.id}:`, dateStr);
           return;
         }
         
@@ -5891,7 +5951,7 @@ export class AdminService {
         devLog(`[AdminService] ✨ Filtered ${matches.length} matches: ${skippedInvalid} invalid dates, ${skippedOutOfRange} out of range`);
       }
 
-      // Get conversation pairs for engagement calculation
+      // Get conversation pairs for engagement calculation (may be empty for Slack-only)
       const conversationPairs = await this.getConversationPairs(communityId);
 
       // Build result array with stats for each date
@@ -5902,6 +5962,10 @@ export class AdminService {
         engagedPairings: number;
         engagementRate: number;
       }> = [];
+
+      // First pass: compute unique pairs and (when available) precise engagement from conversationPairs
+      // We also accumulate total unique pairs so we can approximate engagement per date when Firestore is unavailable.
+      let totalUniquePairsAcrossDates = 0;
 
       for (const [dateStr, dateMatches] of matchesByDate.entries()) {
         const date = new Date(dateStr);
@@ -5915,7 +5979,7 @@ export class AdminService {
         // Deduplicate by unique user pairs - iterate through all matches and only keep first occurrence of each pair
         const uniquePairs = new Set<string>(); // Set of pair keys
         const pairEngagement = new Map<string, boolean>(); // pairKey -> isEngaged
-        
+
         for (const match of dateMatches) {
           const userId = match.userId || match.user_id;
           const matchedUserId = match.matchedUserId || match.matched_user_id;
@@ -5930,29 +5994,59 @@ export class AdminService {
           // Only count each unique pair once
           if (!uniquePairs.has(pairKey)) {
             uniquePairs.add(pairKey);
-            
-            // Check if this pair is engaged
+
+            // Check if this pair is engaged (when conversationPairs is available)
             const isEngaged = conversationPairs.has(pairKey);
             pairEngagement.set(pairKey, isEngaged);
           }
         }
 
-        // Count engaged pairs
+        const totalPairsForDate = uniquePairs.size;
+        totalUniquePairsAcrossDates += totalPairsForDate;
+
+        // Count engaged pairs from conversationPairs (may be 0 when Firestore not available)
         const engagedCount = Array.from(pairEngagement.values()).filter(engaged => engaged).length;
 
-        const engagementRate = uniquePairs.size > 0 
-          ? (engagedCount / uniquePairs.size) * 100 
+        const engagementRate = totalPairsForDate > 0 
+          ? (engagedCount / totalPairsForDate) * 100 
           : 0;
 
-        devLog(`[AdminService] Date ${dateStr}: ${uniquePairs.size} unique pairs, ${engagedCount} engaged (from ${dateMatches.length} matches)`);
+        devLog(`[AdminService] Date ${dateStr}: ${totalPairsForDate} unique pairs, ${engagedCount} engaged (from ${dateMatches.length} matches)`);
 
         result.push({
           date: dateStr,
           dateDisplay,
-          totalPairings: uniquePairs.size, // Count unique user pairs (matches detail view)
+          totalPairings: totalPairsForDate, // Count unique user pairs (matches detail view)
           engagedPairings: engagedCount,
           engagementRate: Math.round(engagementRate * 10) / 10, // Round to 1 decimal place
         });
+      }
+
+      // If we have no conversation-based engagement (e.g. Slack-only, Firestore unavailable)
+      // but we do have an aggregate engaged count from the backend, distribute it across dates
+      // proportionally to their totalPairings so drill-down is consistent with the main card.
+      const hasAnyEngagementFromConversations = result.some((r) => r.engagedPairings > 0);
+      if (!hasAnyEngagementFromConversations && totalUniquePairsAcrossDates > 0) {
+        try {
+          const aggregateEngaged = await this.getTrovaMagicEngagedFromApi(communityId, startDate, endDate);
+          if (aggregateEngaged && aggregateEngaged > 0) {
+            let remaining = aggregateEngaged;
+            const lastIndex = result.length - 1;
+            result.forEach((row, index) => {
+              const share = index === lastIndex
+                ? remaining
+                : Math.round((aggregateEngaged * row.totalPairings) / totalUniquePairsAcrossDates);
+              const clampedShare = Math.max(0, Math.min(share, row.totalPairings));
+              row.engagedPairings = clampedShare;
+              row.engagementRate = row.totalPairings > 0
+                ? Math.round(((clampedShare / row.totalPairings) * 100) * 10) / 10
+                : 0;
+              remaining -= clampedShare;
+            });
+          }
+        } catch (error) {
+          devLog('[AdminService] Failed to distribute Trova Magic engagement across dates:', error);
+        }
       }
 
       // Sort by date descending (most recent first)
@@ -5961,11 +6055,12 @@ export class AdminService {
       // Check for suspiciously high counts (likely data issues)
       const suspiciousDates = result.filter(r => r.totalPairings > 1000);
       if (suspiciousDates.length > 0) {
-        console.warn(`[AdminService] ⚠️ Found ${suspiciousDates.length} dates with >1000 pairings (possible data issue):`, 
+        devWarn(`[AdminService] ⚠️ Found ${suspiciousDates.length} dates with >1000 pairings (possible data issue):`, 
           suspiciousDates.map(d => `${d.date}: ${d.totalPairings}`));
       }
 
       devLog(`[AdminService] ✨ Found ${result.length} magic intro dates, total pairings: ${result.reduce((sum, r) => sum + r.totalPairings, 0)}`);
+      this.magicIntrosByDateCache.set(cacheKey, { data: result, timestamp: Date.now() });
       return result;
     } catch (error: any) {
       console.error('[AdminService] Error fetching magic intros by date:', error);
@@ -5979,15 +6074,19 @@ export class AdminService {
    * Deduplicates pairings (normalizes user pairs) and fetches user names
    */
   async getMagicIntroPairings(
-    communityId: number, 
-    date: string, 
-    startDate?: string, 
+    communityId: number,
+    date: string,
+    startDate?: string,
     endDate?: string
   ): Promise<any[]> {
+    const pairingsCacheKey = `magicIntroPairings_${communityId}_${date}_${startDate || ''}_${endDate || ''}`;
+    const cached = this.magicIntroPairingsCache.get(pairingsCacheKey);
+    if (cached && this.isCacheValid(cached.timestamp)) {
+      devLog(`[AdminService] ✨ Using cached pairings for community ${communityId} date ${date}`);
+      return cached.data;
+    }
     try {
       devLog(`[AdminService] ✨ Fetching pairings for magic intro date ${date}`);
-      
-      // Get all Trova Magic matches for the date range
       const matches = await this.getMatchesForCommunity(communityId, startDate, endDate, 'trova_magic');
       
       if (!matches || matches.length === 0) {
@@ -6017,8 +6116,33 @@ export class AdminService {
         return matchDateStr === targetDateStr;
       });
 
-      // Get conversation pairs to mark which pairings are engaged
-      const conversationPairs = await this.getConversationPairs(communityId);
+      // Prefer API (conversations-started) for engagement so Slack-only and Firebase users both get
+      // per-pairing isEngaged; only fall back to Firestore when API returns no magic_intro convos.
+      let conversationPairs: Set<string> = new Set<string>();
+      const messageCountByPairKey = new Map<string, number>();
+      const conversations = await this.getConversationsStartedCached(communityId, startDate, endDate);
+      const convos = conversations?.conversations || [];
+      const magicIntroConvos = convos.filter((c) => {
+        const t = (c as any)?.conversationType ?? '';
+        return t === 'magic_intro' || t === 'trova_magic' || t === 'magic-intro';
+      });
+      magicIntroConvos.forEach((c) => {
+        // Only treat as "conversation started" when backend confirms messages > 0.
+        // This avoids false positives from mere channel existence or system/bot-only events.
+        if (!c?.messageCount || c.messageCount <= 0) return;
+        const ids = this.parseParticipantIds(c.participants);
+        if (ids.length < 2) return;
+        const pairKey = ids.slice(0, 2).sort((a, b) => a - b).join('-');
+        conversationPairs.add(pairKey);
+        const prev = messageCountByPairKey.get(pairKey) || 0;
+        messageCountByPairKey.set(pairKey, Math.max(prev, c.messageCount || 0));
+      });
+      const firebase = useFirebase();
+      const hasFirebaseUser = !!firebase.auth?.currentUser;
+      // IMPORTANT: Do NOT fall back to Firestore-based conversation detection for Magic Intros.
+      // The admin console "Conversation started" indicator must be backed by backend-confirmed
+      // message activity (real humans), not by the existence of a Slack channel.
+      void hasFirebaseUser;
 
       // Deduplicate by unique user pairs - iterate through all matches and only keep first occurrence of each pair
       const seenPairs = new Map<string, any>(); // pairKey -> pairing object
@@ -6044,6 +6168,7 @@ export class AdminService {
           
           // Check if this pair is engaged
           const isEngaged = conversationPairs.has(pairKey);
+          const messageCount = messageCountByPairKey.get(pairKey) || 0;
           
           seenPairs.set(pairKey, {
             ...match,
@@ -6052,6 +6177,7 @@ export class AdminService {
             userId: userId,
             matchedUserId: matchedUserId,
             isEngaged,
+            messageCount,
           });
         } else {
           devLog(`[AdminService] Skipping duplicate pair ${pairKey} (users ${userId} and ${matchedUserId})`);
@@ -6099,6 +6225,7 @@ export class AdminService {
       });
 
       devLog(`[AdminService] ✨ Found ${enrichedPairings.length} unique pairings for date ${date} (deduplicated from ${dateMatches.length} matches)`);
+      this.magicIntroPairingsCache.set(pairingsCacheKey, { data: enrichedPairings, timestamp: Date.now() });
       return enrichedPairings;
     } catch (error: any) {
       console.error('[AdminService] Error fetching magic intro pairings:', error);
@@ -6110,7 +6237,12 @@ export class AdminService {
    * Get channel pairings by date
    * Similar to getMagicIntrosByDate but for channel_pairing matches
    */
-  async getChannelPairingsByDate(communityId: number, startDate?: string, endDate?: string): Promise<Array<{
+  async getChannelPairingsByDate(
+    communityId: number,
+    startDate?: string,
+    endDate?: string,
+    opts?: { forceRefresh?: boolean }
+  ): Promise<Array<{
     date: string; // ISO date string (YYYY-MM-DD)
     dateDisplay: string; // Formatted date for display
     channelName?: string | null; // Channel name if all matches on this date share the same channel
@@ -6122,7 +6254,7 @@ export class AdminService {
       devLog(`[AdminService] 🔗 Fetching channel pairings by date for community ${communityId}`);
       
       // Get all Channel Pairing matches
-      const matches = await this.getMatchesForCommunity(communityId, startDate, endDate, 'channel_pairing');
+      const matches = await this.getMatchesForCommunity(communityId, startDate, endDate, 'channel_pairing', opts);
       
       if (!matches || matches.length === 0) {
         return [];
@@ -6161,7 +6293,7 @@ export class AdminService {
         // Validate date - skip if invalid
         if (isNaN(date.getTime())) {
           skippedInvalid++;
-          console.warn(`[AdminService] Invalid date for channel pairing match ${match.id}:`, createdAt);
+          devWarn(`[AdminService] Invalid date for channel pairing match ${match.id}:`, createdAt);
           return;
         }
         
@@ -6181,7 +6313,7 @@ export class AdminService {
         // Additional validation: ensure date string is valid (YYYY-MM-DD format)
         if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
           skippedInvalid++;
-          console.warn(`[AdminService] Invalid date string format for channel pairing match ${match.id}:`, dateStr);
+          devWarn(`[AdminService] Invalid date string format for channel pairing match ${match.id}:`, dateStr);
           return;
         }
         
@@ -6195,8 +6327,52 @@ export class AdminService {
         devLog(`[AdminService] 🔗 Filtered ${matches.length} channel pairing matches: ${skippedInvalid} invalid dates, ${skippedOutOfRange} out of range`);
       }
 
-      // Get conversation pairs for engagement calculation
-      const conversationPairs = await this.getConversationPairs(communityId);
+      // IMPORTANT: Channel Pairings are group chats (2–5 users). Engagement must be computed
+      // at the group level ("2+ members participated in a conversation"), not via pair-based
+      // Firestore conversationPairs. Use conversations-started for all clients.
+      const channelConvos = await this.getConversationsStartedCached(communityId, startDate, endDate, opts);
+      const convos = (channelConvos?.conversations ?? []).filter((c: ConversationStarted) =>
+        this.isChannelPairingConversation(c)
+      );
+      const toDateStr = (createdAt: string) => {
+        const d = new Date(createdAt);
+        return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+      };
+      const groupEngagedByDate = new Map<string, number>();
+      for (const [dateStr, dateMatches] of matchesByDate.entries()) {
+        const convosOnDate = convos
+          .filter((c: ConversationStarted) => toDateStr(c.createdAt) === dateStr)
+          .filter((c: ConversationStarted) => (c.messageCount ?? 0) > 0);
+
+        // Authoritative engaged conversations: 2+ distinct human speakers.
+        const engagedChannelIds = new Set(
+          convosOnDate
+            .filter((c: ConversationStarted) => (c.distinctHumanSpeakers ?? 0) >= 2)
+            .map((c: ConversationStarted) => c.channelId)
+            .filter(Boolean)
+        );
+
+        // Build groups keyed by groupId and capture their real Slack channel id.
+        const groups = new Map<number | string, { channelId: string | null }>();
+        for (const match of dateMatches) {
+          const groupId = match.groupId ?? match.group_id ?? (match.matchIndicesId && match.matchIndicesId !== 0 ? match.matchIndicesId : null);
+          const uid = match.userId ?? match.user_id;
+          const mid = match.matchedUserId ?? match.matched_user_id;
+          const key = groupId ?? `single-${uid}-${mid}`;
+          if (!groups.has(key)) {
+            const channelId =
+              match.slackChannelId ??
+              match.slack_channel_id ??
+              match.slackChannel?.id ??
+              match.slack_channel?.id ??
+              null;
+            groups.set(key, { channelId });
+          }
+        }
+
+        const engaged = Array.from(groups.values()).filter((g) => g.channelId && engagedChannelIds.has(g.channelId)).length;
+        groupEngagedByDate.set(dateStr, engaged);
+      }
 
       // Build result array with stats for each date
       const result: Array<{
@@ -6234,66 +6410,30 @@ export class AdminService {
         // If all matches have the same channel name, use it; otherwise null
         const channelName = channelNames.size === 1 ? Array.from(channelNames)[0] : null;
 
-        // Count unique user pairs (same logic as getChannelPairingPairings)
-        // Deduplicate by unique user pairs - iterate through all matches and only keep first occurrence of each pair
-        const uniquePairs = new Set<string>(); // Set of pair keys
-        const pairEngagement = new Map<string, boolean>(); // pairKey -> isEngaged
-        
-        let skippedWrongCommunity = 0;
-        
-        // First, filter by communityId to ensure we only process matches for this community
-        const communityFilteredMatches = dateMatches.filter((match) => {
+        const groupMap = new Map<number | string, Set<number>>();
+        for (const match of dateMatches) {
           const matchCommunityId = match.communityId || match.community_id;
-          if (matchCommunityId && matchCommunityId !== communityId) {
-            skippedWrongCommunity++;
-            return false;
-          }
-          return true;
-        });
-        
-        if (skippedWrongCommunity > 0) {
-          console.warn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} channel pairing matches with wrong communityId (expected ${communityId}) for date ${dateStr}`);
+          if (matchCommunityId && matchCommunityId !== communityId) continue;
+          const groupId = match.groupId ?? match.group_id ?? (match.matchIndicesId && match.matchIndicesId !== 0 ? match.matchIndicesId : null);
+          const uid = match.userId ?? match.user_id;
+          const mid = match.matchedUserId ?? match.matched_user_id;
+          const key = groupId ?? `single-${uid}-${mid}`;
+          if (!groupMap.has(key)) groupMap.set(key, new Set<number>());
+          const g = groupMap.get(key)!;
+          if (uid) g.add(Number(uid));
+          if (mid) g.add(Number(mid));
         }
-        
-        devLog(`[AdminService] After community filter for ${dateStr}: ${communityFilteredMatches.length} matches (from ${dateMatches.length} total)`);
-        
-        for (const match of communityFilteredMatches) {
-          const userId = match.userId || match.user_id;
-          const matchedUserId = match.matchedUserId || match.matched_user_id;
-          
-          if (!userId || !matchedUserId) {
-            continue;
-          }
-          
-          // Create normalized pair key (sorted IDs to handle A-B and B-A as same pair)
-          const pairKey = [userId, matchedUserId].sort((a, b) => a - b).join('-');
-          
-          // Only count each unique pair once
-          if (!uniquePairs.has(pairKey)) {
-            uniquePairs.add(pairKey);
-            
-            // Check if this pair is engaged
-            const isEngaged = conversationPairs.has(pairKey);
-            pairEngagement.set(pairKey, isEngaged);
-          }
-        }
-        
+        const totalPairings = groupMap.size;
+        const engagedCount = groupEngagedByDate.get(dateStr) ?? 0;
 
-        // Count engaged pairs
-        const engagedCount = Array.from(pairEngagement.values()).filter(engaged => engaged).length;
-
-        const engagementRate = uniquePairs.size > 0 
-          ? (engagedCount / uniquePairs.size) * 100 
-          : 0;
-
-
+        const engagementRate = totalPairings > 0 ? (engagedCount / totalPairings) * 100 : 0;
         result.push({
           date: dateStr,
           dateDisplay,
-          channelName: channelName, // Add channel name to result
-          totalPairings: uniquePairs.size, // Count unique user pairs (matches detail view)
+          channelName,
+          totalPairings,
           engagedPairings: engagedCount,
-          engagementRate: Math.round(engagementRate * 10) / 10, // Round to 1 decimal place
+          engagementRate: Math.round(engagementRate * 10) / 10,
         });
       }
 
@@ -6303,7 +6443,7 @@ export class AdminService {
       // Check for suspiciously high counts (likely data issues)
       const suspiciousDates = result.filter(r => r.totalPairings > 1000);
       if (suspiciousDates.length > 0) {
-        console.warn(`[AdminService] ⚠️ Found ${suspiciousDates.length} channel pairing dates with >1000 pairings (possible data issue):`, 
+        devWarn(`[AdminService] ⚠️ Found ${suspiciousDates.length} channel pairing dates with >1000 pairings (possible data issue):`, 
           suspiciousDates.map(d => `${d.date}: ${d.totalPairings}`));
       }
 
@@ -6311,6 +6451,160 @@ export class AdminService {
       return result;
     } catch (error: any) {
       console.error('[AdminService] Error fetching channel pairings by date:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Channel pairing group with engaged vs unresponsive members (for 2-, 3-, or 5-way pairings).
+   * A group counts as "engaged" when 2+ members participated in a conversation.
+   */
+  async getChannelPairingGroupsForDate(
+    communityId: number,
+    date: string,
+    startDate?: string,
+    endDate?: string,
+    opts?: { forceRefresh?: boolean }
+  ): Promise<Array<{
+    groupId: number | null;
+    channelName: string | null;
+    userIds: number[];
+    engagedUserIds: number[];
+    unresponsiveUserIds: number[];
+    isEngaged: boolean;
+    messageCount: number;
+    members: Array<{ userId: number; displayName: string; isEngaged: boolean }>;
+  }>> {
+    try {
+      const matches = await this.getMatchesForCommunity(communityId, startDate, endDate, 'channel_pairing', opts);
+      if (!matches || matches.length === 0) return [];
+
+      const targetDateStr = date.includes('T') ? date.split('T')[0] : date;
+      const dateMatches = matches.filter((match) => {
+        const createdAt = match.createdAt || match.created_at;
+        if (!createdAt) return false;
+        const d = typeof createdAt === 'string' ? new Date(createdAt) : (createdAt.toDate ? createdAt.toDate() : new Date((createdAt as { seconds: number }).seconds * 1000));
+        return d.toISOString().split('T')[0] === targetDateStr;
+      });
+      if (dateMatches.length === 0) return [];
+
+      // Build groups by groupId: { groupId, userIds: Set<number>, channelName, channelId }
+      const groupMap = new Map<number | string, { userIds: Set<number>; channelName: string | null; channelId: string | null }>();
+      for (const match of dateMatches) {
+        const groupId = match.groupId ?? match.group_id ?? (match.matchIndicesId && match.matchIndicesId !== 0 ? match.matchIndicesId : null);
+        const uid = match.userId ?? match.user_id;
+        const mid = match.matchedUserId ?? match.matched_user_id;
+        const key = groupId ?? `single-${uid}-${mid}`;
+        if (!groupMap.has(key)) {
+          groupMap.set(key, {
+            userIds: new Set<number>(),
+            channelName: match.channelName ?? match.channel_name ?? match.slackChannelName ?? match.slack_channel_name ?? match.channel?.name ?? match.slackChannel?.name ?? null,
+            channelId:
+              match.slackChannelId ??
+              match.slack_channel_id ??
+              match.slackChannel?.id ??
+              match.slack_channel?.id ??
+              null,
+          });
+        }
+        const g = groupMap.get(key)!;
+        if (uid) g.userIds.add(Number(uid));
+        if (mid) g.userIds.add(Number(mid));
+      }
+
+      const channelConvos = await this.getConversationsStartedCached(communityId, startDate, endDate, opts);
+      const allConvos = (channelConvos?.conversations ?? []).filter((c: ConversationStarted) =>
+        this.isChannelPairingConversation(c)
+      );
+      const toConvDateStr = (createdAt: string) => {
+        const d = new Date(createdAt);
+        return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+      };
+      const convos = allConvos
+        .filter((c: ConversationStarted) => toConvDateStr(c.createdAt) === targetDateStr)
+        .filter((c: ConversationStarted) => (c.messageCount ?? 0) > 0);
+      const convParticipantSets = convos.map((c: ConversationStarted) => ({
+        channelId: c.channelId,
+        ids: new Set(this.getConversationParticipantUserIds(c)),
+        participantUsers: Array.isArray(c.participantUsers) ? c.participantUsers : [],
+        distinctHumanSpeakers: c.distinctHumanSpeakers ?? 0,
+        // Prefer per-user human message counts (more reliable than any aggregate count).
+        totalHumanMessages: Array.isArray(c.participantUsers)
+          ? c.participantUsers.reduce((sum, p) => sum + (p.messageCount ?? 0), 0)
+          : (c.messageCount ?? 0),
+      }));
+
+      const groupsOut: Array<{
+        groupId: number | null;
+        channelName: string | null;
+        userIds: number[];
+        engagedUserIds: number[];
+        unresponsiveUserIds: number[];
+        isEngaged: boolean;
+        messageCount: number;
+      }> = [];
+
+      for (const [key, { userIds: groupUserIds, channelName, channelId }] of groupMap.entries()) {
+        const userIds = Array.from(groupUserIds);
+        const engagedSet = new Set<number>();
+        let messageCount = 0;
+        for (const { channelId: convoChannelId, ids: convIds, totalHumanMessages: mc, participantUsers, distinctHumanSpeakers } of convParticipantSets) {
+          if (channelId && convoChannelId !== channelId) continue;
+          const overlap = userIds.filter((id) => convIds.has(id));
+          if (overlap.length >= 2) {
+            // Fully engaged group if backend reports 2+ distinct human speakers.
+            if (distinctHumanSpeakers >= 2) {
+              overlap.forEach((id) => engagedSet.add(id));
+              messageCount = Math.max(messageCount, mc);
+              continue;
+            }
+
+            // Partial engagement: exactly one human speaker. Mark only that user as engaged if we can.
+            if (distinctHumanSpeakers === 1 && participantUsers.length > 0) {
+              const speakerIds = participantUsers
+                .filter((p) => (p.messageCount ?? 0) > 0)
+                .map((p) => Number(p.userId))
+                .filter((n) => Number.isFinite(n) && userIds.includes(n));
+              speakerIds.forEach((id) => engagedSet.add(id));
+              messageCount = Math.max(messageCount, mc);
+              continue;
+            }
+          }
+        }
+        const engagedUserIds = Array.from(engagedSet);
+        const unresponsiveUserIds = userIds.filter((id) => !engagedSet.has(id));
+        const isEngaged = engagedUserIds.length >= 2;
+        groupsOut.push({
+          groupId: typeof key === 'number' ? key : null,
+          channelName,
+          userIds,
+          engagedUserIds,
+          unresponsiveUserIds,
+          isEngaged,
+          messageCount,
+        });
+      }
+
+      const allUserIds = new Set<number>();
+      groupsOut.forEach((g) => g.userIds.forEach((id) => allUserIds.add(id)));
+      const { userService } = await import('./user.service');
+      const usersMap = await userService.getUsersByIds(Array.from(allUserIds));
+      const displayName = (uid: number) => {
+        const u = usersMap.get(uid);
+        if (!u) return `User ${uid}`;
+        return u.fullName || [u.fname, u.lname].filter(Boolean).join(' ') || `User ${uid}`;
+      };
+
+      return groupsOut.map((g) => ({
+        ...g,
+        members: g.userIds.map((userId) => ({
+          userId,
+          displayName: displayName(userId),
+          isEngaged: g.engagedUserIds.includes(userId),
+        })),
+      }));
+    } catch (error: any) {
+      console.error('[AdminService] Error fetching channel pairing groups:', error);
       return [];
     }
   }
@@ -6396,7 +6690,7 @@ export class AdminService {
       });
       
       if (skippedWrongCommunity > 0) {
-        console.warn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} channel pairing matches with wrong communityId (expected ${communityId})`);
+        devWarn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} channel pairing matches with wrong communityId (expected ${communityId})`);
       }
       
       devLog(`[AdminService] After community filter: ${communityFilteredMatches.length} matches (from ${dateMatches.length} total)`);
@@ -6630,8 +6924,8 @@ export class AdminService {
             // Only flag as backend issue if we have other types but no mentor/mentee types
             // This could also mean the matches are outside the date range or don't exist
             detectedBackendIssue = true;
-            console.warn(`[AdminService] ⚠️ No mentor/mentee types found in response. Found types: ${Array.from(uniqueTypes).join(', ')}`);
-            console.warn(`[AdminService] ⚠️ This might indicate: (1) No mentor/mentee matches in date range, (2) Backend filtering issue, or (3) Type mismatch`);
+            devWarn(`[AdminService] ⚠️ No mentor/mentee types found in response. Found types: ${Array.from(uniqueTypes).join(', ')}`);
+            devWarn(`[AdminService] ⚠️ This might indicate: (1) No mentor/mentee matches in date range, (2) Backend filtering issue, or (3) Type mismatch`);
           }
           
           // Filter for mentor/mentee matches by checking the type field and sub_type field
@@ -6677,7 +6971,7 @@ export class AdminService {
       }
       
       if (!matches || matches.length === 0) {
-        console.warn(`[AdminService] ⚠️ No mentor/mentee matches found. Tried type variations: ${typeVariations.join(', ')} and client-side filtering`);
+        devWarn(`[AdminService] ⚠️ No mentor/mentee matches found. Tried type variations: ${typeVariations.join(', ')} and client-side filtering`);
         // If we detected a backend issue (no mentor/mentee types in response), set the flag
         if (!detectedBackendIssue && uniqueTypes.size > 0) {
           detectedBackendIssue = !Array.from(uniqueTypes).some(t => t.toLowerCase().includes('mentor') || t.toLowerCase().includes('mentee'));
@@ -6723,7 +7017,7 @@ export class AdminService {
         // Validate date - skip if invalid
         if (isNaN(date.getTime())) {
           skippedInvalid++;
-          console.warn(`[AdminService] Invalid date for mentor/mentee match ${match.id}:`, createdAt);
+          devWarn(`[AdminService] Invalid date for mentor/mentee match ${match.id}:`, createdAt);
           return;
         }
         
@@ -6743,7 +7037,7 @@ export class AdminService {
         // Additional validation: ensure date string is valid (YYYY-MM-DD format)
         if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
           skippedInvalid++;
-          console.warn(`[AdminService] Invalid date string format for mentor/mentee match ${match.id}:`, dateStr);
+          devWarn(`[AdminService] Invalid date string format for mentor/mentee match ${match.id}:`, dateStr);
           return;
         }
         
@@ -6794,7 +7088,7 @@ export class AdminService {
         });
         
         if (skippedWrongCommunity > 0) {
-          console.warn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} mentor/mentee matches with wrong communityId (expected ${communityId}) for date ${dateStr}`);
+          devWarn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} mentor/mentee matches with wrong communityId (expected ${communityId}) for date ${dateStr}`);
         }
         
         devLog(`[AdminService] After community filter for ${dateStr}: ${communityFilteredMatches.length} matches (from ${dateMatches.length} total)`);
@@ -6910,18 +7204,15 @@ export class AdminService {
       }
       
       if (!matches || matches.length === 0) {
-        console.warn(`[AdminService] ⚠️ No mentor/mentee matches found`);
+        devWarn(`[AdminService] ⚠️ No mentor/mentee matches found`);
         return [];
       }
       
-      // Filter by communityId
-      const validMatches = matches.filter((match: any) => {
-        return match.communityId === communityId;
-      });
+      // getMatchesForCommunity already filters by communityId — no double-filtering needed
       
       // Count matches per user
       const userMatchCounts = new Map<number, number>();
-      validMatches.forEach((match: any) => {
+      matches.forEach((match: any) => {
         const userId = match.userId || match.user_id;
         if (userId) {
           userMatchCounts.set(userId, (userMatchCounts.get(userId) || 0) + 1);
@@ -7093,7 +7384,7 @@ export class AdminService {
       const allMatches = await this.getMatchesForCommunity(communityId, startDate, endDate);
       
       if (!allMatches || allMatches.length === 0) {
-        console.warn(`[AdminService] ⚠️ No matches found`);
+        devWarn(`[AdminService] ⚠️ No matches found`);
         return [];
       }
       
@@ -7393,7 +7684,7 @@ export class AdminService {
       }
       
       if (!matches || matches.length === 0) {
-        console.warn(`[AdminService] ⚠️ No mentor/mentee matches found with any type variation or client-side filtering`);
+        devWarn(`[AdminService] ⚠️ No mentor/mentee matches found with any type variation or client-side filtering`);
         return [];
       }
 
@@ -7439,7 +7730,7 @@ export class AdminService {
       });
       
       if (skippedWrongCommunity > 0) {
-        console.warn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} mentor/mentee matches with wrong communityId (expected ${communityId})`);
+        devWarn(`[AdminService] ⚠️ Filtered out ${skippedWrongCommunity} mentor/mentee matches with wrong communityId (expected ${communityId})`);
       }
       
       devLog(`[AdminService] After community filter: ${communityFilteredMatches.length} matches (from ${dateMatches.length} total)`);

@@ -40,6 +40,9 @@ export interface CreateEventData {
 }
 
 export class EventService {
+  // Endpoint is missing in some prod deployments; cache 404 to avoid repeat requests.
+  private upcomingRsvpEndpointMissing = false;
+
   /**
    * Get all events for a community
    */
@@ -184,6 +187,7 @@ export class EventService {
    * @param communityId - Optional community ID to filter by. If null, returns events from all communities
    */
   async getUpcomingRSVPEvents(userId: number, communityId?: number | null): Promise<Event[]> {
+    if (this.upcomingRsvpEndpointMissing) return [];
     try {
       let url = `/events/user/${userId}/rsvp/upcoming`;
       if (communityId !== null && communityId !== undefined) {
@@ -199,6 +203,7 @@ export class EventService {
     } catch (error: any) {
       // Silently handle 404s (endpoint not implemented yet)
       if (error.status === 404 || error.response?.status === 404) {
+        this.upcomingRsvpEndpointMissing = true;
         return [];
       }
       console.error('Failed to fetch upcoming RSVP events:', error);

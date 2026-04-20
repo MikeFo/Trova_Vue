@@ -116,6 +116,7 @@ import {
 } from '@ionic/vue';
 import { people, gitBranchOutline, addCircleOutline, logOutOutline, globe } from 'ionicons/icons';
 import type { Community as CommunityModel } from '@/services/community.service';
+import { devLog, devWarn } from '@/utils/logger';
 
 type Community = CommunityModel & {
   hasNotification?: boolean;
@@ -138,17 +139,17 @@ async function loadCommunities(forceRefresh: boolean = false) {
   try {
     const userId = authStore.user?.id;
     if (!userId) {
-      console.log('[CommunityMenu] No user ID, cannot load communities');
+      devLog('[CommunityMenu] No user ID, cannot load communities');
       communities.value = [];
       return;
     }
 
-    console.log('[CommunityMenu] Loading user communities for userId:', userId, forceRefresh ? '(force refresh)' : '');
+    devLog('[CommunityMenu] Loading user communities for userId:', userId, forceRefresh ? '(force refresh)' : '');
     const userCommunities = await communityService.getUserCommunities(userId, forceRefresh);
     communities.value = userCommunities;
     // Update the community store
     communityStore.setCommunities(userCommunities);
-    console.log('[CommunityMenu] Loaded communities:', userCommunities.length);
+    devLog('[CommunityMenu] Loaded communities:', userCommunities.length);
   } catch (error) {
     console.error('[CommunityMenu] Failed to load communities:', error);
     communities.value = [];
@@ -185,10 +186,10 @@ function handleCommunitiesUpdated() {
         
         // If count didn't increase and we haven't retried too many times, try again
         if (afterCount === beforeCount && attempt < 2) {
-          console.log(`[CommunityMenu] Community count unchanged (${afterCount}), retrying... (attempt ${attempt + 1})`);
+          devLog(`[CommunityMenu] Community count unchanged (${afterCount}), retrying... (attempt ${attempt + 1})`);
           retryLoad(attempt + 1);
         } else if (afterCount > beforeCount) {
-          console.log(`[CommunityMenu] Successfully refreshed communities: ${beforeCount} -> ${afterCount}`);
+          devLog(`[CommunityMenu] Successfully refreshed communities: ${beforeCount} -> ${afterCount}`);
         }
       }, delay);
     };
@@ -207,7 +208,7 @@ function handleMenuOpen() {
 function selectGlobal() {
   // Set to null to indicate global/all-communities view
   communityStore.setCurrentCommunity(null);
-  console.log('[CommunityMenu] Switched to Global view (all communities)');
+  devLog('[CommunityMenu] Switched to Global view (all communities)');
   
   // Close menu
   const menu = document.querySelector('ion-menu[menu-id="community-menu"]') as any;
@@ -219,12 +220,12 @@ function selectGlobal() {
 function selectCommunity(community: Community) {
   // Update the community store with the selected community
   communityStore.setCurrentCommunity(community);
-  console.log('[CommunityMenu] Switched to community:', community.name, community.id);
+  devLog('[CommunityMenu] Switched to community:', community.name, community.id);
   
   // Refresh user profile to update community context if needed
   // This might trigger a reload of groups, events, etc. for the new community
   authService.getUserProfile().catch(err => {
-    console.warn('[CommunityMenu] Failed to refresh user profile after community switch:', err);
+    devWarn('[CommunityMenu] Failed to refresh user profile after community switch:', err);
   });
   
   // Close menu

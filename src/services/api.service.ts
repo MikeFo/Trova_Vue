@@ -37,7 +37,7 @@ export class ApiService {
   }
 
   private setupInterceptors(): void {
-    // Request interceptor - add auth token
+    // Request interceptor - add auth token or Slack context
     this.api.interceptors.request.use(
       async (config) => {
         try {
@@ -53,6 +53,49 @@ export class ApiService {
               }
             } catch (tokenError) {
               // Continue without token - backend might handle auth differently
+            }
+          } else {
+            // No Firebase user - attach Slack context so backend can authorize (console, map, org chart).
+            // Prefer cached validation; fallback to current URL query so we send s even if cache expired or wasn't set.
+            const { slackSessionService } = await import('./slack-session.service');
+            let params: { s: string; communityId: string; slackUserId: string } | null = null;
+            const slack = slackSessionService.getCurrentValidation();
+            if (slack?.secretId) {
+              params = { s: slack.secretId, communityId: String(slack.communityId), slackUserId: slack.slackUserId };
+            } else if (typeof window !== 'undefined' && window.location?.search) {
+              const q = new URLSearchParams(window.location.search);
+              const s = q.get('s');
+              const communityId = q.get('communityId');
+              const slackUserId = q.get('slackUserId');
+              if (s && communityId && slackUserId) {
+                params = { s, communityId, slackUserId };
+              }
+            }
+            if (params) {
+              // Only add each param if not already present (avoids duplicate query keys that can break backends)
+              const existingParams = (config.params || {}) as Record<string, unknown>;
+              const urlQuery =
+                typeof config.url === 'string' && config.url.includes('?')
+                  ? config.url.slice(config.url.indexOf('?') + 1)
+                  : '';
+              const inUrl = new URLSearchParams(urlQuery);
+              const add = (key: 's' | 'communityId' | 'slackUserId') =>
+                existingParams[key] === undefined && !inUrl.has(key);
+              const slackParams: Record<string, string> = {};
+              if (add('s')) slackParams.s = params.s;
+              if (add('communityId')) slackParams.communityId = params.communityId;
+              if (add('slackUserId')) slackParams.slackUserId = params.slackUserId;
+              if (config.method === 'get' || config.method === 'GET') {
+                config.params = { ...config.params, ...slackParams };
+              } else if (config.data != null && typeof config.data === 'object' && !Array.isArray(config.data)) {
+                const body = config.data as Record<string, unknown>;
+                if (body.s === undefined) body.s = params.s;
+                if (body.communityId === undefined) body.communityId = params.communityId;
+                if (body.slackUserId === undefined) body.slackUserId = params.slackUserId;
+                config.data = body;
+              } else if (config.data == null) {
+                config.data = { s: params.s, communityId: params.communityId, slackUserId: params.slackUserId };
+              }
             }
           }
         } catch (error) {
@@ -83,12 +126,22 @@ export class ApiService {
       const response = await this.api.get<T>(url, config);
       return response.data;
     } catch (error: any) {
-      if (error.response?.status !== 404) {
-        console.error(`API GET ${url}:`, error.response?.data?.message ?? error.message);
+      const status = error.response?.status;
+      const message = error.response?.data?.message ?? error.message;
+      const is404 = status === 404;
+      const isNotMember422 =
+        status === 422 &&
+        String(error.response?.data?.error || message || '')
+          .toLowerCase()
+          .includes('not a member of requested community');
+
+      // Keep console readable: don't log missing endpoints (404) or expected empty-state membership checks (422).
+      if (!is404 && !isNotMember422) {
+        console.error(`API GET ${url}:`, message);
       }
       // Re-throw with more context
-      const enhancedError = new Error(error.response?.data?.message || error.message || 'Request failed');
-      (enhancedError as any).status = error.response?.status;
+      const enhancedError = new Error(message || 'Request failed');
+      (enhancedError as any).status = status;
       (enhancedError as any).response = error.response;
       throw enhancedError;
     }

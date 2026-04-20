@@ -1,12 +1,21 @@
 <template>
   <div class="user-stats-section">
     <div class="section-header">
-      <h2 class="section-title">Engagement Dashboard</h2>
+      <h2 class="section-title">
+        <span v-if="props.communityName && props.communityName.trim().length">
+          {{ props.communityName }} – Engagement Dashboard
+        </span>
+        <span v-else>
+          Engagement Dashboard
+        </span>
+      </h2>
       <div class="header-actions">
         <div class="time-period-wrapper">
           <ion-label class="time-period-label-inline">Time Period</ion-label>
           <ion-select v-model="selectedPeriod" @ionChange="onPeriodChange" class="time-period-select-inline">
             <ion-select-option value="all-time">All Time</ion-select-option>
+            <ion-select-option value="2-years">Past 2 Years</ion-select-option>
+            <ion-select-option value="18-months">Past 18 Months</ion-select-option>
             <ion-select-option value="12-months">Past 12 Months</ion-select-option>
             <ion-select-option value="6-months">Past 6 Months</ion-select-option>
             <ion-select-option value="3-months">Past 3 Months</ion-select-option>
@@ -20,55 +29,83 @@
       </div>
     </div>
 
-    <!-- Loading State -->
-    <div v-if="isLoading" class="loading-state">
-      <ion-spinner></ion-spinner>
-      <p>Loading engagement statistics...</p>
-    </div>
-
-    <!-- Dashboard Content -->
-    <div v-else-if="stats || hasAnyData" class="dashboard-content">
+    <!-- Dashboard Content (renders immediately, sections load progressively) -->
+    <div v-if="stats || hasAnyData || isLoading" class="dashboard-content">
       <!-- Primary Metrics (Core ROI) -->
       <div class="primary-metrics-section">
         <h3 class="section-subtitle">Primary Metrics</h3>
         <div class="primary-metrics-grid">
-          <div class="primary-metric-card clickable" @click="openProfilesList">
+          <div
+            class="primary-metric-card clickable"
+            @click="openProfilesList"
+          >
             <div class="metric-icon">
               <ion-icon :icon="checkmarkCircleOutline"></ion-icon>
             </div>
             <div class="metric-content">
               <div class="metric-value">
-                <span v-if="stats?.profileCompletionCompleted !== undefined && stats?.profileCompletionTotal !== undefined">
+                <ion-spinner v-if="isLoadingProfileCompletion && stats?.profileCompletionCompleted === undefined" name="crescent" class="metric-spinner"></ion-spinner>
+                <span v-else-if="stats?.profileCompletionCompleted !== undefined && stats?.profileCompletionTotal !== undefined">
                   {{ formatNumber(stats.profileCompletionCompleted) }}/{{ formatNumber(stats.profileCompletionTotal) }}
                 </span>
                 <span v-else>{{ formatPercentage(stats?.profileCompletionRate) }}</span>
               </div>
-              <div class="metric-label">Profile Completion (Completed / Eligible)</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label">Profile Completion (Completed / Eligible)</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.profileCompletion"
+                ></ion-icon>
+              </div>
             </div>
           </div>
-          <div 
-            class="primary-metric-card clickable" 
+          <div
+            class="primary-metric-card clickable"
             @click="navigateToConnections"
           >
             <div class="metric-icon">
               <ion-icon :icon="peopleOutline"></ion-icon>
             </div>
             <div class="metric-content">
-              <div class="metric-value">{{ formatNumber(stats?.connectionsMade || 0) }}</div>
-              <div class="metric-label">Introductions Created</div>
+              <div class="metric-value">
+                <ion-spinner v-if="isLoadingPrimary && stats?.connectionsMade === undefined" name="crescent" class="metric-spinner"></ion-spinner>
+                <span v-else>{{ formatNumber(stats?.connectionsMade || 0) }}</span>
+              </div>
+              <div class="metric-label-with-info">
+                <span class="metric-label">Introductions Created</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.introductionsCreated"
+                ></ion-icon>
+              </div>
               <div v-if="stats?.connectionsMadeTrend" class="metric-trend" :class="getTrendClass(stats.connectionsMadeTrend)">
                 <ion-icon :icon="stats.connectionsMadeTrend > 0 ? trendingUpOutline : trendingDownOutline"></ion-icon>
                 <span>{{ Math.abs(stats.connectionsMadeTrend).toFixed(1) }}%</span>
               </div>
             </div>
           </div>
-          <div class="primary-metric-card primary-metric-card-highlight clickable" @click="openConversationsStartedList">
+          <div
+            class="primary-metric-card primary-metric-card-highlight clickable"
+            @click="openConversationsStartedList"
+          >
             <div class="metric-icon">
               <ion-icon :icon="chatbubblesOutline"></ion-icon>
             </div>
             <div class="metric-content">
-              <div class="metric-value">{{ formatNumber(stats?.trovaChatsStarted || 0) }}</div>
-              <div class="metric-label">Messages Exchanged</div>
+              <div class="metric-value">
+                <ion-spinner v-if="isLoadingPrimary && stats?.trovaChatsStarted === undefined" name="crescent" class="metric-spinner"></ion-spinner>
+                <span v-else>{{ formatNumber(stats?.trovaChatsStarted || 0) }}</span>
+              </div>
+              <div class="metric-label-with-info">
+                <span class="metric-label">Messages Exchanged</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.messagesExchanged"
+                ></ion-icon>
+              </div>
               <div v-if="stats?.trovaChatsStartedTrend" class="metric-trend" :class="getTrendClass(stats.trovaChatsStartedTrend)">
                 <ion-icon :icon="stats.trovaChatsStartedTrend > 0 ? trendingUpOutline : trendingDownOutline"></ion-icon>
                 <span>{{ Math.abs(stats.trovaChatsStartedTrend).toFixed(1) }}%</span>
@@ -79,25 +116,49 @@
       </div>
 
       <!-- General Actions Metrics -->
-      <div v-if="hasUserActionsData" class="engagement-metrics-section">
+      <div v-if="hasUserActionsData || isLoadingActions" class="engagement-metrics-section">
         <h3 class="section-subtitle">General Actions</h3>
         <div class="engagement-metrics-grid">
-          <div class="engagement-metric-card clickable" v-if="stats?.openedTrova !== undefined" @click="openOpenedTrovaList">
+          <div
+            class="engagement-metric-card clickable"
+            v-if="stats?.openedTrova !== undefined || isLoadingActions"
+            @click="openOpenedTrovaList"
+          >
             <div class="metric-icon-small">
               <ion-icon :icon="openOutline"></ion-icon>
             </div>
             <div class="metric-content-small">
-              <div class="metric-value-small">{{ formatNumber(stats.openedTrova) }}</div>
-              <div class="metric-label-small">Trova Opens</div>
+              <div class="metric-value-small">
+                <ion-spinner v-if="isLoadingActions && stats?.openedTrova === undefined" name="crescent" class="metric-spinner-small"></ion-spinner>
+                <span v-else>{{ formatNumber(stats?.openedTrova) }}</span>
+              </div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Trova Opens</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.trovaOpens"
+                ></ion-icon>
+              </div>
             </div>
           </div>
-          <div class="engagement-metric-card" v-if="stats?.profileScore !== undefined">
+          <div
+            class="engagement-metric-card"
+            v-if="stats?.profileScore !== undefined"
+          >
             <div class="metric-icon-small">
               <ion-icon :icon="starOutline"></ion-icon>
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">{{ formatNumber(stats.profileScore, 1) }}</div>
-              <div class="metric-label-small">Avg Profile Score</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Avg Profile Score</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.avgProfileScore"
+                ></ion-icon>
+              </div>
             </div>
           </div>
           <div 
@@ -110,32 +171,49 @@
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">{{ formatNumber(stats.userOnboardingIntros) }}</div>
-              <div class="metric-label-small">Automated Onboarding Introductions</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Automated Onboarding Introductions</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.onboardingIntros"
+                ></ion-icon>
+              </div>
             </div>
           </div>
           <div 
             class="engagement-metric-card clickable"
-            v-if="stats?.selfIntroduced !== undefined"
+            v-if="stats?.selfIntroduced !== undefined || isLoadingActions"
             @click="openSelfIntroducedList"
           >
             <div class="metric-icon-small">
               <ion-icon :icon="starOutline"></ion-icon>
             </div>
             <div class="metric-content-small">
-              <div class="metric-value-small">{{ formatNumber(stats.selfIntroduced) }}</div>
-              <div class="metric-label-small">Self-Introductions Posted</div>
+              <div class="metric-value-small">
+                <ion-spinner v-if="isLoadingActions && stats?.selfIntroduced === undefined" name="crescent" class="metric-spinner-small"></ion-spinner>
+                <span v-else>{{ formatNumber(stats?.selfIntroduced) }}</span>
+              </div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Self-Introductions Posted</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.selfIntroductions"
+                ></ion-icon>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
       <!-- Engagement Attribution -->
-      <div v-if="hasEngagementAttributionData" class="engagement-metrics-section">
+      <div v-if="hasEngagementAttributionData || isLoadingEngagement" class="engagement-metrics-section">
         <h3 class="section-subtitle">Engagement by Feature</h3>
         <div class="engagement-metrics-grid">
           <div 
             class="engagement-metric-card clickable" 
-            v-if="stats?.trovaMagicEngagements !== undefined || stats?.trovaMagicMatches !== undefined"
+            v-if="stats?.trovaMagicEngagements !== undefined || stats?.trovaMagicMatches !== undefined || isLoadingEngagement"
             @click="navigateToMagicIntros"
           >
             <div class="metric-icon-small">
@@ -143,20 +221,31 @@
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">
-                <span v-if="stats?.trovaMagicEngagements !== undefined && stats?.trovaMagicMatches !== undefined">
+                <ion-spinner v-if="isLoadingEngagement && stats?.trovaMagicMatches === undefined && !magicIntroSummary" name="crescent" class="metric-spinner-small"></ion-spinner>
+                <span v-else-if="magicIntroSummary">
+                  {{ formatNumber(magicIntroSummary.engagedPairs) }}/{{ formatNumber(magicIntroSummary.totalPairs) }}
+                </span>
+                <span v-else-if="stats?.trovaMagicEngagements !== undefined && stats?.trovaMagicMatches !== undefined">
                   {{ formatNumber(stats.trovaMagicEngagements || 0) }}/{{ formatNumber(stats.trovaMagicMatches) }}
                 </span>
                 <span v-else-if="stats?.trovaMagicMatches !== undefined">
                   {{ formatNumber(stats.trovaMagicEngagements || 0) }}/{{ formatNumber(stats.trovaMagicMatches) }}
                 </span>
-                <span v-else>{{ formatNumber(stats.trovaMagicEngagements || 0) }}</span>
+                <span v-else>{{ formatNumber(stats?.trovaMagicEngagements || 0) }}</span>
               </div>
-              <div class="metric-label-small">Magic Intros (Engaged / Total)</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Magic Intros (Engaged / Total)</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.magicIntros"
+                ></ion-icon>
+              </div>
             </div>
           </div>
           <div 
             class="engagement-metric-card clickable" 
-            v-if="stats?.channelPairingEngagements !== undefined || stats?.channelPairingMatches !== undefined"
+            v-if="stats?.channelPairingEngagements !== undefined || stats?.channelPairingMatches !== undefined || isLoadingEngagement"
             @click="navigateToChannelPairings"
           >
             <div class="metric-icon-small">
@@ -164,20 +253,28 @@
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">
-                <span v-if="stats?.channelPairingEngagements !== undefined && stats?.channelPairingMatches !== undefined">
+                <ion-spinner v-if="isLoadingEngagement && stats?.channelPairingMatches === undefined" name="crescent" class="metric-spinner-small"></ion-spinner>
+                <span v-else-if="stats?.channelPairingEngagements !== undefined && stats?.channelPairingMatches !== undefined">
                   {{ formatNumber(stats.channelPairingEngagements || 0) }}/{{ formatNumber(stats.channelPairingMatches) }}
                 </span>
                 <span v-else-if="stats?.channelPairingMatches !== undefined">
                   {{ formatNumber(stats.channelPairingEngagements || 0) }}/{{ formatNumber(stats.channelPairingMatches) }}
                 </span>
-                <span v-else>{{ formatNumber(stats.channelPairingEngagements || 0) }}</span>
+                <span v-else>{{ formatNumber(stats?.channelPairingEngagements || 0) }}</span>
               </div>
-              <div class="metric-label-small">Channel Pairings (Engaged / Total)</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Channel Pairings (Engaged / Total)</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.channelPairings"
+                ></ion-icon>
+              </div>
             </div>
           </div>
           <div 
             class="engagement-metric-card clickable" 
-            v-if="stats?.mentorMenteeEngagements !== undefined || stats?.mentorMenteeMatches !== undefined"
+            v-if="stats?.mentorMenteeEngagements !== undefined || stats?.mentorMenteeMatches !== undefined || isLoadingEngagement"
             @click="navigateToMentorMenteeMatches"
           >
             <div class="metric-icon-small">
@@ -185,7 +282,8 @@
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">
-                <span v-if="stats?.mentorMenteeMatches !== undefined && stats?.mentorMenteeUniquePairs !== undefined">
+                <ion-spinner v-if="isLoadingEngagement && stats?.mentorMenteeMatches === undefined" name="crescent" class="metric-spinner-small"></ion-spinner>
+                <span v-else-if="stats?.mentorMenteeMatches !== undefined && stats?.mentorMenteeUniquePairs !== undefined">
                   {{ formatNumber(stats.mentorMenteeUniquePairs) }}/{{ formatNumber(stats.mentorMenteeMatches) }}
                 </span>
                 <span v-else-if="stats?.mentorMenteeMatches !== undefined">
@@ -193,15 +291,25 @@
                 </span>
                 <span v-else>0</span>
               </div>
-              <div class="metric-label-small">Mentor Matches (Unique / Total)</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Mentor Matches (Unique / Total)</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.mentorMatches"
+                ></ion-icon>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
       <!-- Skills Metrics -->
-      <div v-if="hasSkillsData" class="engagement-metrics-section">
+      <div v-if="hasSkillsData || isLoadingSkills" class="engagement-metrics-section">
         <h3 class="section-subtitle">Skills</h3>
+        <div v-if="isLoadingSkills && !hasSkillsData" class="section-loading-indicator">
+          <ion-spinner name="dots"></ion-spinner>
+        </div>
         <div class="engagement-metrics-grid">
           <div 
             class="engagement-metric-card clickable" 
@@ -213,7 +321,14 @@
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">{{ formatNumber(stats.totalSkills) }}</div>
-              <div class="metric-label-small">Skills Added to Profiles</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Skills Added to Profiles</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.skillsAdded"
+                ></ion-icon>
+              </div>
             </div>
           </div>
           <div 
@@ -226,7 +341,14 @@
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">{{ formatNumber(stats.usersCanMentor) }}</div>
-              <div class="metric-label-small">Users Available to Mentor</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Users Available to Mentor</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.usersCanMentor"
+                ></ion-icon>
+              </div>
             </div>
           </div>
           <div 
@@ -239,7 +361,14 @@
             </div>
             <div class="metric-content-small">
               <div class="metric-value-small">{{ formatNumber(stats.usersWantMentor) }}</div>
-              <div class="metric-label-small">Users Seeking Mentorship</div>
+              <div class="metric-label-with-info">
+                <span class="metric-label-small">Users Seeking Mentorship</span>
+                <ion-icon
+                  :icon="informationCircleOutline"
+                  class="metric-info-icon"
+                  :title="metricTooltips.usersWantMentor"
+                ></ion-icon>
+              </div>
             </div>
           </div>
         </div>
@@ -262,8 +391,8 @@
       </div>
     </div>
 
-    <!-- No Stats Available -->
-    <div v-else class="no-stats">
+    <!-- No Stats Available (only shown after loading completes with no data) -->
+    <div v-if="!isLoading && !stats && !hasAnyData" class="no-stats">
       <ion-icon :icon="statsChartOutline" class="no-stats-icon"></ion-icon>
       <p>Statistics not available</p>
       <p class="no-stats-hint">This feature requires backend support. The stats endpoint is not currently available.</p>
@@ -651,6 +780,9 @@ import { useRouter } from 'vue-router';
 import { adminService, type UserStats, type ConversationStarted, type SelfIntroducedUserRow } from '@/services/admin.service';
 import { profileService, type ProfilesInit } from '@/services/profile.service';
 import { toastController } from '@ionic/vue';
+import { fetchMagicIntroSummary } from '@/services/magic-intro.service';
+import type { MagicIntroSummary, DateRange } from '@/types/magic-intros';
+import { devWarn } from '@/utils/logger';
 import {
   IonButton,
   IonIcon,
@@ -687,10 +819,12 @@ import {
   bookOutline,
   checkmarkDoneOutline,
   closeOutline,
+  informationCircleOutline,
 } from 'ionicons/icons';
 
 interface Props {
   communityId: number | null;
+  communityName?: string | null;
 }
 
 const props = defineProps<Props>();
@@ -706,10 +840,18 @@ const emit = defineEmits<{
 
 const router = useRouter();
 const isLoading = ref(false);
+const isLoadingPrimary = ref(true);
+const isLoadingActions = ref(true);
+const isLoadingEngagement = ref(true);
+const isLoadingSkills = ref(true);
+const isLoadingProfileCompletion = ref(true);
 const stats = ref<Partial<UserStats> | null>(null);
+const magicIntroSummary = ref<MagicIntroSummary | null>(null);
+const isLoadingMagicIntroSummary = ref(false);
+const magicIntroSummaryError = ref<string | null>(null);
 const skillsStats = ref<Array<{ name: string; count: number }>>([]);
 const isSlackCommunity = ref(false); // TODO: Determine from community data
-const selectedPeriod = ref<'all-time' | '12-months' | '6-months' | '3-months' | '1-month'>('12-months'); // Default to past 12 months
+const selectedPeriod = ref<'all-time' | '2-years' | '18-months' | '12-months' | '6-months' | '3-months' | '1-month'>('3-months'); // Default to past 3 months for faster load
 const isProfileModalOpen = ref(false);
 const isLoadingProfiles = ref(false);
 const profileRows = ref<Array<{
@@ -816,6 +958,17 @@ const hasEngagementAttributionData = computed(() => {
   );
 });
 
+const magicIntroDateRange = computed<DateRange | undefined>(() => {
+  const { start, end } = getDateRangeForPeriod(selectedPeriod.value);
+  if (!start || !end) {
+    return undefined;
+  }
+  // Backend accepts YYYY-MM-DD; truncate any time component if present.
+  const startDate = start.split('T')[0];
+  const endDate = end.split('T')[0];
+  return { startDate, endDate };
+});
+
 const hasSkillsData = computed(() => {
   if (!stats.value) return false;
   return !!(
@@ -833,6 +986,35 @@ const hasChannelPairingData = computed(() => {
     stats.value.channelPairingUsers !== undefined
   );
 });
+
+const metricTooltips: Record<string, string> = {
+  profileCompletion:
+    'Share of users with key profile fields filled in (bio, interests, location, photo, etc.). Calculated from profile data for the selected time period.',
+  introductionsCreated:
+    'Unique introduction groups created (Trova Magic, Channel Pairing, Mentor/Mentee) in the selected time period. Groups are de-duplicated so the same set of people only counts once.',
+  messagesExchanged:
+    'Total messages sent across all Trova conversations (Magic Intros, Channel Pairings, Mentor Matches) in the selected time period, based on the conversations-started endpoint.',
+  trovaOpens:
+    'Total times users opened the Trova home experience in the selected time period, aggregated from the slack-user-stats “homepage views / Trova opens” column.',
+  avgProfileScore:
+    'Average profile completeness score across users (0–100), based on how many core profile fields each user has filled out.',
+  onboardingIntros:
+    'Automated welcome introductions sent to new users via the Weekly Introductions workflow during the selected time period.',
+  selfIntroductions:
+    'Number of self-introduction posts (intro messages users wrote about themselves) created in the selected time period.',
+  magicIntros:
+    'Magic Intro groups that led to at least one conversation vs. total Magic Intro groups created in the selected time period.',
+  channelPairings:
+    'Channel pairing groups (2–5 people) that had an engaged conversation (2+ members sending messages) vs. total channel pairing groups created.',
+  mentorMatches:
+    'Unique mentor/mentee pairs vs. total mentor sessions created in the selected time period.',
+  skillsAdded:
+    'Distinct skills that have been added to at least one profile in this community.',
+  usersCanMentor:
+    'Users who have indicated they are available to mentor, based on profile and skills settings.',
+  usersWantMentor:
+    'Users who have indicated they are seeking mentorship, based on profile and skills settings.',
+};
 
 function formatNumber(value: number | undefined | null, decimals: number = 0): string {
   if (value === undefined || value === null) return '0';
@@ -1141,6 +1323,12 @@ async function loadOpenedTrovaUsers() {
         // Only include users who have opened Trova at least once
         return user.openedCount > 0;
       });
+
+    // Sync aggregate on the main card from the same data so "Trova Opens" matches the drill-down
+    const totalOpened = openedTrovaRows.value.reduce((sum, r) => sum + r.openedCount, 0);
+    if (totalOpened > 0 && stats.value) {
+      stats.value.openedTrova = totalOpened;
+    }
   } catch (error: any) {
     console.error('[UserStatsSection] Failed to load opened Trova users:', error);
     openedTrovaError.value = error?.message || 'Failed to load user data. Please try again later.';
@@ -1594,8 +1782,8 @@ function getSelfIntroducedSortIcon(column: 'name' | 'date' | 'channel'): string 
 
 function navigateToMagicIntros() {
   if (!props.communityId) return;
-  const { start, end } = getDateRangeForPeriod(selectedPeriod.value);
-  emit('openMagicIntros', start, end);
+  const range = magicIntroDateRange.value;
+  emit('openMagicIntros', range?.startDate, range?.endDate);
 }
 
 function navigateToChannelPairings() {
@@ -1643,8 +1831,14 @@ function getDateRangeForPeriod(period: string): { start: string | undefined; end
   
   // Start date: N months ago from today
   // Calculate months to subtract
-  let monthsToSubtract = 12;
+  let monthsToSubtract = 6;
   switch (period) {
+    case '2-years':
+      monthsToSubtract = 24;
+      break;
+    case '18-months':
+      monthsToSubtract = 18;
+      break;
     case '12-months':
       monthsToSubtract = 12;
       break;
@@ -1658,7 +1852,7 @@ function getDateRangeForPeriod(period: string): { start: string | undefined; end
       monthsToSubtract = 1;
       break;
     default:
-      monthsToSubtract = 12;
+      monthsToSubtract = 6;
   }
   
   // Get current UTC date components
@@ -1688,11 +1882,18 @@ function getDateRangeForPeriod(period: string): { start: string | undefined; end
     0, 0, 0, 0
   ));
   
-  
   return {
-    start: start.toISOString(),
-    end: end.toISOString(),
+    // Use date-only ISO format (YYYY-MM-DD) as the single source of truth
+    // for all stats endpoints (including Magic Intros).
+    start: start.toISOString().split('T')[0],
+    end: end.toISOString().split('T')[0],
   };
+}
+
+function toUtcDayBounds(range: { start?: string; end?: string }): { start?: string; end?: string } {
+  const start = range.start ? `${range.start}T00:00:00.000Z` : undefined;
+  const end = range.end ? `${range.end}T23:59:59.999Z` : undefined;
+  return { start, end };
 }
 
 function onPeriodChange() {
@@ -1721,179 +1922,203 @@ async function loadStats() {
   if (!props.communityId) return;
 
   isLoading.value = true;
-  try {
-    const { start, end } = getDateRangeForPeriod(selectedPeriod.value);
-    
-    // getEngagementStats will try backend endpoint first, then calculate from existing data
-    const engagementStats = await adminService.getEngagementStats(props.communityId, start, end);
-    
-    if (engagementStats) {
-      stats.value = { ...engagementStats }; // Create a new object to ensure reactivity
-    } else {
-      // Fallback: Initialize with zeros if calculation also fails
-      stats.value = {
-        totalUsers: 0,
-        activeUsers: 0,
-        newUsersThisMonth: 0,
-      };
-    }
+  isLoadingPrimary.value = true;
+  isLoadingActions.value = true;
+  isLoadingEngagement.value = true;
+  isLoadingSkills.value = true;
+  isLoadingProfileCompletion.value = true;
 
-    // Fetch additional metrics in parallel (non-blocking, updates reactively)
-    Promise.allSettled([
-      adminService.getUserActionsStats(props.communityId, start, end),
-      adminService.getSkillsStats(props.communityId),
-      adminService.getChannelPairingStats(props.communityId, start, end),
-      adminService.getConversationsStarted(props.communityId, start, end),
-      adminService.getActiveUserStats(props.communityId, start, end),
-      adminService.getWeeklyIntroductionsStats(props.communityId),
-      adminService.getSelfIntroducedStats(props.communityId, start, end),
-  ]).then(([userActions, skills, channelPairing, conversationsStarted, activeUsers, weeklyIntroductions, selfIntroduced]) => {
-      // Update stats reactively by creating a new object
-      if (!stats.value) {
-        stats.value = {};
+  const { start, end } = getDateRangeForPeriod(selectedPeriod.value);
+  const communityId = props.communityId;
+
+  // Initialize stats object immediately so the UI skeleton can render
+  stats.value = { totalUsers: 0, activeUsers: 0, newUsersThisMonth: 0 };
+
+  // Fields that should not be overwritten once set by their authoritative source
+  const engagementAttributionFields = [
+    'trovaMagicEngagements', 'channelPairingEngagements', 'mentorMenteeEngagements',
+    'trovaMagicMatches', 'channelPairingMatches', 'mentorMenteeMatches', 'mentorMenteeUniquePairs',
+  ];
+  const conversationsOwnedFields = ['trovaChatsStarted'];
+  const profileOwnedFields = ['profileCompletionRate', 'profileCompletionCompleted', 'profileCompletionTotal'];
+  const introductionsOwnedFields = ['connectionsMade'];
+
+  const mergeIntoStats = (source: Partial<UserStats>, skipFields: string[] = []) => {
+    if (!stats.value) stats.value = {};
+    Object.keys(source).forEach(key => {
+      if (skipFields.includes(key)) return;
+      const value = source[key as keyof UserStats];
+      if (value !== undefined && value !== null) {
+        (stats.value as any)[key] = value;
       }
-      
-      const updatedStats = { ...stats.value };
-      
-      // Helper to merge stats safely - preserve existing non-zero values
-      // Engagement attribution metrics (trovaMagicEngagements, channelPairingEngagements, etc.)
-      // should not be overwritten by getUserActionsStats since calculateMatchEngagementStats is authoritative
-      const engagementAttributionFields = [
-        'trovaMagicEngagements',
-        'channelPairingEngagements',
-        'mentorMenteeEngagements',
-        'trovaMagicMatches',
-        'channelPairingMatches',
-        'mentorMenteeMatches',
-        'mentorMenteeUniquePairs',
-      ];
-      
-      const mergeStats = (source: Partial<UserStats>, target: Partial<UserStats>, skipFields: string[] = []) => {
-        Object.keys(source).forEach(key => {
-          // Skip fields that should not be overwritten
-          if (skipFields.includes(key)) {
-            return;
-          }
-          
-          const value = source[key as keyof UserStats];
-          const existingValue = target[key as keyof UserStats];
-          
-          // Only merge if value is not undefined and not null
-          if (value !== undefined && value !== null) {
-            if (typeof value === 'number') {
-              // For numbers: always merge (including 0, which is a valid count)
-              // This ensures all calculated stats are included, even if they're 0
-              target[key as keyof UserStats] = value;
-            } else {
-              // For non-numbers: always merge if not undefined/null
-              target[key as keyof UserStats] = value;
-            }
-          }
-        });
-      };
-      
-      // Merge user actions stats
-      // Skip engagement attribution fields since they're set by calculateMatchEngagementStats
-      if (userActions.status === 'fulfilled' && userActions.value) {
-        mergeStats(userActions.value, updatedStats, engagementAttributionFields);
-      }
-      // Merge skills stats
-      if (skills.status === 'fulfilled' && skills.value) {
-        mergeStats(skills.value, updatedStats);
-      }
-      // Merge channel pairing stats
-      if (channelPairing.status === 'fulfilled' && channelPairing.value) {
-        mergeStats(channelPairing.value, updatedStats);
-      }
-      // Merge conversations started stats (replaces Trova Chats Started)
-      if (conversationsStarted.status === 'fulfilled' && conversationsStarted.value) {
-        // Use totalMessages from the new endpoint
-        const totalMessages = conversationsStarted.value.totalMessages || 0;
-        const totalConversations = conversationsStarted.value.totalConversations || 0;
-        const conversationsCount = conversationsStarted.value.conversations?.length || 0;
-        
-        if (conversationsStarted.value.conversations && conversationsStarted.value.conversations.length > 0) {
-          const sumOfMessageCounts = conversationsStarted.value.conversations.reduce((sum, conv) => sum + (conv.messageCount || 0), 0);
-          if (sumOfMessageCounts !== totalMessages) {
-            console.warn(`[UserStatsSection] Mismatch: sum of message counts (${sumOfMessageCounts}) != totalMessages (${totalMessages})`);
-          }
-        }
-        
-        updatedStats.trovaChatsStarted = totalMessages;
-      } else if (conversationsStarted.status === 'rejected') {
-        // Fallback: try old method if new endpoint fails (async, but we'll handle it separately)
-        console.warn('[UserStatsSection] Conversations started endpoint failed, will try fallback method');
-        // Set to 0 for now, fallback will update it asynchronously
-        updatedStats.trovaChatsStarted = 0;
-        
-        // Try fallback asynchronously (non-blocking)
-        if (props.communityId !== null) {
-            adminService.getMessagesFromMatches(props.communityId, start, end)
-            .then((fallback) => {
-              if (fallback && stats.value) {
-                stats.value.trovaChatsStarted = fallback.totalMessagesSent || 0;
-              }
-            })
-            .catch((error) => {
-              console.warn('[UserStatsSection] Fallback method also failed:', error);
-            });
-          }
-      }
-      // Merge active user stats
-      if (activeUsers.status === 'fulfilled' && activeUsers.value) {
-        mergeStats(activeUsers.value, updatedStats);
-      }
-      // Merge weekly introductions stats
-      if (weeklyIntroductions.status === 'fulfilled') {
-        if (weeklyIntroductions.value) {
-          mergeStats(weeklyIntroductions.value, updatedStats);
+    });
+    // Trigger reactivity
+    stats.value = { ...stats.value };
+  };
+
+  // Magic Intros summary (fire-and-forget, has its own loading state)
+  const magicRange = magicIntroDateRange.value;
+  isLoadingMagicIntroSummary.value = true;
+  magicIntroSummaryError.value = null;
+  magicIntroSummary.value = null;
+  if (magicRange && communityId) {
+    fetchMagicIntroSummary(communityId, magicRange)
+      .then((summary) => { magicIntroSummary.value = summary; })
+      .catch((error: any) => {
+        console.error('[UserStatsSection] Failed to load Magic Intro summary:', error);
+        magicIntroSummaryError.value = error?.message || 'Failed to load Magic Intro summary';
+      })
+      .finally(() => { isLoadingMagicIntroSummary.value = false; });
+  } else {
+    isLoadingMagicIntroSummary.value = false;
+  }
+
+  // Fire ALL independent data fetches in parallel. Each updates stats progressively.
+  const allPromises: Promise<void>[] = [];
+
+  // Primary metrics + engagement attribution (profiles, events, groups, matches)
+  allPromises.push(
+    adminService.getEngagementStats(communityId, start, end)
+      .then((result) => {
+        if (result) mergeIntoStats(result, [...conversationsOwnedFields, ...profileOwnedFields, ...introductionsOwnedFields]);
+      })
+      .catch((error) => { console.error('Error loading engagement stats:', error); })
+      .finally(() => { isLoadingPrimary.value = false; isLoadingEngagement.value = false; })
+  );
+
+  // User actions (Trova Opens, profile score, etc.)
+  allPromises.push(
+    adminService.getUserActionsStats(communityId, start, end)
+      .then((result) => {
+        if (result) mergeIntoStats(result, engagementAttributionFields);
+      })
+      .catch(() => {})
+      .finally(() => { isLoadingActions.value = false; })
+  );
+
+  // Skills + mentor/mentee
+  allPromises.push(
+    adminService.getSkillsStats(communityId)
+      .then((result) => {
+        if (result) mergeIntoStats(result);
+      })
+      .catch(() => {})
+      .finally(() => { isLoadingSkills.value = false; })
+  );
+
+  // Channel pairing
+  allPromises.push(
+    adminService.getChannelPairingStats(communityId, start, end)
+      .then((result) => {
+        if (result) mergeIntoStats(result);
+      })
+      .catch(() => {})
+  );
+
+  // Messages Exchanged — only counts messages in Trova-created channels
+  allPromises.push(
+    adminService.getMessagesExchangedStats(communityId, start, end)
+      .then((result) => {
+        if (result) {
+          mergeIntoStats({ trovaChatsStarted: result.total } as Partial<UserStats>);
         } else {
-          // Endpoint returned null (404 or error), set to 0 so stat is defined
-          updatedStats.userOnboardingIntros = 0;
+          // Fallback to conversations-started if new endpoint not deployed yet
+          return adminService.getConversationsStarted(communityId, start, end)
+            .then((fallback) => {
+              mergeIntoStats({ trovaChatsStarted: fallback?.totalMessages || 0 } as Partial<UserStats>);
+            });
         }
-      }
-      // Merge self-introduced stats
-      if (selfIntroduced.status === 'fulfilled') {
-        if (selfIntroduced.value) {
-          mergeStats(selfIntroduced.value, updatedStats);
+      })
+      .catch((error) => {
+        console.warn('[UserStatsSection] Messages exchanged fetch failed:', error);
+        mergeIntoStats({ trovaChatsStarted: 0 } as Partial<UserStats>);
+      })
+  );
 
-          // If stats endpoint returned a count, also fetch users to verify/update the count
-          // This ensures the stat card shows the correct count even if stats endpoint is inaccurate
-          if (updatedStats.selfIntroduced !== undefined && updatedStats.selfIntroduced !== null && props.communityId !== null && start && end) {
-            adminService.getSelfIntroducedUsers(props.communityId, start, end)
+  // Introductions Created — distinct Trova-created channels from user_match
+  allPromises.push(
+    adminService.getIntroductionsCreatedStats(communityId, start, end)
+      .then((result) => {
+        if (result) {
+          mergeIntoStats({ connectionsMade: result.total } as Partial<UserStats>);
+        } else {
+          // Fallback to connections-count if new endpoint not deployed yet
+          return adminService.getMatchResponseStats(communityId, start, end)
+            .then((fallback) => {
+              if (fallback) mergeIntoStats({ connectionsMade: fallback.connectionsMade } as Partial<UserStats>);
+            });
+        }
+      })
+      .catch((error) => {
+        devWarn('[UserStatsSection] Introductions created fetch failed:', error);
+        mergeIntoStats({ connectionsMade: 0 } as Partial<UserStats>);
+      })
+  );
+
+  // Weekly introductions
+  allPromises.push(
+    adminService.getWeeklyIntroductionsStats(communityId)
+      .then((result) => {
+        if (result) {
+          mergeIntoStats(result);
+        } else {
+          mergeIntoStats({ userOnboardingIntros: 0 } as Partial<UserStats>);
+        }
+      })
+      .catch(() => {})
+  );
+
+  // Self-introduced
+  allPromises.push(
+    adminService.getSelfIntroducedStats(communityId, start, end)
+      .then((result) => {
+        if (result) {
+          mergeIntoStats(result);
+          if (result.selfIntroduced !== undefined && result.selfIntroduced !== null && communityId !== null && start && end) {
+            adminService.getSelfIntroducedUsers(communityId, start, end)
               .then((users) => {
                 if (users && users.length > 0 && stats.value) {
                   const actualCount = users.length;
                   if (stats.value.selfIntroduced !== actualCount) {
                     stats.value.selfIntroduced = actualCount;
+                    stats.value = { ...stats.value };
                   }
                 }
               })
               .catch((error) => {
-                console.warn('[UserStatsSection] Failed to verify self-introduced count with users endpoint:', error);
+                devWarn('[UserStatsSection] Failed to verify self-introduced count:', error);
               });
           }
         } else {
-          // Endpoint returned null (404 or error), set to 0 so stat is defined
-          console.warn(`[UserStatsSection] Self-introduced stats endpoint returned null`);
-          updatedStats.selfIntroduced = 0;
+          devWarn('[UserStatsSection] Self-introduced stats endpoint returned null');
+          mergeIntoStats({ selfIntroduced: 0 } as Partial<UserStats>);
         }
-      } else if (selfIntroduced.status === 'rejected') {
-        console.error(`[UserStatsSection] Self-introduced stats fetch rejected:`, selfIntroduced.reason);
-      }
-      
-      // Update the reactive stats object
-      stats.value = updatedStats;
-    }).catch((error) => {
-      console.warn('[UserStatsSection] Error loading additional metrics:', error);
-      // Silently fail - these are additional metrics
-    });
-  } catch (error) {
-    console.error('Error loading stats:', error);
-    stats.value = null;
-  } finally {
-    isLoading.value = false;
-  }
+      })
+      .catch((error) => {
+        console.error('[UserStatsSection] Self-introduced stats fetch rejected:', error);
+      })
+  );
+
+  // Profile completion via lightweight aggregate endpoint (no full profile fetch)
+  allPromises.push(
+    adminService.getProfileCompletionStats(communityId)
+      .then((result) => {
+        if (result) {
+          const rate = result.total > 0 ? (result.completed / result.total) * 100 : 0;
+          mergeIntoStats({
+            profileCompletionCompleted: result.completed,
+            profileCompletionTotal: result.total,
+            profileCompletionRate: rate,
+          } as Partial<UserStats>);
+        }
+      })
+      .catch(() => {})
+      .finally(() => { isLoadingProfileCompletion.value = false; })
+  );
+
+  // Wait for all to settle, then mark global loading as done
+  await Promise.allSettled(allPromises);
+  isLoading.value = false;
 }
 
 async function exportStats() {
@@ -2096,18 +2321,48 @@ async function exportStats() {
   flex: 1;
 }
 
+.metric-spinner {
+  width: 24px;
+  height: 24px;
+  color: var(--color-primary);
+}
+
+.metric-spinner-small {
+  width: 20px;
+  height: 20px;
+  color: var(--color-primary);
+}
+
 .metric-value {
   font-size: 28px;
   font-weight: 700;
   color: var(--color-primary);
   margin-bottom: 4px;
   line-height: 1.2;
+  min-height: 34px;
 }
 
 .metric-label {
   font-size: 13px;
   color: #64748b;
   font-weight: 500;
+}
+
+.metric-label-with-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.metric-info-icon {
+  font-size: 16px;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
+.metric-info-icon:hover {
+  color: var(--color-primary);
 }
 
 .metric-trend {
@@ -2180,6 +2435,7 @@ async function exportStats() {
   color: #1a1a1a;
   margin-bottom: 4px;
   line-height: 1.2;
+  min-height: 34px;
 }
 
 .engagement-metric-header {
@@ -2290,6 +2546,13 @@ async function exportStats() {
   text-align: center;
   padding: 48px 16px;
   color: #64748b;
+}
+
+.section-loading-indicator {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0 4px;
+  color: var(--color-primary, #16a34a);
 }
 
 .no-stats {

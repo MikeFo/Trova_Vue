@@ -1,6 +1,7 @@
 <template>
-  <div 
+  <div
     class="org-node-wrapper"
+    :class="{ 'org-chain-member': isSelfOnChain }"
     :data-slack-id="datasource.slackId"
     :data-node-id="datasource.id"
     ref="nodeWrapper"
@@ -19,13 +20,14 @@
             v-if="datasource.profilePicture"
             :src="datasource.profilePicture"
             :alt="datasource.name"
+            loading="lazy"
           />
           <div v-else class="org-node-avatar-placeholder">
             {{ datasource.name.charAt(0).toUpperCase() }}
           </div>
         </div>
         <button
-          v-if="hasChildren"
+          v-if="hasAnyChildren"
           class="org-node-toggle"
           @click.stop="toggleExpand"
           :aria-label="isCollapsed ? 'Expand' : 'Collapse'"
@@ -33,7 +35,7 @@
           <ion-icon :icon="isCollapsed ? add : remove"></ion-icon>
         </button>
       </div>
-      
+
       <div class="org-node-content">
         <div class="org-node-name">{{ datasource.name }}</div>
         <div v-if="datasource.title && displayFlags.showTitle" class="org-node-title">
@@ -52,33 +54,42 @@
           {{ datasource.team }}
         </div>
       </div>
+
+      <div v-if="hiddenLabel" class="org-node-hidden-count">
+        {{ hiddenLabel }}
+      </div>
     </div>
 
+    <!-- Children: only mount when expanded AND within depth limit -->
     <div
-      v-if="hasChildren"
+      v-if="hasVisibleChildren && !isCollapsed"
       class="org-node-children"
-      :class="{ 'org-node-collapsed': isCollapsed }"
+      :class="{ 'org-connector-down--chain': isSelfOnChain }"
     >
       <div
-        v-for="(group, groupIndex) in childGroups"
+        v-for="(group, groupIndex) in visibleChildGroups"
         :key="`group-${groupIndex}`"
         class="org-group"
+        :class="{ 'org-group--chain': groupTouchesChain(group) }"
       >
         <div
           v-for="child in group"
           :key="child.id || child.slackId"
           class="org-node-child"
+          :class="{ 'org-node-child--chain': isInReportingChain(child.slackId) }"
         >
-              <OrgChartNode
-                :datasource="child"
-                :display-flags="displayFlags"
-                :group-scale="groupScale"
-                :is-selected="selectedNodeId === child.id"
-                :is-highlighted="highlightedSlackId === child.slackId"
-                :highlighted-slack-id="highlightedSlackId || props.highlightedSlackId"
-                @node-click="handleChildNodeClick"
-                @select-node="handleSelectNode"
-              />
+          <OrgChartNode
+            :datasource="child"
+            :display-flags="displayFlags"
+            :group-scale="groupScale"
+            :max-render-depth="maxRenderDepth"
+            :reporting-chain-slack-ids="reportingChainSlackIds"
+            :is-selected="selectedNodeId === child.id"
+            :is-highlighted="highlightedSlackId === child.slackId"
+            :highlighted-slack-id="activeHighlightedSlackId"
+            @node-click="handleChildNodeClick"
+            @select-node="handleSelectNode"
+          />
         </div>
       </div>
     </div>
@@ -86,14 +97,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch, inject } from 'vue';
 import { add, remove } from 'ionicons/icons';
 import { IonIcon } from '@ionic/vue';
 import type { OrgNode, OrgChartDisplayFlags } from '@/models/org-chart';
 
 const nodeWrapper = ref<HTMLElement | null>(null);
 
-// Expose node element for centering
 defineExpose({
   nodeElement: nodeWrapper,
 });
@@ -102,10 +112,27 @@ const props = defineProps<{
   datasource: OrgNode;
   displayFlags: OrgChartDisplayFlags;
   groupScale?: number;
+  maxRenderDepth?: number;
+  /** Slack IDs on the path from org root to the focused user (from API slackIdsInChain). */
+  reportingChainSlackIds?: string[];
   isSelected?: boolean;
   isHighlighted?: boolean;
   highlightedSlackId?: string | null;
 }>();
+
+/** Set when user clicks expand — shows all direct reports regardless of maxRenderDepth. */
+const manualDepthBypass = inject<Record<string, boolean>>('orgChartManualDepthBypass', {});
+
+const chainSet = computed(() => new Set(props.reportingChainSlackIds ?? []));
+const isSelfOnChain = computed(() => chainSet.value.has(props.datasource.slackId));
+
+function isInReportingChain(slackId: string): boolean {
+  return chainSet.value.has(slackId);
+}
+
+function groupTouchesChain(group: OrgNode[]): boolean {
+  return group.some((c) => chainSet.value.has(c.slackId));
+}
 
 const emit = defineEmits<{
   (e: 'node-click', node: OrgNode): void;
@@ -113,45 +140,86 @@ const emit = defineEmits<{
 }>();
 
 const groupScale = computed(() => props.groupScale || 3);
-// Root node should be expanded by default, children start collapsed
-const isCollapsed = ref(false); // Changed to false - root should show children
-const originalChildren = ref<OrgNode[]>([]);
+const isCollapsed = ref(true);
+const showAllChildren = ref(false);
 const selectedNodeId = ref<string | null>(null);
-const highlightedSlackId = ref<string | null>(props.isHighlighted ? props.datasource.slackId : null);
 
-const hasChildren = computed(() => {
-  return props.datasource.children && props.datasource.children.length > 0;
-});
+const activeHighlightedSlackId = computed(() =>
+  props.highlightedSlackId ?? null
+);
 
-const displayFlags = computed(() => props.displayFlags);
+const hasHighlightedChild = computed(() =>
+  !!props.highlightedSlackId &&
+  !!props.datasource.children?.some(c => c.slackId === props.highlightedSlackId)
+);
 
-// Group children for horizontal layout
-const childGroups = computed(() => {
-  if (!props.datasource.children || props.datasource.children.length === 0) {
-    return [];
+// Derive effective children without mutating props.
+// Replaces the old onMounted prop mutation pattern.
+const effectiveChildren = computed(() => {
+  const children = props.datasource.children;
+  if (!children || children.length === 0) return [];
+
+  if (showAllChildren.value || props.isHighlighted || hasHighlightedChild.value) {
+    return children;
   }
 
+  const expanded = props.datasource.expandedChildrenSlackIds;
+  if (expanded && expanded.length > 0) {
+    const filtered = children.filter(c => expanded.includes(c.slackId));
+    return filtered.length > 0 ? filtered : children;
+  }
+
+  return children;
+});
+
+// Depth-limit filtering (Focused View). Manual expand bypasses so users can drill to the full org.
+const visibleChildren = computed(() => {
+  const max = props.maxRenderDepth;
+  const eff = effectiveChildren.value;
+  if (max === undefined || !isFinite(max)) return eff;
+  if (manualDepthBypass[props.datasource.slackId]) {
+    return eff;
+  }
+  return eff.filter(c => (c._depthFromFocus ?? 0) <= max);
+});
+
+const totalChildCount = computed(() => props.datasource.children?.length ?? 0);
+const hasAnyChildren = computed(() => totalChildCount.value > 0);
+const hasVisibleChildren = computed(() => visibleChildren.value.length > 0);
+
+const depthLimitedCount = computed(() => {
+  if (!hasAnyChildren.value) return 0;
+  return effectiveChildren.value.length - visibleChildren.value.length;
+});
+
+const hiddenLabel = computed(() => {
+  if (isCollapsed.value && totalChildCount.value > 0) {
+    return `+${totalChildCount.value} report${totalChildCount.value !== 1 ? 's' : ''}`;
+  }
+  if (depthLimitedCount.value > 0) {
+    return `+${depthLimitedCount.value} more`;
+  }
+  return '';
+});
+
+const visibleChildGroups = computed(() => {
   const groups: OrgNode[][] = [];
-  const children = props.datasource.children;
-  
+  const children = visibleChildren.value;
   for (let i = 0; i < children.length; i += groupScale.value) {
     groups.push(children.slice(i, i + groupScale.value));
   }
-  
   return groups;
 });
 
 function toggleExpand() {
-  if (!hasChildren.value) return;
-
+  if (!hasAnyChildren.value) return;
+  const sid = props.datasource.slackId;
   if (isCollapsed.value) {
-    // Expanding: restore original children if they were filtered
-    if (originalChildren.value.length > 0 && props.datasource.children) {
-      props.datasource.children = [...originalChildren.value];
-      originalChildren.value = [];
-    }
+    showAllChildren.value = true;
+    manualDepthBypass[sid] = true;
+  } else {
+    delete manualDepthBypass[sid];
   }
-
   isCollapsed.value = !isCollapsed.value;
 }
 
@@ -170,77 +238,18 @@ function handleSelectNode(nodeId: string) {
 }
 
 onMounted(() => {
-  console.log('[OrgChartNode] Mounted with datasource:', {
-    name: props.datasource.name,
-    id: props.datasource.id,
-    childrenCount: props.datasource.children?.length || 0,
-    expandedChildrenSlackIds: props.datasource.expandedChildrenSlackIds
-  });
-  
-  // Always backup all children first (before any filtering)
-  if (props.datasource.children && props.datasource.children.length > 0) {
-    originalChildren.value = [...props.datasource.children];
-  }
-  
-  // Check if any child is the highlighted user (to show siblings)
-  const hasHighlightedChild = props.highlightedSlackId && props.datasource.children?.some(
-    child => child.slackId === props.highlightedSlackId
-  );
-  
-  // Handle initial expansion state based on expandedChildrenSlackIds
-  // BUT: If this node has a highlighted child, show ALL children (to show siblings/teammates)
-  // If this node is highlighted, show ALL its children (direct reports)
-  if (props.isHighlighted || hasHighlightedChild) {
-    // Show all children when viewing a specific user's context
-    // This ensures we see teammates (siblings) and direct reports
-    console.log('[OrgChartNode] Node is highlighted or has highlighted child, showing all children');
-    
-    // If we have originalChildren, restore them to show all siblings
-    if (hasHighlightedChild && originalChildren.value.length > 0) {
-      props.datasource.children = [...originalChildren.value];
-      console.log('[OrgChartNode] Restored all children to show siblings');
-    }
-    
+  const isOnChain = (props.datasource.expandedChildrenSlackIds?.length ?? 0) > 0;
+  const isOrHasHighlighted = props.isHighlighted || hasHighlightedChild.value;
+
+  if (isOrHasHighlighted || isOnChain) {
     isCollapsed.value = false;
-  } else if (props.datasource.expandedChildrenSlackIds && props.datasource.expandedChildrenSlackIds.length > 0) {
-    if (props.datasource.children && props.datasource.children.length > 0) {
-      // Filter to only show children in the reporting chain (for non-highlighted paths)
-      const filteredChildren = props.datasource.children.filter(
-        (child: OrgNode) => props.datasource.expandedChildrenSlackIds!.includes(child.slackId)
-      );
-      
-      console.log('[OrgChartNode] Filtered children:', {
-        total: props.datasource.children.length,
-        filtered: filteredChildren.length
-      });
-      
-      // Only filter if we have filtered children, otherwise show all
-      if (filteredChildren.length > 0 && filteredChildren.length < props.datasource.children.length) {
-        props.datasource.children = filteredChildren;
-      }
-      
-      // Expand if there are children to show
-      isCollapsed.value = false;
-    }
-  } else if (props.datasource.children && props.datasource.children.length > 0) {
-    // If no expandedChildrenSlackIds but has children, expand by default
-    // This handles the root node case and nodes without chain filtering
-    console.log('[OrgChartNode] No expandedChildrenSlackIds, expanding by default');
-    isCollapsed.value = false;
+  } else {
+    isCollapsed.value = true;
   }
-  
-  console.log('[OrgChartNode] Final state:', {
-    isCollapsed: isCollapsed.value,
-    hasChildren: hasChildren.value,
-    childrenCount: props.datasource.children?.length || 0
-  });
 });
 
-
 watch(() => props.isHighlighted, (newVal) => {
-  if (newVal) {
-    highlightedSlackId.value = props.datasource.slackId;
-  }
+  if (newVal) isCollapsed.value = false;
 });
 </script>
 
@@ -251,6 +260,8 @@ watch(() => props.isHighlighted, (newVal) => {
   align-items: center;
   position: relative;
   margin: 20px;
+  /* Do not use contain: paint/content — it clips the expand toggle (positioned outside the card box). */
+  z-index: 1;
 }
 
 .org-node {
@@ -262,8 +273,9 @@ watch(() => props.isHighlighted, (newVal) => {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   border: 2px solid #e5e7eb;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
   position: relative;
+  z-index: 2;
 }
 
 .org-node:hover {
@@ -329,8 +341,9 @@ watch(() => props.isHighlighted, (newVal) => {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  z-index: 10;
-  transition: all 0.2s ease;
+  z-index: 20;
+  pointer-events: auto;
+  transition: background 0.2s ease, color 0.2s ease;
 }
 
 .org-node-toggle:hover {
@@ -370,30 +383,36 @@ watch(() => props.isHighlighted, (newVal) => {
   margin-bottom: 4px;
 }
 
+.org-node-hidden-count {
+  text-align: center;
+  font-size: 11px;
+  color: #6b7280;
+  background: #f3f4f6;
+  border-radius: 10px;
+  padding: 2px 8px;
+  margin-top: 8px;
+}
+
 .org-node-children {
   display: flex;
   flex-direction: column;
   align-items: center;
   margin-top: 40px;
   position: relative;
-  opacity: 1;
-  transition: opacity 0.2s ease;
 }
 
+/* Connectors: thicker, higher-contrast than legacy grey hairlines */
 .org-node-children::before {
   content: '';
   position: absolute;
   top: -20px;
   left: 50%;
   transform: translateX(-50%);
-  width: 2px;
+  width: 3px;
   height: 20px;
-  background: #d1d5db;
-}
-
-.org-node-collapsed {
-  display: none;
-  opacity: 0;
+  border-radius: 2px;
+  background: #64748b;
+  z-index: 1;
 }
 
 .org-group {
@@ -412,12 +431,15 @@ watch(() => props.isHighlighted, (newVal) => {
   top: -20px;
   left: 0;
   right: 0;
-  height: 2px;
-  background: #d1d5db;
+  height: 3px;
+  border-radius: 2px;
+  background: #64748b;
+  z-index: 1;
 }
 
 .org-node-child {
   position: relative;
+  z-index: 1;
 }
 
 .org-node-child::before {
@@ -426,9 +448,45 @@ watch(() => props.isHighlighted, (newVal) => {
   top: -20px;
   left: 50%;
   transform: translateX(-50%);
-  width: 2px;
+  width: 3px;
   height: 20px;
-  background: #d1d5db;
+  border-radius: 2px;
+  background: #64748b;
+  z-index: 1;
+}
+
+/* Reporting chain from API: same path as yellow focus highlight — draw in brand green */
+.org-node-children.org-connector-down--chain::before {
+  background: #2d7a4e;
+  box-shadow: 0 0 0 1px rgba(45, 122, 78, 0.35);
+  z-index: 2;
+}
+
+.org-group.org-group--chain::before {
+  background: #2d7a4e;
+  box-shadow: 0 0 0 1px rgba(45, 122, 78, 0.35);
+  z-index: 2;
+}
+
+.org-node-child.org-node-child--chain::before {
+  background: #2d7a4e;
+  box-shadow: 0 0 0 1px rgba(45, 122, 78, 0.35);
+  z-index: 2;
+}
+
+/* Subtle cue on cards that sit on the reporting chain */
+.org-chain-member .org-node:not(.org-node-highlighted) {
+  border-color: #cbd5e1;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.08),
+    inset 0 0 0 1px rgba(45, 122, 78, 0.12);
+}
+
+/* Connectors must not capture clicks — full-width bus + z-index sat above flex children in some browsers. */
+.org-node-children::before,
+.org-group::before,
+.org-node-child::before {
+  pointer-events: none;
 }
 
 @media (max-width: 768px) {
@@ -453,4 +511,3 @@ watch(() => props.isHighlighted, (newVal) => {
   }
 }
 </style>
-

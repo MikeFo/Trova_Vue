@@ -164,46 +164,54 @@ export class AuthService {
   async signIn(email: string, password: string): Promise<void> {
     this.ensureAuthListener();
     this.authStore.isLoading = true;
-    
+
     try {
-      // In production, the backend handles authentication and manages Firebase users
-      // The backend authenticates, creates/retrieves Firebase user, and returns user data
-      const user = await apiService.post<User>('/auth/login', {
-        email,
-        password,
-      });
-      
+      const { auth } = useFirebase();
+      if (!auth) {
+        throw new Error('Authentication service is not available. Please try again in a moment.');
+      }
+
+      // Primary auth: Firebase email/password (same model as Ionic app).
+      // This establishes the Firebase session; our Axios interceptor will attach the ID token
+      // on subsequent API calls so /users/me and all other endpoints are authenticated.
+      const credential = await signInWithEmailAndPassword(auth, email, password);
+
+      // Optionally force an ID token fetch so it is warm in the client
+      try {
+        await credential.user.getIdToken(true);
+      } catch {
+        // Non-fatal; interceptor will request a token on first API call if needed
+      }
+
+      // Hydrate our app-level user by calling /users/me with the Firebase ID token
+      const user = await this.getUserProfile();
       if (user && user.id) {
-        // Backend authenticated successfully
         this.authStore.setUser(user);
-        
-        // Clear Slack session validation - user is now fully authenticated
         slackSessionService.clearValidation();
-        
-        // Backend handles Firebase user creation/authentication server-side
-        // The user object returned from backend should contain all necessary info
-        // Firebase auth state will be managed by the backend
-        
         return;
-      } else {
-        throw new Error('Invalid response from server');
       }
+
+      throw new Error('Login succeeded but user profile could not be loaded.');
     } catch (error: any) {
-      // Don't log sensitive information
-      const errorMessage = error.response?.data?.message || 
-                          error.message || 
-                          'Login failed. Please check your credentials and try again.';
-      
-      // Provide user-friendly error messages
-      if (error.response?.status === 404) {
+      // Map common Firebase auth error codes to user-friendly messages
+      const code = error?.code || error?.originalError?.code;
+      if (code === 'auth/user-not-found') {
         throw new Error('No account found with this email address.');
-      } else if (error.response?.status === 401) {
-        throw new Error('Incorrect password. Please try again.');
-      } else if (error.response?.status === 400) {
-        throw new Error('Invalid email or password.');
-      } else {
-        throw new Error(errorMessage);
       }
+      if (code === 'auth/wrong-password') {
+        throw new Error('Incorrect password. Please try again.');
+      }
+      if (code === 'auth/invalid-email') {
+        throw new Error('Invalid email address format.');
+      }
+      if (code === 'auth/too-many-requests') {
+        throw new Error('Too many failed attempts. Please wait a bit and try again.');
+      }
+
+      const message =
+        error?.message ||
+        'Login failed. Please check your credentials and try again.';
+      throw new Error(message);
     } finally {
       this.authStore.isLoading = false;
     }
@@ -340,6 +348,32 @@ export class AuthService {
       slackSessionService.clearValidation();
     } finally {
       this.authStore.isLoading = false;
+    }
+  }
+
+  /**
+   * Firestore hint for Slack landing / post-install flows (e.g. redirectTo: 'setup').
+   * Document: slackUser/{slackId}. May fail if Firestore rules require auth — safe to ignore.
+   */
+  async storeDataSlackLanding(
+    slackId: string,
+    data: {
+      redirectTo: string;
+      createdUserId?: number;
+      onboardingCompleted?: boolean;
+      selectedChannel?: string;
+      workspaceType?: string;
+      hasLaunchedFirstAction?: boolean;
+    }
+  ): Promise<void> {
+    if (!slackId) return;
+    try {
+      const { firestore } = useFirebase();
+      if (!firestore) return;
+      const { doc, setDoc } = await import('firebase/firestore');
+      await setDoc(doc(firestore, 'slackUser', slackId), data, { merge: true });
+    } catch (e) {
+      console.warn('[AuthService] storeDataSlackLanding skipped:', e);
     }
   }
 }

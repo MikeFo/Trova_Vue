@@ -29,7 +29,8 @@ export const environment = {
     appId: '1:847854126512:web:834ab59204075cb4898275',
     measurementId: 'G-CB2TGDWF80',
   },
-  slackClientId: '494472210870.4259976258198',
+  // Trova Profiles Local (Slack app) Client ID
+  slackClientId: '494472210870.4734924350663',
   webexClientId:
     'Cdf4f7aebc8d6f9c2948f9d1ac419519c2b7075e819aa864e9c0053c65cb7e017',
   stripeConfig: {

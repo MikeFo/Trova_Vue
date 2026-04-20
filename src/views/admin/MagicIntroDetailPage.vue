@@ -45,44 +45,47 @@
         <ion-list class="pairings-list">
           <ion-item
             v-for="(pairing, index) in pairings"
-            :key="pairing.id || index"
+            :key="pairing.channelId || index"
             class="pairing-item"
-            :class="{ 'engaged': pairing.isEngaged }"
+            :class="{ 'engaged': pairing.isFullyEngaged }"
           >
             <ion-icon 
-              :icon="pairing.isEngaged ? checkmarkCircle : personCircleOutline" 
+              :icon="pairing.isFullyEngaged ? checkmarkCircle : personCircleOutline" 
               slot="start"
-              :class="pairing.isEngaged ? 'icon-engaged' : 'icon-default'"
+              :class="pairing.isFullyEngaged ? 'icon-engaged' : 'icon-default'"
             ></ion-icon>
             <ion-label>
               <h2>
-                <span v-if="pairing.user?.fullName || pairing.user?.fname">
-                  {{ getUserName(pairing.user) }}
+                <span v-for="(p, i) in pairing.participants" :key="p.userId">
+                  <span>{{ p.name || `User ${p.userId}` }}</span>
+                  <span v-if="i < pairing.participants.length - 1" class="separator">↔</span>
                 </span>
-                <span v-else-if="pairing.userId">
-                  User {{ pairing.userId }}
-                </span>
-                <span v-else>Unknown User</span>
-                <span class="separator">↔</span>
-                <span v-if="pairing.matchedUser?.fullName || pairing.matchedUser?.fname">
-                  {{ getUserName(pairing.matchedUser) }}
-                </span>
-                <span v-else-if="pairing.matchedUserId">
-                  User {{ pairing.matchedUserId }}
-                </span>
-                <span v-else>Unknown User</span>
               </h2>
-              <p v-if="pairing.reasons && pairing.reasons.length > 0">
-                <span class="reasons-label">Match reasons:</span>
-                {{ pairing.reasons.join(', ') }}
-              </p>
-              <p v-if="pairing.score !== undefined">
-                <span class="score-label">Score:</span>
-                <span class="score-value">{{ pairing.score.toFixed(2) }}</span>
-              </p>
-              <p v-if="pairing.isEngaged" class="engaged-badge">
+              <p v-if="(pairing.totalHumanMessages || 0) > 0" class="engaged-badge">
                 <ion-icon :icon="chatbubblesOutline"></ion-icon>
-                Conversation started
+                <span v-if="pairing.isFullyEngaged">Fully engaged</span>
+                <span v-else-if="(pairing.distinctHumanSpeakers || 0) === 1">Partial engagement</span>
+                <span v-else>Conversation started</span>
+                <span>
+                  ({{ pairing.totalHumanMessages }} msg{{ pairing.totalHumanMessages === 1 ? '' : 's' }})
+                </span>
+              </p>
+              <p v-if="(pairing.totalHumanMessages || 0) > 0 && (pairing.distinctHumanSpeakers || 0) === 1" class="partial-engagement-detail">
+                <span class="reasons-label">Engaged:</span>
+                {{
+                  pairing.participants
+                    .filter((p) => (p.messageCount || 0) > 0)
+                    .map((p) => p.name || `User ${p.userId}`)
+                    .join(', ')
+                }}
+                <span class="separator">•</span>
+                <span class="reasons-label">Unresponsive:</span>
+                {{
+                  pairing.participants
+                    .filter((p) => (p.messageCount || 0) === 0)
+                    .map((p) => p.name || `User ${p.userId}`)
+                    .join(', ')
+                }}
               </p>
             </ion-label>
           </ion-item>
@@ -103,6 +106,9 @@
 import { ref, computed, onMounted } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { adminService } from '@/services/admin.service';
+import { formatIsoDateLabel } from '@/utils/iso-date';
+import { fetchMagicIntroPairings } from '@/services/magic-intro.service';
+import type { DateRange, MagicIntroPairingRow } from '@/types/magic-intros';
 import {
   IonPage,
   IonHeader,
@@ -130,7 +136,7 @@ const router = useRouter();
 const route = useRoute();
 
 const isLoading = ref(false);
-const pairings = ref<any[]>([]);
+const pairings = ref<MagicIntroPairingRow[]>([]);
 
 const communityId = ref<number | null>(null);
 const date = ref<string>('');
@@ -138,7 +144,7 @@ const startDate = ref<string | undefined>(undefined);
 const endDate = ref<string | undefined>(undefined);
 
 const engagedCount = computed(() => {
-  return pairings.value.filter(p => p.isEngaged).length;
+  return pairings.value.filter(p => p.isFullyEngaged).length;
 });
 
 const engagementRate = computed(() => {
@@ -148,14 +154,7 @@ const engagementRate = computed(() => {
 
 const formattedDate = computed(() => {
   if (!date.value) return 'Magic Intro Pairings';
-  // Parse date string (YYYY-MM-DD) and create date in UTC to avoid timezone shifts
-  const [year, month, day] = date.value.split('-').map(Number);
-  const d = new Date(Date.UTC(year, month - 1, day));
-  return d.toLocaleDateString('en-US', { 
-    year: 'numeric', 
-    month: 'long', 
-    day: 'numeric' 
-  });
+  return formatIsoDateLabel(date.value);
 });
 
 onMounted(() => {
@@ -179,13 +178,17 @@ async function loadPairings() {
 
   isLoading.value = true;
   try {
-    const results = await adminService.getMagicIntroPairings(
-      communityId.value,
-      date.value,
-      startDate.value,
-      endDate.value
-    );
-    pairings.value = results;
+    const range =
+      startDate.value && endDate.value
+        ? ({ startDate: startDate.value, endDate: endDate.value } satisfies DateRange)
+        : undefined;
+
+    const response = await fetchMagicIntroPairings(communityId.value, {
+      range,
+      date: date.value,
+    });
+
+    pairings.value = response.pairings || [];
   } catch (error) {
     console.error('Error loading pairings:', error);
     pairings.value = [];
@@ -354,6 +357,12 @@ function formatPercentage(value: number): string {
 .score-label {
   font-weight: 500;
   color: #475569;
+}
+
+.partial-engagement-detail {
+  font-size: 13px;
+  color: #64748b;
+  margin-top: 6px;
 }
 
 .score-value {

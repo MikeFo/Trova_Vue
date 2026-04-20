@@ -1011,21 +1011,29 @@ async function loadProfiles() {
     }
     
     const urlSecretId = (route.query.s as string) || '';
+    const slackUserIdFromUrl = (route.query.slackUserId as string) || '';
     let secretIdToSend: string | undefined = undefined;
-    
+
+    // Check if user is fully authenticated (has Firebase auth + user profile)
     const isFullyAuthenticated = authStore.isAuthenticated && authStore.user?.id;
-    
+
+    if (urlSecretId && !isFullyAuthenticated && communityId && slackUserIdFromUrl) {
+      slackSessionService.setValidatedContext(urlSecretId, communityId, slackUserIdFromUrl);
+    }
+
     if (urlSecretId && !isFullyAuthenticated) {
       if (slackSessionService.isSessionExpired()) {
         await showSlackSessionExpiredAlert();
         if (thisRequest === loadRequestId) profiles.value = [];
         return;
       }
-      
-      const isValidated = slackSessionService.isSecretIdValidated(urlSecretId);
-      if (!isValidated) {
-        secretIdToSend = urlSecretId;
-      }
+
+      // Always send the secret so the backend can identify the caller.
+      // The "validated" flag only tracks whether the initial handshake passed;
+      // the backend still needs `s` on every request for Slack-only users.
+      secretIdToSend = urlSecretId;
+    } else if (isFullyAuthenticated) {
+      secretIdToSend = undefined;
     }
     
     const fetchedProfiles = await profileService.getProfilesForUserAndCommunity(
@@ -1044,7 +1052,7 @@ async function loadProfiles() {
              !isNaN(profile.currentLat) && 
              !isNaN(profile.currentLong);
     });
-    await updateMapMarkers();
+    await updateMapMarkers({ fitBounds: true });
   } catch (error: any) {
     // Stale request — a newer one is in flight, so don't touch state or show errors.
     if (thisRequest !== loadRequestId) return;
@@ -1242,7 +1250,7 @@ async function initializeMap() {
       updateVisibleUsers();
     });
     
-    await updateMapMarkers();
+    await updateMapMarkers({ fitBounds: false });
     // Update visible users after markers are created
     updateVisibleUsers();
   } catch (error) {
@@ -1250,7 +1258,12 @@ async function initializeMap() {
   }
 }
 
-async function updateMapMarkers() {
+/**
+ * Rebuild markers from filteredProfiles. Only pass fitBounds: true when loading community
+ * data (loadProfiles) — search/filter changes should not reset pan/zoom.
+ */
+async function updateMapMarkers(options?: { fitBounds?: boolean }) {
+  const fitBounds = options?.fitBounds === true;
   if (!map.value) return;
 
   // Clear existing markers and clusterer
@@ -1337,40 +1350,39 @@ async function updateMapMarkers() {
 
     attachClusterVisibilityListener();
 
-    // Adjust map bounds to show all markers
-    const bounds = new (window as any).google.maps.LatLngBounds();
-    newMarkers.forEach((marker: google.maps.Marker) => {
-      const position = marker.getPosition();
-      if (position) {
-        bounds.extend(position);
-      }
-    });
-    
-    if (newMarkers.length > 1) {
-      // Fit bounds with padding to ensure all markers are visible
-      map.value.fitBounds(bounds, { padding: 50 });
-      // Clamp zoom so we do not exceed ~5-mile view
-      setTimeout(() => {
-        if (map.value && map.value.getZoom() && map.value.getZoom()! > MAP_MAX_ZOOM) {
-          map.value.setZoom(MAP_MAX_ZOOM);
+    if (fitBounds) {
+      // Adjust map bounds to show all markers (initial / community load only)
+      const bounds = new (window as any).google.maps.LatLngBounds();
+      newMarkers.forEach((marker: google.maps.Marker) => {
+        const position = marker.getPosition();
+        if (position) {
+          bounds.extend(position);
         }
-      }, 150);
-    } else if (newMarkers.length === 1) {
-      const position = newMarkers[0].getPosition();
-      if (position) {
-        map.value.setCenter(position);
-        map.value.setZoom(Math.min(12, MAP_MAX_ZOOM));
+      });
+
+      if (newMarkers.length > 1) {
+        map.value.fitBounds(bounds, { padding: 50 });
+        setTimeout(() => {
+          if (map.value && map.value.getZoom() && map.value.getZoom()! > MAP_MAX_ZOOM) {
+            map.value.setZoom(MAP_MAX_ZOOM);
+          }
+        }, 150);
+      } else if (newMarkers.length === 1) {
+        const position = newMarkers[0].getPosition();
+        if (position) {
+          map.value.setCenter(position);
+          map.value.setZoom(Math.min(12, MAP_MAX_ZOOM));
+        }
       }
     }
-    
+
     // Update visible users after markers are added and map has settled
     setTimeout(() => {
       updateVisibleUsers();
     }, 500);
   } else {
-    // Don't change the map center if we have no profiles - keep current view
-    // Only update if we actually have profiles but they just don't have coordinates
-    if (profiles.value.length > 0) {
+    // No markers (e.g. search matched nobody). Only recenter on full data loads, not search.
+    if (fitBounds && profiles.value.length > 0) {
       const center = getCenterOfProfiles();
       map.value.setCenter(center);
       map.value.setZoom(10);

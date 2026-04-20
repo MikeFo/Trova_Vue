@@ -128,4 +128,3 @@ The API service (`src/services/api.service.ts`) provides:
 - Capacitor plugins need to be added as features are implemented
 - Firebase SDK v9+ (modular) is used for better tree-shaking
 - Pushing to the `staging` branch triggers the Netlify “Vue Staging” deploy.
-

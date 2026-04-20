@@ -1,4 +1,5 @@
 import { apiService } from './api.service';
+import { devLog } from '../utils/logger';
 
 export interface DataThing {
   id: number;
@@ -12,9 +13,9 @@ export class DataService {
   async getThings(type: string): Promise<DataThing[]> {
     try {
       const url = `/data/things/${type}`;
-      console.log(`DataService: Fetching from ${url}`);
+      devLog(`DataService: Fetching from ${url}`);
       const things = await apiService.get<DataThing[]>(url);
-      console.log(`DataService: Received ${things?.length || 0} things`, things);
+      devLog(`DataService: Received ${things?.length || 0} things`, things);
       return things || [];
     } catch (error: any) {
       console.error(`DataService: Error fetching things of type "${type}":`, error);

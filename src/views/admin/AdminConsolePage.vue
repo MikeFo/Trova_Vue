@@ -2,13 +2,13 @@
   <ion-page>
     <ion-header>
       <ion-toolbar>
-        <ion-buttons slot="start">
+        <ion-buttons v-if="!isSlackUser" slot="start">
           <ion-button @click="goBack">
             <ion-icon :icon="arrowBack"></ion-icon>
           </ion-button>
         </ion-buttons>
         <ion-title>Admin Console</ion-title>
-        <ion-buttons slot="end">
+        <ion-buttons v-if="!isSlackUser" slot="end">
           <ion-button @click="refreshData">
             <ion-icon :icon="refresh"></ion-icon>
           </ion-button>
@@ -16,7 +16,17 @@
       </ion-toolbar>
     </ion-header>
     <ion-content :fullscreen="true" class="admin-console-content">
-      <div v-if="!isLoading && !isManager" class="access-denied">
+      <div v-if="!isLoading && !isManager && slackSessionExpired" class="access-denied">
+        <ion-icon :icon="timeOutline" class="lock-icon session-expired-icon"></ion-icon>
+        <h2>Session Expired</h2>
+        <p>For security, your session has expired.<br/>Please return to Slack to reauthenticate.</p>
+        <ion-button @click="returnToSlack" color="primary">
+          <ion-icon :icon="logoSlack" slot="start"></ion-icon>
+          Return to Slack
+        </ion-button>
+      </div>
+
+      <div v-else-if="!isLoading && !isManager" class="access-denied">
         <ion-icon :icon="lockClosedOutline" class="lock-icon"></ion-icon>
         <h2>Access Denied</h2>
         <p>You must be a community leader or manager to access the admin console.</p>
@@ -31,24 +41,23 @@
 
       <div v-else class="admin-console-container">
         <!-- Community Selector (if multiple communities OR super admin) -->
-        <div v-if="managedCommunities.length > 1 || isSuperAdminUser" class="community-selector-section">
-          <ion-item>
-            <ion-label>
-              <span v-if="isSuperAdminUser" style="font-weight: bold; color: #3880ff;">
-                Super Admin: Select Community
-              </span>
-              <span v-else>Select Community</span>
-            </ion-label>
-            <ion-select v-model="selectedCommunityId" @ionChange="onCommunityChange">
-              <ion-select-option
-                v-for="community in managedCommunities"
-                :key="community.id"
-                :value="community.id"
-              >
-                {{ community.name }}
-              </ion-select-option>
-            </ion-select>
-          </ion-item>
+        <div v-if="managedCommunities.length > 1 || isSuperAdminUser" class="community-picker">
+          <span v-if="isSuperAdminUser" class="picker-badge">Super Admin</span>
+          <ion-select
+            v-model="selectedCommunityId"
+            interface="popover"
+            placeholder="Select Community"
+            class="picker-select"
+            @ionChange="onCommunityChange"
+          >
+            <ion-select-option
+              v-for="community in filteredCommunities"
+              :key="community.id"
+              :value="community.id"
+            >
+              {{ community.name }}
+            </ion-select-option>
+          </ion-select>
         </div>
 
         <!-- Tabs Navigation -->
@@ -65,6 +74,9 @@
           <ion-segment-button value="users">
             <ion-label>Users</ion-label>
           </ion-segment-button>
+          <ion-segment-button v-if="isSuperAdminUser" value="engagement">
+            <ion-label>Engagement</ion-label>
+          </ion-segment-button>
         </ion-segment>
 
         <!-- Tab Content -->
@@ -73,6 +85,7 @@
           <div v-if="activeTab === 'stats'" class="tab-panel">
             <UserStatsSection
               :community-id="selectedCommunityId"
+              :community-name="currentCommunityName"
               @open-magic-intros="openMagicIntrosModal"
               @open-channel-pairings="openChannelPairingsModal"
               @open-mentor-mentee-matches="openMentorMenteeMatchesModal"
@@ -93,6 +106,7 @@
           <div v-if="activeTab === 'data'" class="tab-panel">
             <DataUploadSection
               :community-id="selectedCommunityId"
+              :has-custom-data="selectedCommunityHasCustomData"
             />
           </div>
 
@@ -101,6 +115,14 @@
             <UserManagementSection
               :community-id="selectedCommunityId"
               @refresh="refreshData"
+            />
+          </div>
+
+          <!-- Super Admin Engagement Tab -->
+          <div v-if="activeTab === 'engagement'" class="tab-panel">
+            <SuperAdminEngagementSection
+              v-if="isSuperAdminUser && authStore.user?.id"
+              :user-id="authStore.user.id"
             />
           </div>
         </div>
@@ -183,7 +205,6 @@ import {
   IonSegment,
   IonSegmentButton,
   IonLabel,
-  IonItem,
   IonSelect,
   IonSelectOption,
 } from '@ionic/vue';
@@ -191,11 +212,16 @@ import {
   arrowBack,
   refresh,
   lockClosedOutline,
+  timeOutline,
+  logoSlack,
 } from 'ionicons/icons';
+import { environment } from '@/environments/environment';
+import { useFirebase } from '@/composables/useFirebase';
 import UserManagementSection from './sections/UserManagementSection.vue';
 import DataUploadSection from './sections/DataUploadSection.vue';
 import AnalyticsDashboardSection from './sections/AnalyticsDashboardSection.vue';
 import UserStatsSection from './sections/UserStatsSection.vue';
+import SuperAdminEngagementSection from './sections/SuperAdminEngagementSection.vue';
 import MagicIntrosPage from './MagicIntrosPage.vue';
 import SkillsListPage from './SkillsListPage.vue';
 import MentorListPage from './MentorListPage.vue';
@@ -212,9 +238,35 @@ const communityStore = useCommunityStore();
 const isLoading = ref(true);
 const isManager = ref(false);
 const isSuperAdminUser = ref(false);
+const slackSessionExpired = ref(false);
+const isSlackUser = ref(false);
 const activeTab = ref('stats');
 const managedCommunities = ref<Community[]>([]);
 const selectedCommunityId = ref<number | null>(null);
+
+const currentCommunityName = computed<string | null>(() => {
+  if (selectedCommunityId.value != null) {
+    const match = managedCommunities.value.find(c => c.id === selectedCommunityId.value);
+    if (match) return match.name;
+  }
+  return communityStore.currentCommunity?.name ?? null;
+});
+
+const filteredCommunities = computed(() => managedCommunities.value);
+
+/** Driver CSV upload is only for communities with has_custom_data (backend flag). */
+const selectedCommunityHasCustomData = computed(() => {
+  if (selectedCommunityId.value == null) return false;
+  const fromList = managedCommunities.value.find((c) => c.id === selectedCommunityId.value);
+  if (fromList && typeof (fromList as Community).hasCustomData === 'boolean') {
+    return (fromList as Community).hasCustomData === true;
+  }
+  const fromStore = communityStore.currentCommunity;
+  if (fromStore?.id === selectedCommunityId.value && typeof fromStore.hasCustomData === 'boolean') {
+    return fromStore.hasCustomData === true;
+  }
+  return false;
+});
 
 // Magic Intros Modal state
 const isMagicIntrosModalOpen = ref(false);
@@ -284,6 +336,7 @@ function getCommunityId(): number | null {
 async function checkManagerAccess() {
   const hasSlackLinkParams =
     !!route.query.s && !!route.query.communityId && !!route.query.slackUserId;
+  isSlackUser.value = hasSlackLinkParams || slackSessionService.isSlackLinkUser();
   const authUserId = authStore.user?.id ?? null;
   const communityId = getCommunityId();
 
@@ -292,8 +345,8 @@ async function checkManagerAccess() {
     const slackUserId = String(route.query.slackUserId);
     const urlSecretId = typeof route.query.s === 'string' ? route.query.s : '';
 
-    // If session has expired, treat as no access (Slack link window closed).
     if (slackSessionService.isSessionExpired()) {
+      slackSessionExpired.value = true;
       isManager.value = false;
       isLoading.value = false;
       return;
@@ -314,8 +367,10 @@ async function checkManagerAccess() {
         secretIdToSend
       );
       isManager.value = !!result?.isManager;
+      isSuperAdminUser.value = !!(result as any)?.isSuperAdmin;
 
       if (isManager.value) {
+        slackSessionService.setValidatedContext(urlSecretId, communityId, slackUserId);
         selectedCommunityId.value = communityId;
 
         // Prefer the community returned from the backend if available.
@@ -344,15 +399,16 @@ async function checkManagerAccess() {
           router.push('/tabs/home');
         }, 2000);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(
         'Error checking manager access via Slack console gate:',
         error instanceof Error ? error.message : error
       );
+      const status = error?.status || error?.response?.status;
+      if (status === 401 && hasSlackLinkParams) {
+        slackSessionExpired.value = true;
+      }
       isManager.value = false;
-      setTimeout(() => {
-        router.push('/tabs/home');
-      }, 2000);
     } finally {
       isLoading.value = false;
     }
@@ -366,10 +422,10 @@ async function checkManagerAccess() {
     return;
   }
 
-  isSuperAdminUser.value = adminService.isSuperAdmin(authUserId);
+  // Read super-admin flag from the backend-provided user object (DB-backed, no hardcoded IDs)
+  isSuperAdminUser.value = adminService.isSuperAdmin(authStore.user);
 
   if (!communityId) {
-    // Super admins without communityId will still be able to load managed communities below.
     if (!isSuperAdminUser.value) {
       isManager.value = false;
       isLoading.value = false;
@@ -377,10 +433,29 @@ async function checkManagerAccess() {
     }
   }
 
+  // Check if Firebase auth is actually available (token might be expired even if store has user data)
+  const firebase = useFirebase();
+  const hasFirebaseAuth = !!firebase.auth?.currentUser;
+
   try {
     if (isSuperAdminUser.value) {
       isManager.value = true;
-      await loadManagedCommunities();
+      // Only load all communities if we have a live Firebase session;
+      // otherwise fall back to the single community from Slack params.
+      if (hasFirebaseAuth) {
+        await loadManagedCommunities();
+      } else if (communityId) {
+        const { communityService } = await import('@/services/community.service');
+        let community = communityStore.getCommunityById(communityId);
+        if (!community) {
+          try { community = await communityService.getCommunityById(communityId); } catch {}
+        }
+        if (community) {
+          managedCommunities.value = [community];
+          communityStore.setCurrentCommunity(community);
+        }
+      }
+
       if (communityId) {
         selectedCommunityId.value = communityId;
       } else if (managedCommunities.value.length > 0) {
@@ -416,7 +491,9 @@ async function checkManagerAccess() {
         if (loadedCommunity) communityStore.setCurrentCommunity(loadedCommunity);
       }
 
-      await loadManagedCommunities();
+      if (hasFirebaseAuth) {
+        await loadManagedCommunities();
+      }
     } else {
       setTimeout(() => {
         router.push('/tabs/home');
@@ -473,6 +550,16 @@ function setCommunity(communityId: number) {
   // This will trigger the watch in AnalyticsDashboardSection to load data
 }
 
+function returnToSlack() {
+  const slackTeamId = route.query.slackTeamId as string || '';
+  const slackAppId = environment.slackAppId;
+  if (slackTeamId && slackAppId) {
+    window.location.href = `slack://app?team=${slackTeamId}&id=${slackAppId}&tab=home`;
+  } else {
+    window.location.href = 'https://slack.com';
+  }
+}
+
 function goBack() {
   router.back();
 }
@@ -495,6 +582,8 @@ function onCommunityChange() {
 
 async function refreshData() {
   isLoading.value = true;
+  // Clear all stats-related caches so subsequent loads are fresh.
+  adminService.clearStatsCaches();
   await checkManagerAccess();
   isLoading.value = false;
 }
@@ -589,6 +678,10 @@ onMounted(() => {
   margin-bottom: 16px;
 }
 
+.session-expired-icon {
+  color: #f59e0b;
+}
+
 .access-denied h2 {
   font-size: 24px;
   font-weight: 700;
@@ -623,12 +716,39 @@ onMounted(() => {
   padding: 16px;
 }
 
-.community-selector-section {
+.community-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   background: white;
-  border-radius: 12px;
-  padding: 16px;
+  border-radius: 10px;
+  padding: 4px 8px 4px 12px;
   margin-bottom: 16px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  border: 1px solid #e5e7eb;
+  max-width: 360px;
+}
+
+.picker-badge {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #fff;
+  background: var(--color-primary, #16a34a);
+  padding: 2px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.picker-select {
+  --padding-start: 4px;
+  --padding-end: 0;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a1a1a;
 }
 
 ion-segment {
