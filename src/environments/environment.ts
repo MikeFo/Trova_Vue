@@ -6,7 +6,16 @@ import { environment as prodEnv } from './environment.prod';
 
 const mode = import.meta.env.MODE;
 
-export const environment = 
+function isStagingHostname(): boolean {
+  // Netlify / hosting misconfig can accidentally build staging with production mode.
+  // Force staging config when running on a staging hostname to avoid hitting prod APIs.
+  if (typeof window === 'undefined') return false;
+  const host = window.location?.host || '';
+  return host.includes('trova-staging.com') || host.includes('trova-api-staging') || host.includes('trova-staging');
+}
+
+export const environment =
+  isStagingHostname() ? stagingEnv :
   mode === 'production' ? prodEnv :
   mode === 'staging' ? stagingEnv :
   localEnv; // Default to local for development

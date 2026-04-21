@@ -41,9 +41,10 @@ export class ApiService {
     this.api.interceptors.request.use(
       async (config) => {
         try {
-          // Try to get Firebase token (for API authentication)
           const { useFirebase } = await import('../composables/useFirebase');
           const firebaseAuth = useFirebase();
+          // Wait for Firebase to finish restoring auth state before checking currentUser.
+          await firebaseAuth.authReady;
           if (firebaseAuth.auth?.currentUser) {
             try {
               const token = await firebaseAuth.auth.currentUser.getIdToken();
@@ -99,7 +100,6 @@ export class ApiService {
           }
         } catch (error) {
           // Firebase might not be available - that's okay if backend handles auth
-          // Don't log as error, just continue
         }
         return config;
       },

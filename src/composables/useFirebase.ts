@@ -1,5 +1,5 @@
 import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
-import { getAuth, Auth, setPersistence, browserLocalPersistence } from 'firebase/auth';
+import { getAuth, Auth, setPersistence, browserLocalPersistence, onAuthStateChanged } from 'firebase/auth';
 import { getDatabase, Database } from 'firebase/database';
 import { getStorage, FirebaseStorage } from 'firebase/storage';
 import { getFirestore, Firestore } from 'firebase/firestore';
@@ -11,6 +11,9 @@ let database: Database | null = null;
 let storage: FirebaseStorage | null = null;
 let firestore: Firestore | null = null;
 
+// Resolves once Firebase has determined auth state (user restored or confirmed absent).
+let authReady: Promise<void> | null = null;
+
 export function useFirebase() {
   try {
     if (!app) {
@@ -20,7 +23,7 @@ export function useFirebase() {
       } else {
         if (!environment?.firebaseConfig) {
           console.warn('Firebase config not found in environment');
-          return { app: null, auth: null, database: null, storage: null, firestore: null };
+          return { app: null, auth: null, database: null, storage: null, firestore: null, authReady: Promise.resolve() };
         }
         app = initializeApp(environment.firebaseConfig);
       }
@@ -28,10 +31,16 @@ export function useFirebase() {
 
     if (!auth && app) {
       auth = getAuth(app);
-      // Explicitly set persistence to LOCAL (default for web, but being explicit)
-      // This ensures auth state persists across page refreshes
       setPersistence(auth, browserLocalPersistence).catch((error) => {
         console.warn('Failed to set auth persistence:', error);
+      });
+
+      authReady = new Promise<void>((resolve) => {
+        const unsubscribe = onAuthStateChanged(auth!, () => {
+          unsubscribe();
+          resolve();
+        });
+        setTimeout(resolve, 3000);
       });
     }
 
@@ -48,7 +57,7 @@ export function useFirebase() {
     }
   } catch (error) {
     console.error('Firebase initialization error:', error);
-    return { app: null, auth: null, database: null, storage: null, firestore: null };
+    return { app: null, auth: null, database: null, storage: null, firestore: null, authReady: Promise.resolve() };
   }
 
   return {
@@ -57,6 +66,7 @@ export function useFirebase() {
     database,
     storage,
     firestore,
+    authReady: authReady || Promise.resolve(),
   };
 }
 

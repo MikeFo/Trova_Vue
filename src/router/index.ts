@@ -59,6 +59,10 @@ const routes: Array<RouteRecordRaw> = [
     component: () => import('@/views/legal/PrivacyPage.vue')
   },
   {
+    path: '/support',
+    component: () => import('@/views/legal/SupportPage.vue')
+  },
+  {
     path: '/safety',
     component: () => import('@/views/legal/SafetyTipsPage.vue')
   },

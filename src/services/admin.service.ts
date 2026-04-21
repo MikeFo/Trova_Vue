@@ -395,6 +395,36 @@ export class AdminService {
   }
 
   /**
+   * Super admin: Engagement summary across communities (intros + Slack opens)
+   */
+  async getSuperAdminCommunityEngagementSummary(userId: number, days: number = 90): Promise<any[]> {
+    const safeDays = Math.max(1, Math.min(days, 365));
+    const response = await apiService.get<{ rows: any[] }>(
+      `/users/${userId}/super-admin/community-engagement`,
+      { days: safeDays } as any,
+    );
+    return response?.rows || [];
+  }
+
+  async getSuperAdminSelfIntroEmails(userId: number, communityId: number, days: number = 90): Promise<any[]> {
+    const safeDays = Math.max(1, Math.min(days, 365));
+    const response = await apiService.get<{ rows: any[] }>(
+      `/users/${userId}/super-admin/community-engagement/${communityId}/self-intros`,
+      { days: safeDays } as any,
+    );
+    return response?.rows || [];
+  }
+
+  async getSuperAdminSlackOpenEmails(userId: number, communityId: number, days: number = 90): Promise<any[]> {
+    const safeDays = Math.max(1, Math.min(days, 365));
+    const response = await apiService.get<{ rows: any[] }>(
+      `/users/${userId}/super-admin/community-engagement/${communityId}/slack-opens`,
+      { days: safeDays } as any,
+    );
+    return response?.rows || [];
+  }
+
+  /**
    * Get all community members
    * Tries multiple endpoint patterns to find the correct one
    */
@@ -540,8 +570,9 @@ export class AdminService {
 
   /**
    * Upload reports-to data CSV.
-   * Reads the file as text and sends the raw CSV string as JSON — matches the
-   * Ionic client and backend contract (POST /upload-reporting-data { csvData }).
+   * Reads the file as text and sends the raw CSV string as JSON.
+   * Backend: POST /communities/:id/upload-reporting-data { csvData }.
+   * (Do not use /communities/:id/data/reports-to — that path is not implemented on the API.)
    */
   async uploadReportsToData(communityId: number, csvData: string): Promise<void> {
     try {

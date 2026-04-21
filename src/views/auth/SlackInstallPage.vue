@@ -30,6 +30,9 @@
                 <ion-item button :detail="false" @click="openTrovaSite">
                   <ion-label>About Trova</ion-label>
                 </ion-item>
+                <ion-item button :detail="false" @click="router.push('/support')">
+                  <ion-label>Support</ion-label>
+                </ion-item>
               </ion-list>
             </ion-content>
           </ion-popover>
@@ -37,163 +40,106 @@
       </header>
 
       <main class="main">
-        <section class="hero-serif">
-          <h1 class="hero-title">
-            Trova helps employees bring their authentic selves to work
-          </h1>
-        </section>
-
-        <section class="cta-split">
-          <div class="cta-copy">
-            <div class="mark-row">
-              <div class="trova-mark" aria-hidden="true">T</div>
-              <p class="cta-headline">
-                Stronger relationships build stronger companies.
-              </p>
-            </div>
-          </div>
-          <div class="cta-action">
-            <button
-              type="button"
-              class="add-to-slack-btn"
-              :disabled="!hasClientId"
-              @click="startInstall"
+        <section class="hero">
+          <p class="hero-eyebrow">Trova for Slack</p>
+          <h1 class="hero-title">Bring your whole self to work—right in Slack</h1>
+          <p class="hero-lead">
+            Help your team discover shared interests, spark real conversations, and build
+            stronger connections where you already work.
+          </p>
+          <div class="hero-cta">
+            <!-- Official Slack button assets; href still built with redirect_uri (see installAuthorizeUrl). -->
+            <a
+              class="add-to-slack-official"
+              :class="{ 'add-to-slack-official--disabled': !hasClientId }"
+              :href="installAuthorizeUrl"
+              rel="noopener noreferrer"
+              @click="onAddToSlackClick"
             >
-              <span class="slack-glyph" aria-hidden="true">
-                <svg viewBox="0 0 54 54" width="22" height="22">
-                  <path
-                    fill="#E01E5A"
-                    d="M11.3 22.5a5.65 5.65 0 1 1 0-11.3h11.3v11.3H11.3z"
-                  />
-                  <path
-                    fill="#36C5F0"
-                    d="M22.5 11.3a5.65 5.65 0 1 1 11.3 0v11.3H22.5V11.3z"
-                  />
-                  <path
-                    fill="#2EB67D"
-                    d="M42.7 22.5a5.65 5.65 0 1 1 0 11.3H31.4V22.5h11.3z"
-                  />
-                  <path
-                    fill="#ECB22E"
-                    d="M31.4 42.7a5.65 5.65 0 1 1-11.3 0V31.4h11.3v11.3z"
-                  />
-                  <path
-                    fill="#E01E5A"
-                    d="M11.3 31.4a5.65 5.65 0 1 1 0 11.3 11.3 0 0 1 0-11.3v11.3H11.3z"
-                  />
-                  <path
-                    fill="#36C5F0"
-                    d="M11.3 22.5H0a5.65 5.65 0 1 1 0 11.3h11.3V22.5z"
-                  />
-                  <path
-                    fill="#2EB67D"
-                    d="M31.4 42.7v11.3a5.65 5.65 0 1 1-11.3 0V42.7h11.3z"
-                  />
-                  <path
-                    fill="#ECB22E"
-                    d="M42.7 31.4H54a5.65 5.65 0 1 1 0 11.3H42.7V31.4z"
-                  />
-                </svg>
-              </span>
-              <span>Add to Slack</span>
-            </button>
+              <img
+                alt="Add to Slack"
+                width="139"
+                height="40"
+                src="https://platform.slack-edge.com/img/add_to_slack.png"
+                :srcset="slackAddToSlackSrcset"
+                decoding="async"
+              />
+            </a>
             <p v-if="!hasClientId" class="config-warn">
               Slack client ID is not configured for this environment.
             </p>
           </div>
         </section>
 
-        <section class="feature-grid">
-          <article class="feature-card feature-card--trova">
-            <p class="eyebrow">Available on Trova</p>
-            <div class="feature-row">
-              <ion-icon :icon="searchOutline" class="feature-icon" />
-              <span>Filter, search &amp; sort by interests and location</span>
-            </div>
-            <div class="avatar-demo">
-              <div class="avatar avatar--a" aria-hidden="true" />
-              <span class="avatar-plus" aria-hidden="true">
-                <ion-icon :icon="addOutline" />
+        <section class="benefits" aria-labelledby="benefits-heading">
+          <h2 id="benefits-heading" class="section-title">What you get</h2>
+          <ul class="benefit-list">
+            <li class="benefit-item">
+              <span class="benefit-icon-wrap" aria-hidden="true">
+                <ion-icon :icon="peopleOutline" />
               </span>
-              <div class="avatar avatar--b" aria-hidden="true" />
-            </div>
-            <p class="feature-caption">
-              Employee introductions based on shared interests
-            </p>
-          </article>
-
-          <article class="feature-card feature-card--slack" aria-label="Slack app preview">
-            <div class="slack-chrome">
-              <div class="slack-top">
-                <span class="slack-app-name">Trova</span>
-                <span class="slack-verified" aria-hidden="true">✓</span>
-                <span class="slack-chevron" aria-hidden="true">▾</span>
+              <div>
+                <h3 class="benefit-title">Rich profiles</h3>
+                <p class="benefit-text">
+                  Show interests, skills, and location so colleagues can find common ground.
+                </p>
               </div>
-              <div class="slack-tabs">
-                <span class="slack-tab slack-tab--active">Home</span>
-                <span class="slack-tab">About</span>
+            </li>
+            <li class="benefit-item">
+              <span class="benefit-icon-wrap" aria-hidden="true">
+                <ion-icon :icon="chatbubblesOutline" />
+              </span>
+              <div>
+                <h3 class="benefit-title">Conversation in Slack</h3>
+                <p class="benefit-text">
+                  Home tab and messages keep engagement where your team already collaborates.
+                </p>
               </div>
-              <p class="slack-lead">Here's what you can do with Trova</p>
-              <button type="button" class="slack-primary-pill" tabindex="-1">
-                Create your profile!
-              </button>
-              <button type="button" class="slack-secondary-pill" tabindex="-1">
-                Learn more
-              </button>
-              <div class="slack-profile-preview">
-                <div class="preview-photo" aria-hidden="true" />
-                <div class="preview-copy">
-                  <p class="preview-title">This week's Intro! Ashley Jones</p>
-                  <p class="preview-meta">Ithaca College · Boston, MA</p>
-                  <ul class="preview-tags">
-                    <li>Interests</li>
-                    <li>Activities</li>
-                    <li>Intentions</li>
-                  </ul>
-                </div>
+            </li>
+            <li class="benefit-item">
+              <span class="benefit-icon-wrap" aria-hidden="true">
+                <ion-icon :icon="compassOutline" />
+              </span>
+              <div>
+                <h3 class="benefit-title">Discovery on the web</h3>
+                <p class="benefit-text">
+                  Open Trova in the browser for maps, search, and deeper discovery when you need it.
+                </p>
               </div>
-            </div>
-          </article>
+            </li>
+          </ul>
         </section>
 
-        <section class="closing">
-          <h2 class="closing-title">
-            Bring your whole self to work with Trova Profiles
-          </h2>
-          <div class="closing-copy">
-            <p>
-              People are every organization's greatest asset. We understand people are
-              not defined by their jobs but by the passions and interests they share
-              outside their nine-to-five.
-            </p>
-            <p>
-              That's why we built Trova for Slack, making it quick and easy to create and
-              view team profiles so employees can bring their whole selves to work.
-              With Trova, people can see the fun and interesting things coworkers are up
-              to, in addition to getting thoughtful introductions.
-            </p>
-            <p>
-              Install Trova in Slack to showcase employee interests where your team
-              already spends time. You'll see the impact on engagement and conversation
-              across your organization.
-            </p>
-          </div>
+        <section class="steps" aria-labelledby="steps-heading">
+          <h2 id="steps-heading" class="section-title">How it works</h2>
+          <ol class="step-list">
+            <li>
+              <span class="step-num">1</span>
+              <span>Click <strong>Add to Slack</strong> and choose your workspace.</span>
+            </li>
+            <li>
+              <span class="step-num">2</span>
+              <span>Approve the permissions Trova needs to show profiles and features.</span>
+            </li>
+            <li>
+              <span class="step-num">3</span>
+              <span>Team members complete profiles from the Trova Home tab—done.</span>
+            </li>
+          </ol>
         </section>
 
-        <section class="how-to">
-          <h3 class="how-to-title">How to use Trova for Slack</h3>
-          <p>
-            Add the app from this page (or the Slack App Directory) and follow the steps
-            to connect your workspace. On the Trova Home tab, people can edit their
-            profile, view introductions, and open Trova on the web for richer discovery
-            by interests and location.
-          </p>
-          <p class="support-line">
-            <strong>Support:</strong> ask your Trova program admin, or visit
-            <a href="https://www.trova.io" target="_blank" rel="noopener noreferrer"
+        <section class="support-block">
+          <p class="support-block__text">
+            Questions? Visit
+            <router-link to="/support" class="inline-link">Support</router-link>
+            or
+            <a
+              class="inline-link"
+              href="https://www.trova.io"
+              target="_blank"
+              rel="noopener noreferrer"
               >trova.io</a
-            >
-            to learn more.
+            >.
           </p>
         </section>
       </main>
@@ -211,7 +157,12 @@ import {
   IonItem,
   IonLabel,
 } from '@ionic/vue';
-import { addOutline, menuOutline, searchOutline } from 'ionicons/icons';
+import {
+  chatbubblesOutline,
+  compassOutline,
+  menuOutline,
+  peopleOutline,
+} from 'ionicons/icons';
 import { computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { environment } from '@/environments/environment';
@@ -223,11 +174,23 @@ const router = useRouter();
 
 const hasClientId = computed(() => Boolean(environment.slackClientId));
 
-function startInstall() {
+/** Same authorize URL as before (includes redirect_uri); do not use Slack’s static HTML href without it. */
+const installAuthorizeUrl = computed(() => {
+  if (!environment.slackClientId) {
+    return '#';
+  }
   const redirectUri = `${window.location.origin}/slack-install-redirect`;
   const teamId = (route.query.slackTeamId as string) || undefined;
-  const url = buildSlackAppInstallAuthorizeUrl({ redirectUri, teamId: teamId || null });
-  window.location.href = url;
+  return buildSlackAppInstallAuthorizeUrl({ redirectUri, teamId: teamId || null });
+});
+
+const slackAddToSlackSrcset =
+  'https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x';
+
+function onAddToSlackClick(e: MouseEvent) {
+  if (!hasClientId.value) {
+    e.preventDefault();
+  }
 }
 
 function goLogin() {
@@ -240,21 +203,22 @@ function openTrovaSite() {
 
 onMounted(() => {
   if (route.query.auto === '1' || route.query.auto === 'true') {
-    startInstall();
+    if (hasClientId.value) {
+      window.location.href = installAuthorizeUrl.value;
+    }
   }
 });
 </script>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400&family=Source+Sans+3:wght@400;500;600;700&display=swap');
-
+/* Single font stack — no extra Google font requests */
 .slack-install-content {
-  --background: #fafbfc;
+  --background: #f0f2f5;
 }
 
 .slack-install-page {
-  font-family: 'Source Sans 3', var(--ion-font-family);
-  color: var(--ion-text-color);
+  font-family: var(--ion-font-family);
+  color: #1a1d21;
 }
 
 .site-header {
@@ -264,12 +228,12 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px max(24px, env(safe-area-inset-right, 0px)) 14px
-    max(28px, env(safe-area-inset-left, 0px));
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--ion-border-color);
-  max-width: 1200px;
+  padding: 14px max(20px, env(safe-area-inset-right, 0px)) 14px
+    max(20px, env(safe-area-inset-left, 0px));
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid #e8e8e8;
+  max-width: 960px;
   margin: 0 auto;
 }
 
@@ -283,13 +247,13 @@ onMounted(() => {
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
 .text-link {
   font-weight: 600;
-  font-size: 0.95rem;
-  color: var(--ion-color-dark);
+  font-size: 0.9375rem;
+  color: #1a1d21;
   text-decoration: none;
 }
 
@@ -307,12 +271,12 @@ onMounted(() => {
   border: none;
   border-radius: 10px;
   background: transparent;
-  color: var(--ion-color-dark);
+  color: #1a1d21;
   cursor: pointer;
 }
 
 .icon-menu-btn:hover {
-  background: var(--ion-color-light);
+  background: rgba(0, 0, 0, 0.05);
 }
 
 .icon-menu-btn ion-icon {
@@ -327,444 +291,199 @@ onMounted(() => {
 }
 
 .main {
-  max-width: 1120px;
+  max-width: 640px;
   margin: 0 auto;
-  padding: 28px max(24px, env(safe-area-inset-right, 0px)) 64px
-    max(28px, env(safe-area-inset-left, 0px));
+  padding: 32px max(20px, env(safe-area-inset-right, 0px)) 56px
+    max(20px, env(safe-area-inset-left, 0px));
 }
 
-.hero-serif {
+.hero {
   text-align: center;
-  padding: 12px 8px 36px;
-}
-
-.hero-title {
-  font-family: 'Fraunces', Georgia, serif;
-  font-weight: 600;
-  font-size: clamp(1.5rem, 4vw, 2.25rem);
-  line-height: 1.25;
-  color: #111827;
-  max-width: 38rem;
-  margin: 0 auto;
-  letter-spacing: -0.02em;
-}
-
-.cta-split {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 28px;
-  align-items: center;
   margin-bottom: 48px;
 }
 
-@media (min-width: 768px) {
-  .cta-split {
-    grid-template-columns: 1.1fr 1fr;
-    gap: 40px;
-  }
-}
-
-.mark-row {
-  display: flex;
-  gap: 16px;
-  align-items: flex-start;
-}
-
-.trova-mark {
-  flex-shrink: 0;
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
-  background: linear-gradient(145deg, var(--ion-color-primary) 0%, var(--ion-color-primary-shade) 100%);
-  color: #fff;
-  font-family: 'Fraunces', Georgia, serif;
+.hero-eyebrow {
+  margin: 0 0 10px;
+  font-size: 0.75rem;
   font-weight: 700;
-  font-size: 1.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 4px 14px rgba(45, 122, 78, 0.35);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ion-color-primary);
 }
 
-.cta-headline {
-  margin: 0;
-  font-size: clamp(1.2rem, 2.5vw, 1.5rem);
+.hero-title {
+  margin: 0 0 16px;
+  font-size: clamp(1.5rem, 5vw, 1.875rem);
   font-weight: 700;
-  line-height: 1.35;
-  color: #111827;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  color: #1a1d21;
 }
 
-.cta-action {
+.hero-lead {
+  margin: 0 0 28px;
+  font-size: 1.0625rem;
+  line-height: 1.55;
+  color: #5c5c5c;
+}
+
+.hero-cta {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  gap: 12px;
 }
 
-@media (min-width: 768px) {
-  .cta-action {
-    align-items: flex-end;
-  }
-}
-
-.add-to-slack-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 14px 22px;
-  font-family: inherit;
-  font-size: 1rem;
-  font-weight: 700;
-  color: #1a1a1a;
-  background: #fff;
-  border: 1px solid #d1d5db;
-  border-radius: 12px;
-  cursor: pointer;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
-  transition:
-    transform 0.15s ease,
-    box-shadow 0.15s ease,
-    border-color 0.15s ease;
-}
-
-.add-to-slack-btn:hover:not(:disabled) {
-  border-color: #9ca3af;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-  transform: translateY(-1px);
-}
-
-.add-to-slack-btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.slack-glyph {
-  display: flex;
+.add-to-slack-official {
+  display: inline-block;
   line-height: 0;
+  border-radius: 10px;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.add-to-slack-official:hover {
+  opacity: 0.92;
+}
+
+.add-to-slack-official img {
+  display: block;
+  width: 139px;
+  height: 40px;
+  max-width: 100%;
+}
+
+.add-to-slack-official--disabled {
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .config-warn {
-  margin-top: 12px;
+  margin: 0;
   font-size: 0.875rem;
   color: var(--ion-color-danger);
   text-align: center;
-  max-width: 280px;
+  max-width: 320px;
 }
 
-.feature-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 20px;
-  margin-bottom: 56px;
-}
-
-@media (min-width: 900px) {
-  .feature-grid {
-    grid-template-columns: 1fr 1fr;
-    gap: 24px;
-  }
-}
-
-.feature-card {
-  border-radius: 20px;
-  padding: 24px;
-  overflow: hidden;
-}
-
-.feature-card--trova {
-  background: linear-gradient(180deg, #eef2f6 0%, #e2e8f0 100%);
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 8px 30px rgba(15, 23, 42, 0.06);
-}
-
-.eyebrow {
-  margin: 0 0 16px;
-  font-size: 0.8rem;
+.section-title {
+  margin: 0 0 20px;
+  font-size: 1.125rem;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: #db2777;
+  color: #1a1d21;
 }
 
-.feature-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  font-weight: 600;
-  font-size: 1rem;
-  color: #1e293b;
-  line-height: 1.4;
+.benefits {
+  margin-bottom: 40px;
 }
 
-.feature-icon {
-  font-size: 24px;
-  color: var(--ion-color-primary);
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-
-.avatar-demo {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  margin: 28px 0 20px;
-}
-
-.avatar {
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
-  border: 3px solid #fff;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
-}
-
-.avatar--a {
-  background: linear-gradient(135deg, #93c5fd 0%, #6366f1 100%);
-}
-
-.avatar--b {
-  background: linear-gradient(135deg, #fca5a5 0%, #ec4899 100%);
-}
-
-.avatar-plus {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: var(--ion-color-primary);
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(45, 122, 78, 0.45);
-}
-
-.avatar-plus ion-icon {
-  font-size: 22px;
-}
-
-.feature-caption {
-  margin: 0;
-  font-size: 0.95rem;
-  color: #475569;
-  text-align: center;
-  font-weight: 500;
-}
-
-.feature-card--slack {
-  background: #1a1d21;
-  border: 1px solid #2d3339;
-  box-shadow:
-    0 20px 50px rgba(0, 0, 0, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
-}
-
-.slack-chrome {
-  color: #e8e8e8;
-  font-size: 0.875rem;
-}
-
-.slack-top {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 14px;
-  font-weight: 700;
-  font-size: 0.95rem;
-}
-
-.slack-app-name {
-  color: #fff;
-}
-
-.slack-verified {
-  color: #2eb67d;
-  font-size: 0.85rem;
-}
-
-.slack-chevron {
-  color: #9ca3af;
-  font-size: 0.75rem;
-}
-
-.slack-tabs {
-  display: flex;
-  gap: 20px;
-  margin-bottom: 18px;
-  border-bottom: 1px solid #333;
-  padding-bottom: 10px;
-}
-
-.slack-tab {
-  color: #9ca3af;
-  font-weight: 600;
-}
-
-.slack-tab--active {
-  color: #fff;
-  box-shadow: inset 0 -2px 0 var(--ion-color-primary);
-  padding-bottom: 10px;
-  margin-bottom: -11px;
-}
-
-.slack-lead {
-  margin: 0 0 16px;
-  color: #d1d5db;
-  line-height: 1.45;
-}
-
-.slack-primary-pill,
-.slack-secondary-pill {
-  display: block;
-  width: 100%;
-  font-family: inherit;
-  font-weight: 700;
-  font-size: 0.9rem;
-  padding: 12px 16px;
-  border-radius: 10px;
-  border: none;
-  cursor: default;
-  margin-bottom: 10px;
-  text-align: center;
-}
-
-.slack-primary-pill {
-  background: var(--ion-color-primary);
-  color: #fff;
-}
-
-.slack-secondary-pill {
-  background: #2d3339;
-  color: #e5e7eb;
-  border: 1px solid #404854;
-}
-
-.slack-profile-preview {
-  margin-top: 22px;
-  padding: 14px;
-  background: #252a30;
-  border-radius: 12px;
-  border: 1px solid #363d47;
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-}
-
-.preview-photo {
-  width: 56px;
-  height: 56px;
-  border-radius: 8px;
-  flex-shrink: 0;
-  background: linear-gradient(145deg, #fbbf24 0%, #f59e0b 50%, #d97706 100%);
-}
-
-.preview-copy {
-  min-width: 0;
-}
-
-.preview-title {
-  margin: 0 0 4px;
-  font-weight: 700;
-  color: #fff;
-  font-size: 0.85rem;
-  line-height: 1.3;
-}
-
-.preview-meta {
-  margin: 0 0 8px;
-  font-size: 0.75rem;
-  color: #9ca3af;
-}
-
-.preview-tags {
+.benefit-list {
   margin: 0;
   padding: 0;
   list-style: none;
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  gap: 20px;
 }
 
-.preview-tags li {
-  font-size: 0.65rem;
-  font-weight: 600;
-  padding: 4px 8px;
-  border-radius: 6px;
-  background: #1f2429;
-  color: #a1a1aa;
-}
-
-.closing {
-  padding: 8px 0 40px;
-  border-top: 1px solid var(--ion-border-color);
-  padding-top: 40px;
-}
-
-.closing-title {
-  font-family: 'Fraunces', Georgia, serif;
-  font-weight: 600;
-  font-size: clamp(1.35rem, 3vw, 1.85rem);
-  color: #111827;
-  margin: 0 0 20px;
-  line-height: 1.3;
-  text-align: center;
-  max-width: 36rem;
-  margin-left: auto;
-  margin-right: auto;
-}
-
-.closing-copy {
-  max-width: 40rem;
-  margin: 0 auto;
-}
-
-.closing-copy p {
-  margin: 0 0 16px;
-  font-size: 1.02rem;
-  line-height: 1.65;
-  color: #374151;
-}
-
-.closing-copy p:last-child {
-  margin-bottom: 0;
-}
-
-.how-to {
-  max-width: 40rem;
-  margin: 0 auto;
-  padding: 28px 24px;
+.benefit-item {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 20px;
   background: #fff;
-  border-radius: 16px;
-  border: 1px solid var(--ion-border-color);
-  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.04);
+  border-radius: 12px;
+  border: 1px solid #e4e4e4;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
-.how-to-title {
-  margin: 0 0 12px;
-  font-size: 1.1rem;
+.benefit-icon-wrap {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: rgba(var(--ion-color-primary-rgb), 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ion-color-primary);
+}
+
+.benefit-icon-wrap ion-icon {
+  font-size: 24px;
+}
+
+.benefit-title {
+  margin: 0 0 6px;
+  font-size: 1rem;
   font-weight: 700;
-  color: #111827;
+  color: #1a1d21;
 }
 
-.how-to p {
-  margin: 0 0 14px;
-  font-size: 0.95rem;
-  line-height: 1.6;
-  color: #4b5563;
+.benefit-text {
+  margin: 0;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: #5c5c5c;
 }
 
-.how-to p:last-child {
-  margin-bottom: 0;
+.steps {
+  margin-bottom: 36px;
 }
 
-.support-line a {
+.step-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.step-list li {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: #3d3d3d;
+}
+
+.step-num {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--ion-color-primary);
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.support-block {
+  padding: 20px;
+  background: #fff;
+  border-radius: 12px;
+  border: 1px solid #e4e4e4;
+  text-align: center;
+}
+
+.support-block__text {
+  margin: 0;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: #5c5c5c;
+}
+
+.inline-link {
   color: var(--ion-color-primary);
   font-weight: 600;
   text-decoration: none;
 }
 
-.support-line a:hover {
+.inline-link:hover {
   text-decoration: underline;
 }
 </style>

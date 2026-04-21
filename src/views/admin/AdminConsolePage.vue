@@ -74,6 +74,9 @@
           <ion-segment-button value="users">
             <ion-label>Users</ion-label>
           </ion-segment-button>
+          <ion-segment-button v-if="isSuperAdminUser" value="engagement">
+            <ion-label>Engagement</ion-label>
+          </ion-segment-button>
         </ion-segment>
 
         <!-- Tab Content -->
@@ -112,6 +115,14 @@
             <UserManagementSection
               :community-id="selectedCommunityId"
               @refresh="refreshData"
+            />
+          </div>
+
+          <!-- Super Admin Engagement Tab -->
+          <div v-if="activeTab === 'engagement'" class="tab-panel">
+            <SuperAdminEngagementSection
+              v-if="isSuperAdminUser && authStore.user?.id"
+              :user-id="authStore.user.id"
             />
           </div>
         </div>
@@ -210,6 +221,7 @@ import UserManagementSection from './sections/UserManagementSection.vue';
 import DataUploadSection from './sections/DataUploadSection.vue';
 import AnalyticsDashboardSection from './sections/AnalyticsDashboardSection.vue';
 import UserStatsSection from './sections/UserStatsSection.vue';
+import SuperAdminEngagementSection from './sections/SuperAdminEngagementSection.vue';
 import MagicIntrosPage from './MagicIntrosPage.vue';
 import SkillsListPage from './SkillsListPage.vue';
 import MentorListPage from './MentorListPage.vue';

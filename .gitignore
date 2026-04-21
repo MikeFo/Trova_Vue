@@ -5,3 +5,10 @@ dist
 .cert/
 # Local tooling
 .firebase/
+
+# macOS Finder metadata (never commit)
+.DS_Store
+
+# Firebase CLI debug output
+firebase-debug.log
+firebase-debug.*.log
