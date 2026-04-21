@@ -6,66 +6,62 @@ import path from 'path'
 import fs from 'fs'
 import { defineConfig } from 'vite'
 
-const keyPath = path.resolve(__dirname, './.cert/key.pem')
-const certPath = path.resolve(__dirname, './.cert/cert.pem')
-
-/** Local HTTPS for `vite dev` only; certs are gitignored and absent on CI (e.g. Netlify). */
-function getLocalHttps(): { key: Buffer; cert: Buffer } | undefined {
-  if (!fs.existsSync(keyPath) || !fs.existsSync(certPath)) {
-    return undefined
-  }
-  return {
-    key: fs.readFileSync(keyPath),
-    cert: fs.readFileSync(certPath),
-  }
-}
-
 // https://vitejs.dev/config/
 export default defineConfig(({ command }) => {
-  const https = command === 'serve' ? getLocalHttps() : undefined
+  /** Local HTTPS only for `vite dev`. Never read .cert/* during `vite build` (CI has no certs). */
+  const server: Record<string, unknown> = {
+    port: 5173,
+    strictPort: true,
+    host: true,
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+      'Cross-Origin-Embedder-Policy': 'unsafe-none',
+    },
+    proxy: {
+      '/api': {
+        target: process.env.VITE_API_TARGET || 'http://localhost:3000',
+        changeOrigin: true,
+        rewrite: (p: string) => p.replace(/^\/api/, ''),
+        secure: false,
+        configure: (proxy: import('http-proxy').ProxyServer) => {
+          proxy.on('error', (err) => {
+            console.log('proxy error', err)
+          })
+          proxy.on('proxyReq', (_proxyReq, req) => {
+            console.log('Sending Request to the Target:', req.method, req.url)
+          })
+          proxy.on('proxyRes', (proxyRes, req) => {
+            console.log('Received Response from the Target:', proxyRes.statusCode, req.url)
+          })
+        },
+      },
+    },
+  }
+
+  if (command === 'serve') {
+    const keyPath = path.resolve(__dirname, '.cert/key.pem')
+    const certPath = path.resolve(__dirname, '.cert/cert.pem')
+    if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+      server.https = {
+        key: fs.readFileSync(keyPath),
+        cert: fs.readFileSync(certPath),
+      }
+    } else {
+      console.warn('[vite] .cert/key.pem or .cert/cert.pem not found — dev server without HTTPS')
+    }
+  }
 
   return {
-    plugins: [
-      vue(),
-      legacy()
-    ],
+    plugins: [vue(), legacy()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
       },
     },
-    server: {
-      port: 5173,
-      strictPort: true,
-      ...(https ? { https } : {}),
-      host: true,
-      headers: {
-        'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
-        'Cross-Origin-Embedder-Policy': 'unsafe-none'
-      },
-      proxy: {
-        '/api': {
-          target: process.env.VITE_API_TARGET || 'http://localhost:3000',
-          changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api/, ''),
-          secure: false, // Set to false for localhost
-          configure: (proxy, _options) => {
-            proxy.on('error', (err, _req, _res) => {
-              console.log('proxy error', err);
-            });
-            proxy.on('proxyReq', (proxyReq, req, _res) => {
-              console.log('Sending Request to the Target:', req.method, req.url);
-            });
-            proxy.on('proxyRes', (proxyRes, req, _res) => {
-              console.log('Received Response from the Target:', proxyRes.statusCode, req.url);
-            });
-          },
-        }
-      }
-    },
+    server: server as import('vite').ServerOptions,
     test: {
       globals: true,
-      environment: 'jsdom'
-    }
+      environment: 'jsdom',
+    },
   }
 })
