@@ -4,7 +4,7 @@ export const environment = {
   oidcConfig: {
     client_id: '0oa4q2hnylxAJfIHR5d7',
     server_host: 'https://dev-62292605.okta.com/oauth2/default',
-    redirect_url: 'https://www.trovaus.com/login/callback',
+    redirect_url: 'https://vue.trovaus.com/login/callback',
     end_session_redirect_url: window.location.origin + '/logout',
     scopes: 'openid profile',
     pkce: true,
@@ -12,7 +12,7 @@ export const environment = {
   },
   scheme: 'com.okta.dev-62292605:/',
   apiUrl: 'https://api.trovaus.com',
-  siteUrl: 'https://www.trovaus.com',
+  siteUrl: 'https://vue.trovaus.com',
   googleMapsApiFindPlaceUrl: 'https://maps.googleapis.com/maps/api/place',
   googleMapsApiKey: 'AIzaSyB6H_o_9iGrFIftKKa7zNJeqHeIR_eUZxw',
   googleAnalyticsTrackerId: 'UA-123516927-1',
