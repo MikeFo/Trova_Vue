@@ -187,11 +187,36 @@ const userCardRefs = new Map<number, HTMLElement>();
 const visibleUserIds = ref<Set<number>>(new Set());
 let loadRequestId = 0;
 
+const prefersDarkQuery = '(prefers-color-scheme: dark)';
+const prefersDarkMql = window.matchMedia?.(prefersDarkQuery) ?? null;
+const isDarkMode = ref<boolean>(prefersDarkMql?.matches ?? false);
+let selectedMarkerUserId: number | null = null;
+
 // Clustering thresholds
 const CLUSTER_MIN_POINTS = 2; // cluster as soon as 2 markers are close
 const CLUSTER_RADIUS = 60; // larger radius so overlap becomes a cluster sooner
 // Approx 5-mile max zoom (roughly zoom level 13)
 const MAP_MAX_ZOOM = 13;
+
+const darkMapStyle: any[] = [
+  { elementType: 'geometry', stylers: [{ color: '#0b1220' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#0b1220' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#94a3b8' }] },
+  { featureType: 'administrative.locality', elementType: 'labels.text.fill', stylers: [{ color: '#cbd5e1' }] },
+  { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#94a3b8' }] },
+  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#0f1b2e' }] },
+  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#64748b' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#1e293b' }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#0f172a' }] },
+  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#94a3b8' }] },
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#27364f' }] },
+  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#0b1220' }] },
+  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#1e293b' }] },
+  { featureType: 'transit.station', elementType: 'labels.text.fill', stylers: [{ color: '#cbd5e1' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0a2a3a' }] },
+  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#64748b' }] },
+  { featureType: 'water', elementType: 'labels.text.stroke', stylers: [{ color: '#0b1220' }] },
+];
 
 /**
  * Ensure clustered markers are hidden when a cluster icon is shown.
@@ -255,35 +280,61 @@ function isCrossOriginImageUrl(url: string): boolean {
  * Create a default marker icon for users without profile pictures
  */
 function createDefaultMarkerIcon(): string {
-  const canvas = document.createElement('canvas');
-  const size = 40;
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  
-  if (!ctx) {
-    // Fallback to a simple colored circle
-    return 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMjAiIGZpbGw9IiMyZDdhNGUiLz48L3N2Zz4=';
+  return createSleekPinSvgDataUrl({ imageUrl: null, isSelected: false, isDark: isDarkMode.value });
+}
+
+function createSleekPinSvgDataUrl(opts: { imageUrl: string | null; isSelected: boolean; isDark: boolean }): string {
+  const size = opts.isSelected ? 50 : 46;
+  const circle = opts.isSelected ? 24 : 22;
+  const cx = size / 2;
+  const cy = circle;
+  const tipY = size - 2;
+
+  const stroke = opts.isSelected ? '#fbbf24' : (opts.isDark ? '#0b1220' : '#ffffff');
+  const ring = opts.isSelected ? '#fef3c7' : '#2d7a4e';
+  const shadowOpacity = opts.isDark ? 0.45 : 0.18;
+
+  const escapedUrl = opts.imageUrl
+    ? opts.imageUrl.replace(/&/g, '&amp;').replace(/'/g, '&apos;').replace(/"/g, '&quot;')
+    : null;
+
+  const clipId = `p${Math.random().toString(36).slice(2)}`;
+  const svg = `
+<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="rgba(0,0,0,${shadowOpacity})" />
+    </filter>
+    <clipPath id="${clipId}">
+      <circle cx="${cx}" cy="${cy}" r="${circle - 6}" />
+    </clipPath>
+  </defs>
+
+  <path filter="url(#shadow)" d="
+    M ${cx} ${tipY}
+    C ${cx - 10} ${tipY - 14}, ${cx - 18} ${tipY - 24}, ${cx - 18} ${cy + 2}
+    C ${cx - 18} ${cy - 10}, ${cx - 8} ${cy - 18}, ${cx} ${cy - 18}
+    C ${cx + 8} ${cy - 18}, ${cx + 18} ${cy - 10}, ${cx + 18} ${cy + 2}
+    C ${cx + 18} ${tipY - 24}, ${cx + 10} ${tipY - 14}, ${cx} ${tipY}
+    Z
+  " fill="${ring}" />
+
+  <circle cx="${cx}" cy="${cy}" r="${circle - 4}" fill="${stroke}" />
+  <circle cx="${cx}" cy="${cy}" r="${circle - 6}" fill="${opts.isDark ? '#111827' : '#f8fafc'}" />
+
+  ${
+    escapedUrl
+      ? `<image href="${escapedUrl}" x="${cx - (circle - 6)}" y="${cy - (circle - 6)}" width="${(circle - 6) * 2}" height="${(circle - 6) * 2}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clipId})" />`
+      : `
+        <g transform="translate(${cx}, ${cy})">
+          <circle cx="0" cy="-4" r="6" fill="${opts.isDark ? '#e2e8f0' : '#ffffff'}" opacity="0.95" />
+          <path d="M -11 14 C -8 4, 8 4, 11 14 Z" fill="${opts.isDark ? '#e2e8f0' : '#ffffff'}" opacity="0.95" />
+        </g>
+      `
   }
-  
-  // Draw a circular background
-  ctx.beginPath();
-  ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
-  ctx.fillStyle = '#2d7a4e'; // Primary green color
-  ctx.fill();
-  
-  // Draw a person icon (simple silhouette)
-  ctx.fillStyle = '#ffffff';
-  ctx.beginPath();
-  // Head
-  ctx.arc(size / 2, size / 2 - 4, 6, 0, Math.PI * 2);
-  ctx.fill();
-  // Body
-  ctx.beginPath();
-  ctx.arc(size / 2, size / 2 + 6, 8, 0, Math.PI * 2);
-  ctx.fill();
-  
-  return canvas.toDataURL('image/png');
+</svg>`.trim();
+
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
 /**
@@ -626,16 +677,16 @@ async function showMarkerInfo(marker: google.maps.Marker, profile: ProfilesInit,
   // This ensures the marker icon matches what's shown in the list
   const latestProfile = filteredProfiles.value.find(p => (p.userId || p.id) === userId) || profile;
   
-  // Update marker icon to ensure it matches current profile picture
+  selectedMarkerUserId = userId;
   await updateMarkerIcon(targetMarker, latestProfile);
   
   const content = `
-    <div style="padding: 8px; min-width: 200px;">
-      <h3 style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600;">
+    <div class="trova-map-infowindow" style="padding: 8px; min-width: 200px;">
+      <h3 class="trova-map-infowindow__title" style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600;">
         ${latestProfile.fullName || `${latestProfile.fname} ${latestProfile.lname}`}
       </h3>
-      ${latestProfile.bio ? `<p style="margin: 0; font-size: 14px; color: #666;">${latestProfile.bio}</p>` : ''}
-      ${latestProfile.currentLocationName ? `<p style="margin: 4px 0 0 0; font-size: 12px; color: #999;">
+      ${latestProfile.bio ? `<p class="trova-map-infowindow__body" style="margin: 0; font-size: 14px;">${latestProfile.bio}</p>` : ''}
+      ${latestProfile.currentLocationName ? `<p class="trova-map-infowindow__meta" style="margin: 4px 0 0 0; font-size: 12px;">
         📍 ${latestProfile.currentLocationName}
       </p>` : ''}
     </div>
@@ -823,13 +874,17 @@ function bringMarkerToFront(marker: google.maps.Marker) {
  * Uses profile picture URL directly; CSS makes marker images circular.
  */
 async function updateMarkerIcon(marker: google.maps.Marker, profile: ProfilesInit) {
-  const markerIcon = profile.profilePicture
-    ? profile.profilePicture
-    : createDefaultMarkerIcon();
+  const userId = profile.userId || profile.id;
+  const markerIcon = createSleekPinSvgDataUrl({
+    imageUrl: profile.profilePicture || null,
+    isSelected: selectedMarkerUserId != null && userId === selectedMarkerUserId,
+    isDark: isDarkMode.value,
+  });
+  const px = (selectedMarkerUserId != null && userId === selectedMarkerUserId) ? 50 : 46;
   marker.setIcon({
     url: markerIcon,
-    scaledSize: new google.maps.Size(40, 40),
-    anchor: new google.maps.Point(20, 20),
+    scaledSize: new google.maps.Size(px, px),
+    anchor: new google.maps.Point(px / 2, px - 2),
   });
 }
 
@@ -857,7 +912,7 @@ async function centerMapOnUser(profile: ProfilesInit) {
     // This ensures the marker icon matches what's shown in the list
     const latestProfile = filteredProfiles.value.find(p => (p.userId || p.id) === userId) || profile;
     
-    // Update marker icon to ensure it matches current profile picture
+    selectedMarkerUserId = userId;
     await updateMarkerIcon(userMarker, latestProfile);
     bringMarkerToFront(userMarker);
     
@@ -876,12 +931,12 @@ async function centerMapOnUser(profile: ProfilesInit) {
       // Open info window
       if (infoWindow.value) {
         const content = `
-          <div style="padding: 8px; min-width: 200px;">
-            <h3 style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600;">
+          <div class="trova-map-infowindow" style="padding: 8px; min-width: 200px;">
+            <h3 class="trova-map-infowindow__title" style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600;">
               ${latestProfile.fullName || `${latestProfile.fname} ${latestProfile.lname}`}
             </h3>
-            ${latestProfile.bio ? `<p style="margin: 0; font-size: 14px; color: #666;">${latestProfile.bio}</p>` : ''}
-            ${latestProfile.currentLocationName ? `<p style="margin: 4px 0 0 0; font-size: 12px; color: #999;">
+            ${latestProfile.bio ? `<p class="trova-map-infowindow__body" style="margin: 0; font-size: 14px;">${latestProfile.bio}</p>` : ''}
+            ${latestProfile.currentLocationName ? `<p class="trova-map-infowindow__meta" style="margin: 4px 0 0 0; font-size: 12px;">
               📍 ${latestProfile.currentLocationName}
             </p>` : ''}
           </div>
@@ -1234,6 +1289,7 @@ async function initializeMap() {
       streetViewControl: false,
       fullscreenControl: true,
       zoomControl: true,
+      styles: isDarkMode.value ? darkMapStyle : undefined,
     });
 
     infoWindow.value = new google.maps.InfoWindow();
@@ -1288,24 +1344,20 @@ async function updateMapMarkers(options?: { fitBounds?: boolean }) {
     const jitter = jitteredPositions.get(profile.userId || profile.id);
     const coords = jitter ?? { lat: profile.currentLat, lng: profile.currentLong };
     
-    // Use profile picture URL directly as marker icon when available. Legacy Marker
-    // displays image URLs fine (including cross-origin); canvas/SVG data URLs were
-    // failing for cross-origin pics. Existing CSS makes marker images circular.
-    let markerIcon: string;
-    if (profile.profilePicture) {
-      markerIcon = profile.profilePicture;
-    } else {
-      markerIcon = createDefaultMarkerIcon();
-    }
-
     const userId = profile.userId || profile.id;
+    const markerIcon = createSleekPinSvgDataUrl({
+      imageUrl: profile.profilePicture || null,
+      isSelected: selectedMarkerUserId != null && userId === selectedMarkerUserId,
+      isDark: isDarkMode.value,
+    });
+    const px = (selectedMarkerUserId != null && userId === selectedMarkerUserId) ? 50 : 46;
     const marker = new google.maps.Marker({
       position: coords,
       title: profile.fullName || `${profile.fname} ${profile.lname}`,
       icon: {
         url: markerIcon,
-        scaledSize: new google.maps.Size(40, 40),
-        anchor: new google.maps.Point(20, 20),
+        scaledSize: new google.maps.Size(px, px),
+        anchor: new google.maps.Point(px / 2, px - 2),
       },
       optimized: false,
     });
@@ -1431,6 +1483,7 @@ watch(() => communityStore.currentCommunityId, (newCommunityId) => {
 
 onMounted(async () => {
   await nextTick();
+  prefersDarkMql?.addEventListener?.('change', handleDarkModeChange);
   // Try to extract and set community from URL first (for Slack links)
   await extractAndSetCommunityFromUrl();
   await initializeMap();
@@ -1438,6 +1491,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  prefersDarkMql?.removeEventListener?.('change', handleDarkModeChange);
   if (markerClusterer.value) {
     markerClusterer.value.clearMarkers();
     markerClusterer.value = null;
@@ -1447,11 +1501,27 @@ onUnmounted(() => {
   markerToProfileMap.clear();
   userCardRefs.clear();
 });
+
+function handleDarkModeChange(event: MediaQueryListEvent) {
+  isDarkMode.value = event.matches;
+  if (map.value) {
+    map.value.setOptions({ styles: isDarkMode.value ? darkMapStyle : undefined });
+  }
+  // Repaint marker icons so border/shadow match the new scheme.
+  markers.value.forEach((m) => {
+    const userId = markerToProfileMap.get(m);
+    if (!userId) return;
+    const profile = filteredProfiles.value.find((p) => (p.userId || p.id) === userId);
+    if (profile) {
+      updateMarkerIcon(m, profile);
+    }
+  });
+}
 </script>
 
 <style scoped>
 .map-content {
-  --background: #f8fafc;
+  --background: var(--ion-background-color);
   height: 100%;
   overflow: hidden;
 }
@@ -1473,8 +1543,8 @@ onUnmounted(() => {
   min-width: 0;
   border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  background: white;
+  box-shadow: var(--ion-box-shadow);
+  background: var(--ion-card-background);
 }
 
 .map-title {
@@ -1482,8 +1552,8 @@ onUnmounted(() => {
   padding: 16px 20px;
   font-size: 24px;
   font-weight: 600;
-  color: #1a1a1a;
-  border-bottom: 1px solid #e2e8f0;
+  color: var(--ion-text-color);
+  border-bottom: 1px solid var(--ion-border-color);
   flex-shrink: 0;
 }
 
@@ -1496,18 +1566,18 @@ onUnmounted(() => {
 /* User Panel (Right) */
 .user-panel {
   width: 400px;
-  background: white;
+  background: var(--ion-card-background);
   display: flex;
   flex-direction: column;
   border-radius: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--ion-box-shadow);
   overflow: hidden;
 }
 
 .panel-header {
   padding: 20px;
-  border-bottom: 1px solid #e2e8f0;
-  background: white;
+  border-bottom: 1px solid var(--ion-border-color);
+  background: var(--ion-card-background);
   flex-shrink: 0;
 }
 
@@ -1515,7 +1585,7 @@ onUnmounted(() => {
   margin: 0 0 16px 0;
   font-size: 24px;
   font-weight: 600;
-  color: #1a1a1a;
+  color: var(--ion-text-color);
 }
 
 .search-wrapper {
@@ -1523,16 +1593,16 @@ onUnmounted(() => {
 }
 
 .panel-search {
-  --background: #f1f5f9;
+  --background: color-mix(in srgb, var(--ion-card-background) 75%, var(--ion-text-color) 5%);
   --box-shadow: none;
   --border-radius: 8px;
-  --placeholder-color: #64748b;
+  --placeholder-color: color-mix(in srgb, var(--ion-text-color) 55%, transparent);
   padding: 0;
 }
 
 .results-count {
   font-size: 14px;
-  color: #64748b;
+  color: color-mix(in srgb, var(--ion-text-color) 60%, transparent);
   margin-bottom: 12px;
 }
 
@@ -1555,8 +1625,8 @@ onUnmounted(() => {
   padding: 12px;
   margin-bottom: 8px;
   border-radius: 12px;
-  border: 1px solid #e2e8f0;
-  background: white;
+  border: 1px solid var(--ion-border-color);
+  background: var(--ion-card-background);
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -1568,12 +1638,12 @@ onUnmounted(() => {
 
 .user-card-selected {
   border-color: #2d7a4e;
-  background: #f0fdf4;
+  background: color-mix(in srgb, #2d7a4e 12%, var(--ion-card-background));
 }
 
 .user-card-highlighted {
   border-color: #fbbf24;
-  background: #fef3c7;
+  background: color-mix(in srgb, #fbbf24 20%, var(--ion-card-background));
   box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.3);
   animation: highlightPulse 0.5s ease-in-out;
 }
@@ -1611,7 +1681,7 @@ onUnmounted(() => {
   width: 48px;
   height: 48px;
   border-radius: 50%;
-  background: #e2e8f0;
+  background: color-mix(in srgb, var(--ion-text-color) 10%, var(--ion-card-background));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1619,7 +1689,7 @@ onUnmounted(() => {
 
 .avatar-placeholder ion-icon {
   font-size: 24px;
-  color: #94a3b8;
+  color: color-mix(in srgb, var(--ion-text-color) 55%, transparent);
 }
 
 .user-info {
@@ -1631,13 +1701,13 @@ onUnmounted(() => {
   margin: 0 0 4px 0;
   font-size: 16px;
   font-weight: 600;
-  color: #1a1a1a;
+  color: var(--ion-text-color);
 }
 
 .user-location {
   margin: 0 0 6px 0;
   font-size: 13px;
-  color: #64748b;
+  color: color-mix(in srgb, var(--ion-text-color) 60%, transparent);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -1646,7 +1716,7 @@ onUnmounted(() => {
 .user-bio {
   margin: 0 0 8px 0;
   font-size: 13px;
-  color: #475569;
+  color: color-mix(in srgb, var(--ion-text-color) 78%, transparent);
   line-height: 1.4;
   display: -webkit-box;
   line-clamp: 2;
@@ -1662,11 +1732,11 @@ onUnmounted(() => {
 }
 
 .interest-badge {
-  background: #e2e8f0;
+  background: color-mix(in srgb, var(--ion-text-color) 10%, var(--ion-card-background));
   border-radius: 4px;
   padding: 2px 8px;
   font-size: 11px;
-  color: #475569;
+  color: color-mix(in srgb, var(--ion-text-color) 78%, transparent);
 }
 
 .user-actions {
@@ -1689,7 +1759,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   padding: 60px 20px;
-  color: #94a3b8;
+  color: color-mix(in srgb, var(--ion-text-color) 55%, transparent);
 }
 
 .empty-icon {
@@ -1703,7 +1773,7 @@ onUnmounted(() => {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(255, 255, 255, 0.9);
+  background: color-mix(in srgb, var(--ion-background-color) 88%, transparent);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1720,7 +1790,7 @@ onUnmounted(() => {
 .loading-overlay p {
   margin-top: 16px;
   font-size: 16px;
-  color: #64748b;
+  color: color-mix(in srgb, var(--ion-text-color) 60%, transparent);
 }
 
 /* Mobile: Stack vertically */
@@ -1763,31 +1833,14 @@ onUnmounted(() => {
 
 <!-- Non-scoped styles for Google Maps markers (need to target external DOM) -->
 <style>
-/* Make Google Maps marker images circular - only target marker images, not map tiles or controls */
-/* Target images that are 40px (our marker size) or within marker containers */
-.gm-style .gm-marker img,
-.gm-style .gm-marker > div > img,
-.gm-style .gm-marker > div > div > img,
-.gm-style .gm-marker > div > div > div > img,
-/* Target images with specific sizes that match our markers */
-.gm-style img[width="40"][height="40"],
-.gm-style img[style*="width: 40px"][style*="height: 40px"],
-/* Target images from external sources (profile pictures) but exclude map tiles */
-.gm-style img[src*="firebase"]:not([src*="tile"]),
-.gm-style img[src*="s3"]:not([src*="tile"]),
-.gm-style img[src*="gravatar"]:not([src*="tile"]),
-.gm-style img[src*="slack"]:not([src*="tile"]),
-.gm-style img[src*="amazonaws"]:not([src*="tile"]),
-.gm-style img[src*="trova"]:not([src*="tile"]),
-.gm-style img[src*="github"]:not([src*="tile"]),
-/* Target data URLs (canvas-generated circular images) */
-.gm-style img[src^="data:image"],
-/* Target images in absolutely positioned divs that are likely markers (not map tiles) */
-.gm-style div[style*="position: absolute"][style*="z-index"] > img[width="40"],
-.gm-style div[style*="position: absolute"][style*="z-index"] > img[height="40"] {
-  border-radius: 50% !important;
-  overflow: hidden !important;
-  object-fit: cover !important;
-  clip-path: circle(50%) !important;
+/* InfoWindow theme (Google renders it outside Vue scope). */
+.gm-style .trova-map-infowindow {
+  color: var(--ion-text-color);
+}
+.gm-style .trova-map-infowindow__body {
+  color: color-mix(in srgb, var(--ion-text-color) 78%, transparent);
+}
+.gm-style .trova-map-infowindow__meta {
+  color: color-mix(in srgb, var(--ion-text-color) 60%, transparent);
 }
 </style>
