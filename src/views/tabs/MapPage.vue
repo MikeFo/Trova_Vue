@@ -142,6 +142,7 @@ import { profileService, type ProfilesInit } from '@/services/profile.service';
 import { communityService, type Community } from '@/services/community.service';
 import { environment } from '@/environments/environment';
 import { useGooglePlaces } from '@/composables/useGooglePlaces';
+import { useTheme } from '@/composables/useTheme';
 import { MarkerClusterer } from '@googlemaps/markerclusterer';
 import { slackSessionService } from '@/services/slack-session.service';
 import {
@@ -187,9 +188,7 @@ const userCardRefs = new Map<number, HTMLElement>();
 const visibleUserIds = ref<Set<number>>(new Set());
 let loadRequestId = 0;
 
-const prefersDarkQuery = '(prefers-color-scheme: dark)';
-const prefersDarkMql = window.matchMedia?.(prefersDarkQuery) ?? null;
-const isDarkMode = ref<boolean>(prefersDarkMql?.matches ?? false);
+const { isDark: isDarkMode } = useTheme();
 let selectedMarkerUserId: number | null = null;
 
 // Clustering thresholds
@@ -1483,7 +1482,6 @@ watch(() => communityStore.currentCommunityId, (newCommunityId) => {
 
 onMounted(async () => {
   await nextTick();
-  prefersDarkMql?.addEventListener?.('change', handleDarkModeChange);
   // Try to extract and set community from URL first (for Slack links)
   await extractAndSetCommunityFromUrl();
   await initializeMap();
@@ -1491,7 +1489,6 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  prefersDarkMql?.removeEventListener?.('change', handleDarkModeChange);
   if (markerClusterer.value) {
     markerClusterer.value.clearMarkers();
     markerClusterer.value = null;
@@ -1502,21 +1499,22 @@ onUnmounted(() => {
   userCardRefs.clear();
 });
 
-function handleDarkModeChange(event: MediaQueryListEvent) {
-  isDarkMode.value = event.matches;
-  if (map.value) {
-    map.value.setOptions({ styles: isDarkMode.value ? darkMapStyle : undefined });
-  }
-  // Repaint marker icons so border/shadow match the new scheme.
-  markers.value.forEach((m) => {
-    const userId = markerToProfileMap.get(m);
-    if (!userId) return;
-    const profile = filteredProfiles.value.find((p) => (p.userId || p.id) === userId);
-    if (profile) {
-      updateMarkerIcon(m, profile);
+watch(
+  () => isDarkMode.value,
+  () => {
+    if (map.value) {
+      map.value.setOptions({ styles: isDarkMode.value ? darkMapStyle : undefined });
     }
-  });
-}
+    markers.value.forEach((m) => {
+      const userId = markerToProfileMap.get(m);
+      if (!userId) return;
+      const profile = filteredProfiles.value.find((p) => (p.userId || p.id) === userId);
+      if (profile) {
+        updateMarkerIcon(m, profile);
+      }
+    });
+  },
+);
 </script>
 
 <style scoped>
