@@ -696,9 +696,11 @@ async function showMarkerInfo(marker: google.maps.Marker, profile: ProfilesInit,
 
   // Inline colors because InfoWindow is rendered outside Vue scope and CSS vars/color-mix
   // can fail to apply depending on how Google injects the DOM.
-  const titleColor = isDarkMode.value ? '#f1f5f9' : '#0f172a';
-  const bodyColor = isDarkMode.value ? '#cbd5e1' : '#334155';
-  const metaColor = isDarkMode.value ? '#94a3b8' : '#64748b';
+  // Google InfoWindow background remains light even in dark maps,
+  // so use dark text in both themes to avoid "invisible" text.
+  const titleColor = '#0f172a';
+  const bodyColor = '#334155';
+  const metaColor = '#64748b';
   
   const content = `
     <div class="trova-map-infowindow" style="padding: 8px; min-width: 200px;">
@@ -897,9 +899,9 @@ async function updateMarkerIcon(marker: google.maps.Marker, profile: ProfilesIni
   const userId = profile.userId || profile.id;
   const isSelected = selectedMarkerUserId != null && userId === selectedMarkerUserId;
 
-  // Most profile images are cross-origin and won't reliably render inside an SVG data URL.
-  // In that case, fall back to using the raw image URL as the marker icon so the avatar always shows.
-  if (profile.profilePicture && isCrossOriginImageUrl(profile.profilePicture)) {
+  // Use the raw image URL for avatars (this is how the map behaved pre-dark-mode changes and
+  // is the most reliable path across browsers/CORS). The gradient "pin" is used for defaults.
+  if (profile.profilePicture) {
     const px = isSelected ? 50 : 46;
     marker.setIcon({
       url: profile.profilePicture,
@@ -964,9 +966,9 @@ async function centerMapOnUser(profile: ProfilesInit) {
       
       // Open info window
       if (infoWindow.value) {
-        const titleColor = isDarkMode.value ? '#f1f5f9' : '#0f172a';
-        const bodyColor = isDarkMode.value ? '#cbd5e1' : '#334155';
-        const metaColor = isDarkMode.value ? '#94a3b8' : '#64748b';
+        const titleColor = '#0f172a';
+        const bodyColor = '#334155';
+        const metaColor = '#64748b';
 
         const content = `
           <div class="trova-map-infowindow" style="padding: 8px; min-width: 200px;">
@@ -1399,15 +1401,14 @@ async function updateMapMarkers(options?: { fitBounds?: boolean }) {
     const isSelected = selectedMarkerUserId != null && userId === selectedMarkerUserId;
     const px = isSelected ? 50 : 46;
 
-    // See updateMarkerIcon(): cross-origin avatars render more reliably as direct marker URLs.
-    const markerIcon =
-      profile.profilePicture && isCrossOriginImageUrl(profile.profilePicture)
-        ? profile.profilePicture
-        : createSleekPinSvgDataUrl({
-            imageUrl: profile.profilePicture || null,
-            isSelected,
-            isDark: isDarkMode.value,
-          });
+    // See updateMarkerIcon(): use direct URL icons for avatars.
+    const markerIcon = profile.profilePicture
+      ? profile.profilePicture
+      : createSleekPinSvgDataUrl({
+          imageUrl: null,
+          isSelected,
+          isDark: isDarkMode.value,
+        });
     const marker = new google.maps.Marker({
       position: coords,
       title: profile.fullName || `${profile.fname} ${profile.lname}`,
@@ -1415,7 +1416,7 @@ async function updateMapMarkers(options?: { fitBounds?: boolean }) {
         url: markerIcon,
         scaledSize: new google.maps.Size(px, px),
         anchor:
-          profile.profilePicture && isCrossOriginImageUrl(profile.profilePicture)
+          profile.profilePicture
             ? new google.maps.Point(px / 2, px / 2)
             : new google.maps.Point(px / 2, px - 2),
       },
