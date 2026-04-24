@@ -299,7 +299,7 @@ function createSleekPinSvgDataUrl(opts: { imageUrl: string | null; isSelected: b
 
   const clipId = `p${Math.random().toString(36).slice(2)}`;
   const svg = `
-<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
+<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
   <defs>
     <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
       <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="rgba(0,0,0,${shadowOpacity})" />
@@ -323,7 +323,7 @@ function createSleekPinSvgDataUrl(opts: { imageUrl: string | null; isSelected: b
 
   ${
     escapedUrl
-      ? `<image href="${escapedUrl}" x="${cx - (circle - 6)}" y="${cy - (circle - 6)}" width="${(circle - 6) * 2}" height="${(circle - 6) * 2}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clipId})" />`
+      ? `<image href="${escapedUrl}" xlink:href="${escapedUrl}" x="${cx - (circle - 6)}" y="${cy - (circle - 6)}" width="${(circle - 6) * 2}" height="${(circle - 6) * 2}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clipId})" />`
       : `
         <g transform="translate(${cx}, ${cy})">
           <circle cx="0" cy="-4" r="6" fill="${opts.isDark ? '#e2e8f0' : '#ffffff'}" opacity="0.95" />
@@ -1039,8 +1039,21 @@ async function showSlackSessionExpiredAlert() {
         text: 'Go Back to Slack',
         role: 'cancel',
         handler: () => {
-          // User can manually go back or we could try to detect Slack
-          window.history.back();
+          const slackTeamId = (route.query.slackTeamId as string) || '';
+          const slackAppId = environment.slackAppId;
+
+          // Prefer a deterministic Slack deep link over history.back() (which often doesn't work
+          // when the browser tab wasn't actually navigated from Slack).
+          if (slackTeamId && slackAppId) {
+            window.location.href = `slack://app?team=${slackTeamId}&id=${slackAppId}&tab=home`;
+            return;
+          }
+
+          // Fallback: open Slack (best-effort) and also try browser history.
+          window.location.href = 'slack://open';
+          setTimeout(() => {
+            window.history.back();
+          }, 250);
         }
       },
       {
