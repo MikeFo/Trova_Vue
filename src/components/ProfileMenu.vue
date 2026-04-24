@@ -9,6 +9,16 @@
   >
     <ion-content>
       <ion-list lines="none">
+          <ion-item>
+            <ion-icon :icon="moonOutline" slot="start"></ion-icon>
+            <ion-label>Dark mode</ion-label>
+            <ion-toggle
+              slot="end"
+              :checked="isDark"
+              @ionChange="onToggleDarkMode"
+            ></ion-toggle>
+          </ion-item>
+
         <ion-item button @click="navigateTo('/tabs/profile')">
           <ion-icon :icon="personOutline" slot="start"></ion-icon>
           <ion-label>My Profile</ion-label>
@@ -107,6 +117,7 @@ import {
   IonItem,
   IonLabel,
   IonIcon,
+  IonToggle,
 } from '@ionic/vue';
 import {
   personOutline,
@@ -125,7 +136,9 @@ import {
   documentTextOutline,
   lockClosedOutline,
   documentOutline,
+  moonOutline,
 } from 'ionicons/icons';
+import { useTheme } from '@/composables/useTheme';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -133,6 +146,7 @@ const communityStore = useCommunityStore();
 const popoverRef = ref<any>(null);
 const showMore = ref(false);
 const isPropertyManager = ref(false);
+const { isDark, setDark } = useTheme();
 
 const currentCommunityId = computed(() => {
   return communityStore.currentCommunityId;
@@ -200,6 +214,10 @@ function onMenuOpen() {
   });
 }
 
+function onToggleDarkMode(ev: CustomEvent) {
+  setDark(Boolean((ev as any)?.detail?.checked));
+}
+
 async function handleLogout() {
   try {
     await authService.logout();
@@ -232,7 +250,7 @@ ion-popover {
 }
 
 .more-menu {
-  background: #f8fafc;
+  background: color-mix(in srgb, var(--ion-background-color) 85%, var(--ion-text-color) 3%);
   padding: 8px 0;
 }
 
@@ -244,7 +262,7 @@ ion-item {
 
 ion-icon {
   font-size: 20px;
-  color: #64748b;
+  color: color-mix(in srgb, var(--ion-text-color) 60%, transparent);
 }
 </style>
 

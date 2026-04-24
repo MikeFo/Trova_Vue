@@ -142,6 +142,7 @@ import { profileService, type ProfilesInit } from '@/services/profile.service';
 import { communityService, type Community } from '@/services/community.service';
 import { environment } from '@/environments/environment';
 import { useGooglePlaces } from '@/composables/useGooglePlaces';
+import { useTheme } from '@/composables/useTheme';
 import { MarkerClusterer } from '@googlemaps/markerclusterer';
 import { slackSessionService } from '@/services/slack-session.service';
 import {
@@ -187,9 +188,7 @@ const userCardRefs = new Map<number, HTMLElement>();
 const visibleUserIds = ref<Set<number>>(new Set());
 let loadRequestId = 0;
 
-const prefersDarkQuery = '(prefers-color-scheme: dark)';
-const prefersDarkMql = window.matchMedia?.(prefersDarkQuery) ?? null;
-const isDarkMode = ref<boolean>(prefersDarkMql?.matches ?? false);
+const { isDark: isDarkMode } = useTheme();
 let selectedMarkerUserId: number | null = null;
 
 // Clustering thresholds
@@ -277,6 +276,47 @@ function isCrossOriginImageUrl(url: string): boolean {
 }
 
 /**
+ * Google Maps marker icons loaded on an HTTPS page will fail for http:// image URLs (mixed content).
+ * Normalize to https when possible so avatars match what <img> can load in the main app.
+ */
+function normalizeMarkerImageUrl(url: string | undefined | null): string | null {
+  if (!url || typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('//')) {
+    return `https:${trimmed}`;
+  }
+  if (/^http:\/\//i.test(trimmed)) {
+    return trimmed.replace(/^http:/i, 'https:');
+  }
+  return trimmed;
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function buildMapInfoWindowHtml(profile: ProfilesInit): string {
+  const name = escapeHtml(profile.fullName || `${profile.fname} ${profile.lname}`);
+  const bio = profile.bio ? escapeHtml(profile.bio) : '';
+  const loc = profile.currentLocationName ? escapeHtml(profile.currentLocationName) : '';
+  // Force readable contrast: Google injects the HTML into a light bubble; global dark-mode
+  // styles can otherwise make text white-on-white. `all: initial` resets inherited color.
+  return `
+    <div class="trova-map-infowindow" style="all: initial; box-sizing: border-box; display: block; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 10px 12px; min-width: 220px; max-width: 280px; background: #ffffff; color: #0f172a; border-radius: 8px;">
+      <div style="margin: 0 0 6px 0; font-size: 16px; font-weight: 600; color: #0f172a; line-height: 1.25;">${name}</div>
+      ${bio ? `<div style="margin: 0; font-size: 14px; color: #334155; line-height: 1.35;">${bio}</div>` : ''}
+      ${loc ? `<div style="margin: 8px 0 0 0; font-size: 12px; color: #64748b; line-height: 1.3;">📍 ${loc}</div>` : ''}
+    </div>
+  `.trim();
+}
+
+/**
  * Create a default marker icon for users without profile pictures
  */
 function createDefaultMarkerIcon(): string {
@@ -291,17 +331,28 @@ function createSleekPinSvgDataUrl(opts: { imageUrl: string | null; isSelected: b
   const tipY = size - 2;
 
   const stroke = opts.isSelected ? '#fbbf24' : (opts.isDark ? '#0b1220' : '#ffffff');
-  const ring = opts.isSelected ? '#fef3c7' : '#2d7a4e';
+  // Linear "new green" gradient (matches design reference).
+  const gradStart = '#2aa876';
+  const gradMid = '#34b57e';
+  const gradEnd = '#42c290';
+
+  const ring = opts.isSelected ? '#fef3c7' : `url(#pinGrad)`;
   const shadowOpacity = opts.isDark ? 0.45 : 0.18;
 
-  const escapedUrl = opts.imageUrl
-    ? opts.imageUrl.replace(/&/g, '&amp;').replace(/'/g, '&apos;').replace(/"/g, '&quot;')
+  const canInlineImage = Boolean(opts.imageUrl) && !isCrossOriginImageUrl(opts.imageUrl as string);
+  const escapedUrl = canInlineImage
+    ? (opts.imageUrl as string).replace(/&/g, '&amp;').replace(/'/g, '&apos;').replace(/"/g, '&quot;')
     : null;
 
   const clipId = `p${Math.random().toString(36).slice(2)}`;
   const svg = `
-<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
+<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
   <defs>
+    <linearGradient id="pinGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="${gradStart}" />
+      <stop offset="50%" stop-color="${gradMid}" />
+      <stop offset="100%" stop-color="${gradEnd}" />
+    </linearGradient>
     <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
       <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="rgba(0,0,0,${shadowOpacity})" />
     </filter>
@@ -324,7 +375,7 @@ function createSleekPinSvgDataUrl(opts: { imageUrl: string | null; isSelected: b
 
   ${
     escapedUrl
-      ? `<image href="${escapedUrl}" x="${cx - (circle - 6)}" y="${cy - (circle - 6)}" width="${(circle - 6) * 2}" height="${(circle - 6) * 2}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clipId})" />`
+      ? `<image href="${escapedUrl}" xlink:href="${escapedUrl}" x="${cx - (circle - 6)}" y="${cy - (circle - 6)}" width="${(circle - 6) * 2}" height="${(circle - 6) * 2}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clipId})" />`
       : `
         <g transform="translate(${cx}, ${cy})">
           <circle cx="0" cy="-4" r="6" fill="${opts.isDark ? '#e2e8f0' : '#ffffff'}" opacity="0.95" />
@@ -539,10 +590,14 @@ function createClusterRenderer() {
         });
       }
       
-      // Clean, modern design - flat single color, no shading
+      // Clean, modern design - linear green gradient
       ctx.beginPath();
       ctx.arc(radius, radius, radius - 1, 0, Math.PI * 2);
-      ctx.fillStyle = '#2d7a4e'; // Primary green color - consistent for all clusters
+      const grad = ctx.createLinearGradient(0, 0, size, 0);
+      grad.addColorStop(0, '#2aa876');
+      grad.addColorStop(0.5, '#34b57e');
+      grad.addColorStop(1, '#42c290');
+      ctx.fillStyle = grad;
       ctx.fill();
       
       // White text
@@ -679,19 +734,8 @@ async function showMarkerInfo(marker: google.maps.Marker, profile: ProfilesInit,
   
   selectedMarkerUserId = userId;
   await updateMarkerIcon(targetMarker, latestProfile);
-  
-  const content = `
-    <div class="trova-map-infowindow" style="padding: 8px; min-width: 200px;">
-      <h3 class="trova-map-infowindow__title" style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600;">
-        ${latestProfile.fullName || `${latestProfile.fname} ${latestProfile.lname}`}
-      </h3>
-      ${latestProfile.bio ? `<p class="trova-map-infowindow__body" style="margin: 0; font-size: 14px;">${latestProfile.bio}</p>` : ''}
-      ${latestProfile.currentLocationName ? `<p class="trova-map-infowindow__meta" style="margin: 4px 0 0 0; font-size: 12px;">
-        📍 ${latestProfile.currentLocationName}
-      </p>` : ''}
-    </div>
-  `;
-  infoWindow.value.setContent(content);
+
+  infoWindow.value.setContent(buildMapInfoWindowHtml(latestProfile));
   // Keep the clicked marker on top when multiple users share a location
   bringMarkerToFront(targetMarker);
   infoWindow.value.open(map.value, targetMarker);
@@ -875,12 +919,27 @@ function bringMarkerToFront(marker: google.maps.Marker) {
  */
 async function updateMarkerIcon(marker: google.maps.Marker, profile: ProfilesInit) {
   const userId = profile.userId || profile.id;
+  const isSelected = selectedMarkerUserId != null && userId === selectedMarkerUserId;
+
+  // Use the raw image URL for avatars (this is how the map behaved pre-dark-mode changes and
+  // is the most reliable path across browsers/CORS). The gradient "pin" is used for defaults.
+  const picUrl = normalizeMarkerImageUrl(profile.profilePicture);
+  if (picUrl) {
+    const px = isSelected ? 50 : 46;
+    marker.setIcon({
+      url: picUrl,
+      scaledSize: new google.maps.Size(px, px),
+      anchor: new google.maps.Point(px / 2, px / 2),
+    });
+    return;
+  }
+
   const markerIcon = createSleekPinSvgDataUrl({
     imageUrl: profile.profilePicture || null,
-    isSelected: selectedMarkerUserId != null && userId === selectedMarkerUserId,
+    isSelected,
     isDark: isDarkMode.value,
   });
-  const px = (selectedMarkerUserId != null && userId === selectedMarkerUserId) ? 50 : 46;
+  const px = isSelected ? 50 : 46;
   marker.setIcon({
     url: markerIcon,
     scaledSize: new google.maps.Size(px, px),
@@ -930,18 +989,7 @@ async function centerMapOnUser(profile: ProfilesInit) {
       
       // Open info window
       if (infoWindow.value) {
-        const content = `
-          <div class="trova-map-infowindow" style="padding: 8px; min-width: 200px;">
-            <h3 class="trova-map-infowindow__title" style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600;">
-              ${latestProfile.fullName || `${latestProfile.fname} ${latestProfile.lname}`}
-            </h3>
-            ${latestProfile.bio ? `<p class="trova-map-infowindow__body" style="margin: 0; font-size: 14px;">${latestProfile.bio}</p>` : ''}
-            ${latestProfile.currentLocationName ? `<p class="trova-map-infowindow__meta" style="margin: 4px 0 0 0; font-size: 12px;">
-              📍 ${latestProfile.currentLocationName}
-            </p>` : ''}
-          </div>
-        `;
-        infoWindow.value.setContent(content);
+        infoWindow.value.setContent(buildMapInfoWindowHtml(latestProfile));
         infoWindow.value.open(map.value, userMarker);
       }
     }
@@ -1040,8 +1088,21 @@ async function showSlackSessionExpiredAlert() {
         text: 'Go Back to Slack',
         role: 'cancel',
         handler: () => {
-          // User can manually go back or we could try to detect Slack
-          window.history.back();
+          const slackTeamId = (route.query.slackTeamId as string) || '';
+          const slackAppId = environment.slackAppId;
+
+          // Prefer a deterministic Slack deep link over history.back() (which often doesn't work
+          // when the browser tab wasn't actually navigated from Slack).
+          if (slackTeamId && slackAppId) {
+            window.location.href = `slack://app?team=${slackTeamId}&id=${slackAppId}&tab=home`;
+            return;
+          }
+
+          // Fallback: open Slack (best-effort) and also try browser history.
+          window.location.href = 'slack://open';
+          setTimeout(() => {
+            window.history.back();
+          }, 250);
         }
       },
       {
@@ -1345,19 +1406,28 @@ async function updateMapMarkers(options?: { fitBounds?: boolean }) {
     const coords = jitter ?? { lat: profile.currentLat, lng: profile.currentLong };
     
     const userId = profile.userId || profile.id;
-    const markerIcon = createSleekPinSvgDataUrl({
-      imageUrl: profile.profilePicture || null,
-      isSelected: selectedMarkerUserId != null && userId === selectedMarkerUserId,
-      isDark: isDarkMode.value,
-    });
-    const px = (selectedMarkerUserId != null && userId === selectedMarkerUserId) ? 50 : 46;
+    const isSelected = selectedMarkerUserId != null && userId === selectedMarkerUserId;
+    const px = isSelected ? 50 : 46;
+
+    // See updateMarkerIcon(): use direct URL icons for avatars.
+    const picUrl = normalizeMarkerImageUrl(profile.profilePicture);
+    const markerIcon = picUrl
+      ? picUrl
+      : createSleekPinSvgDataUrl({
+          imageUrl: null,
+          isSelected,
+          isDark: isDarkMode.value,
+        });
     const marker = new google.maps.Marker({
       position: coords,
       title: profile.fullName || `${profile.fname} ${profile.lname}`,
       icon: {
         url: markerIcon,
         scaledSize: new google.maps.Size(px, px),
-        anchor: new google.maps.Point(px / 2, px - 2),
+        anchor:
+          picUrl
+            ? new google.maps.Point(px / 2, px / 2)
+            : new google.maps.Point(px / 2, px - 2),
       },
       optimized: false,
     });
@@ -1483,7 +1553,6 @@ watch(() => communityStore.currentCommunityId, (newCommunityId) => {
 
 onMounted(async () => {
   await nextTick();
-  prefersDarkMql?.addEventListener?.('change', handleDarkModeChange);
   // Try to extract and set community from URL first (for Slack links)
   await extractAndSetCommunityFromUrl();
   await initializeMap();
@@ -1491,7 +1560,6 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  prefersDarkMql?.removeEventListener?.('change', handleDarkModeChange);
   if (markerClusterer.value) {
     markerClusterer.value.clearMarkers();
     markerClusterer.value = null;
@@ -1502,21 +1570,22 @@ onUnmounted(() => {
   userCardRefs.clear();
 });
 
-function handleDarkModeChange(event: MediaQueryListEvent) {
-  isDarkMode.value = event.matches;
-  if (map.value) {
-    map.value.setOptions({ styles: isDarkMode.value ? darkMapStyle : undefined });
-  }
-  // Repaint marker icons so border/shadow match the new scheme.
-  markers.value.forEach((m) => {
-    const userId = markerToProfileMap.get(m);
-    if (!userId) return;
-    const profile = filteredProfiles.value.find((p) => (p.userId || p.id) === userId);
-    if (profile) {
-      updateMarkerIcon(m, profile);
+watch(
+  () => isDarkMode.value,
+  () => {
+    if (map.value) {
+      map.value.setOptions({ styles: isDarkMode.value ? darkMapStyle : undefined });
     }
-  });
-}
+    markers.value.forEach((m) => {
+      const userId = markerToProfileMap.get(m);
+      if (!userId) return;
+      const profile = filteredProfiles.value.find((p) => (p.userId || p.id) === userId);
+      if (profile) {
+        updateMarkerIcon(m, profile);
+      }
+    });
+  },
+);
 </script>
 
 <style scoped>
@@ -1842,5 +1911,17 @@ function handleDarkModeChange(event: MediaQueryListEvent) {
 }
 .gm-style .trova-map-infowindow__meta {
   color: color-mix(in srgb, var(--ion-text-color) 60%, transparent);
+}
+
+/* Cross-origin avatar markers (direct image URL icons) */
+.gm-style img[style*="width: 46px"][style*="height: 46px"],
+.gm-style img[style*="width: 50px"][style*="height: 50px"],
+.gm-style img[width="46"][height="46"],
+.gm-style img[width="50"][height="50"] {
+  border-radius: 9999px !important;
+  object-fit: cover !important;
+  /* subtle edge so avatars are readable on dark map */
+  outline: 2px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
 }
 </style>
