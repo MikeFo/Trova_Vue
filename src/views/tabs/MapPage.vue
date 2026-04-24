@@ -276,6 +276,47 @@ function isCrossOriginImageUrl(url: string): boolean {
 }
 
 /**
+ * Google Maps marker icons loaded on an HTTPS page will fail for http:// image URLs (mixed content).
+ * Normalize to https when possible so avatars match what <img> can load in the main app.
+ */
+function normalizeMarkerImageUrl(url: string | undefined | null): string | null {
+  if (!url || typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('//')) {
+    return `https:${trimmed}`;
+  }
+  if (/^http:\/\//i.test(trimmed)) {
+    return trimmed.replace(/^http:/i, 'https:');
+  }
+  return trimmed;
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function buildMapInfoWindowHtml(profile: ProfilesInit): string {
+  const name = escapeHtml(profile.fullName || `${profile.fname} ${profile.lname}`);
+  const bio = profile.bio ? escapeHtml(profile.bio) : '';
+  const loc = profile.currentLocationName ? escapeHtml(profile.currentLocationName) : '';
+  // Force readable contrast: Google injects the HTML into a light bubble; global dark-mode
+  // styles can otherwise make text white-on-white. `all: initial` resets inherited color.
+  return `
+    <div class="trova-map-infowindow" style="all: initial; box-sizing: border-box; display: block; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 10px 12px; min-width: 220px; max-width: 280px; background: #ffffff; color: #0f172a; border-radius: 8px;">
+      <div style="margin: 0 0 6px 0; font-size: 16px; font-weight: 600; color: #0f172a; line-height: 1.25;">${name}</div>
+      ${bio ? `<div style="margin: 0; font-size: 14px; color: #334155; line-height: 1.35;">${bio}</div>` : ''}
+      ${loc ? `<div style="margin: 8px 0 0 0; font-size: 12px; color: #64748b; line-height: 1.3;">📍 ${loc}</div>` : ''}
+    </div>
+  `.trim();
+}
+
+/**
  * Create a default marker icon for users without profile pictures
  */
 function createDefaultMarkerIcon(): string {
@@ -694,26 +735,7 @@ async function showMarkerInfo(marker: google.maps.Marker, profile: ProfilesInit,
   selectedMarkerUserId = userId;
   await updateMarkerIcon(targetMarker, latestProfile);
 
-  // Inline colors because InfoWindow is rendered outside Vue scope and CSS vars/color-mix
-  // can fail to apply depending on how Google injects the DOM.
-  // Google InfoWindow background remains light even in dark maps,
-  // so use dark text in both themes to avoid "invisible" text.
-  const titleColor = '#0f172a';
-  const bodyColor = '#334155';
-  const metaColor = '#64748b';
-  
-  const content = `
-    <div class="trova-map-infowindow" style="padding: 8px; min-width: 200px;">
-      <h3 class="trova-map-infowindow__title" style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: ${titleColor};">
-        ${latestProfile.fullName || `${latestProfile.fname} ${latestProfile.lname}`}
-      </h3>
-      ${latestProfile.bio ? `<p class="trova-map-infowindow__body" style="margin: 0; font-size: 14px; color: ${bodyColor};">${latestProfile.bio}</p>` : ''}
-      ${latestProfile.currentLocationName ? `<p class="trova-map-infowindow__meta" style="margin: 4px 0 0 0; font-size: 12px; color: ${metaColor};">
-        📍 ${latestProfile.currentLocationName}
-      </p>` : ''}
-    </div>
-  `;
-  infoWindow.value.setContent(content);
+  infoWindow.value.setContent(buildMapInfoWindowHtml(latestProfile));
   // Keep the clicked marker on top when multiple users share a location
   bringMarkerToFront(targetMarker);
   infoWindow.value.open(map.value, targetMarker);
@@ -901,10 +923,11 @@ async function updateMarkerIcon(marker: google.maps.Marker, profile: ProfilesIni
 
   // Use the raw image URL for avatars (this is how the map behaved pre-dark-mode changes and
   // is the most reliable path across browsers/CORS). The gradient "pin" is used for defaults.
-  if (profile.profilePicture) {
+  const picUrl = normalizeMarkerImageUrl(profile.profilePicture);
+  if (picUrl) {
     const px = isSelected ? 50 : 46;
     marker.setIcon({
-      url: profile.profilePicture,
+      url: picUrl,
       scaledSize: new google.maps.Size(px, px),
       anchor: new google.maps.Point(px / 2, px / 2),
     });
@@ -966,22 +989,7 @@ async function centerMapOnUser(profile: ProfilesInit) {
       
       // Open info window
       if (infoWindow.value) {
-        const titleColor = '#0f172a';
-        const bodyColor = '#334155';
-        const metaColor = '#64748b';
-
-        const content = `
-          <div class="trova-map-infowindow" style="padding: 8px; min-width: 200px;">
-            <h3 class="trova-map-infowindow__title" style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: ${titleColor};">
-              ${latestProfile.fullName || `${latestProfile.fname} ${latestProfile.lname}`}
-            </h3>
-            ${latestProfile.bio ? `<p class="trova-map-infowindow__body" style="margin: 0; font-size: 14px; color: ${bodyColor};">${latestProfile.bio}</p>` : ''}
-            ${latestProfile.currentLocationName ? `<p class="trova-map-infowindow__meta" style="margin: 4px 0 0 0; font-size: 12px; color: ${metaColor};">
-              📍 ${latestProfile.currentLocationName}
-            </p>` : ''}
-          </div>
-        `;
-        infoWindow.value.setContent(content);
+        infoWindow.value.setContent(buildMapInfoWindowHtml(latestProfile));
         infoWindow.value.open(map.value, userMarker);
       }
     }
@@ -1402,8 +1410,9 @@ async function updateMapMarkers(options?: { fitBounds?: boolean }) {
     const px = isSelected ? 50 : 46;
 
     // See updateMarkerIcon(): use direct URL icons for avatars.
-    const markerIcon = profile.profilePicture
-      ? profile.profilePicture
+    const picUrl = normalizeMarkerImageUrl(profile.profilePicture);
+    const markerIcon = picUrl
+      ? picUrl
       : createSleekPinSvgDataUrl({
           imageUrl: null,
           isSelected,
@@ -1416,7 +1425,7 @@ async function updateMapMarkers(options?: { fitBounds?: boolean }) {
         url: markerIcon,
         scaledSize: new google.maps.Size(px, px),
         anchor:
-          profile.profilePicture
+          picUrl
             ? new google.maps.Point(px / 2, px / 2)
             : new google.maps.Point(px / 2, px - 2),
       },
