@@ -693,14 +693,20 @@ async function showMarkerInfo(marker: google.maps.Marker, profile: ProfilesInit,
   
   selectedMarkerUserId = userId;
   await updateMarkerIcon(targetMarker, latestProfile);
+
+  // Inline colors because InfoWindow is rendered outside Vue scope and CSS vars/color-mix
+  // can fail to apply depending on how Google injects the DOM.
+  const titleColor = isDarkMode.value ? '#f1f5f9' : '#0f172a';
+  const bodyColor = isDarkMode.value ? '#cbd5e1' : '#334155';
+  const metaColor = isDarkMode.value ? '#94a3b8' : '#64748b';
   
   const content = `
     <div class="trova-map-infowindow" style="padding: 8px; min-width: 200px;">
-      <h3 class="trova-map-infowindow__title" style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600;">
+      <h3 class="trova-map-infowindow__title" style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: ${titleColor};">
         ${latestProfile.fullName || `${latestProfile.fname} ${latestProfile.lname}`}
       </h3>
-      ${latestProfile.bio ? `<p class="trova-map-infowindow__body" style="margin: 0; font-size: 14px;">${latestProfile.bio}</p>` : ''}
-      ${latestProfile.currentLocationName ? `<p class="trova-map-infowindow__meta" style="margin: 4px 0 0 0; font-size: 12px;">
+      ${latestProfile.bio ? `<p class="trova-map-infowindow__body" style="margin: 0; font-size: 14px; color: ${bodyColor};">${latestProfile.bio}</p>` : ''}
+      ${latestProfile.currentLocationName ? `<p class="trova-map-infowindow__meta" style="margin: 4px 0 0 0; font-size: 12px; color: ${metaColor};">
         📍 ${latestProfile.currentLocationName}
       </p>` : ''}
     </div>
@@ -958,13 +964,17 @@ async function centerMapOnUser(profile: ProfilesInit) {
       
       // Open info window
       if (infoWindow.value) {
+        const titleColor = isDarkMode.value ? '#f1f5f9' : '#0f172a';
+        const bodyColor = isDarkMode.value ? '#cbd5e1' : '#334155';
+        const metaColor = isDarkMode.value ? '#94a3b8' : '#64748b';
+
         const content = `
           <div class="trova-map-infowindow" style="padding: 8px; min-width: 200px;">
-            <h3 class="trova-map-infowindow__title" style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600;">
+            <h3 class="trova-map-infowindow__title" style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: ${titleColor};">
               ${latestProfile.fullName || `${latestProfile.fname} ${latestProfile.lname}`}
             </h3>
-            ${latestProfile.bio ? `<p class="trova-map-infowindow__body" style="margin: 0; font-size: 14px;">${latestProfile.bio}</p>` : ''}
-            ${latestProfile.currentLocationName ? `<p class="trova-map-infowindow__meta" style="margin: 4px 0 0 0; font-size: 12px;">
+            ${latestProfile.bio ? `<p class="trova-map-infowindow__body" style="margin: 0; font-size: 14px; color: ${bodyColor};">${latestProfile.bio}</p>` : ''}
+            ${latestProfile.currentLocationName ? `<p class="trova-map-infowindow__meta" style="margin: 4px 0 0 0; font-size: 12px; color: ${metaColor};">
               📍 ${latestProfile.currentLocationName}
             </p>` : ''}
           </div>
