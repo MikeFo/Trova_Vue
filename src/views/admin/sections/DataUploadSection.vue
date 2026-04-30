@@ -11,6 +11,9 @@
           <h3 class="card-title">Reports To Data</h3>
         </div>
         <p class="card-description">Upload CSV with user reports-to-manager data</p>
+        <p class="card-helper-text">
+          To use Celebrations, like work anniversary, require mm/dd/yyyy format
+        </p>
 
         <div class="csv-format-help">
           <div class="format-header">
@@ -550,6 +553,12 @@ async function uploadPairings() {
   font-size: 14px;
   color: #64748b;
   margin: 0;
+}
+
+.card-helper-text {
+  font-size: 12px;
+  color: #64748b;
+  margin: -8px 0 0 0;
 }
 
 /* Spreadsheet-style table */
