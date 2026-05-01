@@ -40,6 +40,8 @@ export class AuthService {
               console.warn('Failed to get user profile on auth state change:', error);
             }
           } else {
+            // No Firebase user: do not auto-authenticate via any cached server/session state.
+            // Slack-link access is handled separately via secret-based gating.
             this.authStore.setUser(null);
           }
         });
@@ -60,6 +62,10 @@ export class AuthService {
    */
   private async handleRedirectResult(auth: Auth): Promise<void> {
     try {
+      // Web users should have durable sessions (normal expected behavior).
+      const { setPersistence, browserLocalPersistence } = await import('firebase/auth');
+      await setPersistence(auth, browserLocalPersistence);
+
       const { getRedirectResult } = await import('firebase/auth');
       const result = await getRedirectResult(auth);
       if (!result?.user) return;
@@ -171,6 +177,10 @@ export class AuthService {
         throw new Error('Authentication service is not available. Please try again in a moment.');
       }
 
+      // Web users should have durable sessions (normal expected behavior).
+      const { setPersistence, browserLocalPersistence } = await import('firebase/auth');
+      await setPersistence(auth, browserLocalPersistence);
+
       // Primary auth: Firebase email/password (same model as Ionic app).
       // This establishes the Firebase session; our Axios interceptor will attach the ID token
       // on subsequent API calls so /users/me and all other endpoints are authenticated.
@@ -223,6 +233,10 @@ export class AuthService {
 
     this.authStore.isLoading = true;
     try {
+      // Web users should have durable sessions (normal expected behavior).
+      const { setPersistence, browserLocalPersistence } = await import('firebase/auth');
+      await setPersistence(auth, browserLocalPersistence);
+
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const token = await userCredential.user.getIdToken();
       
@@ -280,7 +294,10 @@ export class AuthService {
     try {
       this.ensureAuthListener();
       const { auth } = useFirebase();
-      if (!auth) return false;
+      if (!auth) {
+        // Without Firebase auth, only allow Slack-link gated sessions.
+        return slackSessionService.hasValidatedSession();
+      }
 
       // Wait for Firebase to determine auth state (it may still be restoring from localStorage)
       // This ensures we get the correct auth state even on page refresh
@@ -305,7 +322,9 @@ export class AuthService {
           return true;
         }
       }
-      return false;
+
+      // No Firebase user: only allow Slack-link gated sessions.
+      return slackSessionService.hasValidatedSession();
     } catch (error) {
       console.warn('Auth check failed:', error);
       return false;
@@ -322,6 +341,10 @@ export class AuthService {
 
     this.authStore.isLoading = true;
     try {
+      // Web users should have durable sessions (normal expected behavior).
+      const { setPersistence, browserLocalPersistence } = await import('firebase/auth');
+      await setPersistence(auth, browserLocalPersistence);
+
       const { GoogleAuthProvider, signInWithRedirect } = await import('firebase/auth');
       const provider = new GoogleAuthProvider();
       await signInWithRedirect(auth, provider);
@@ -343,6 +366,11 @@ export class AuthService {
 
     this.authStore.isLoading = true;
     try {
+      // Slack-link users must NOT create a durable session.
+      // Force in-memory persistence so auth does not survive tab/browser restarts.
+      const { setPersistence, inMemoryPersistence } = await import('firebase/auth');
+      await setPersistence(auth, inMemoryPersistence);
+
       await firebaseSignInWithCustomToken(auth, idToken);
       await this.getUserProfile();
       slackSessionService.clearValidation();
