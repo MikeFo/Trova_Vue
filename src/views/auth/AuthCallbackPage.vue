@@ -12,17 +12,43 @@
 
 <script setup lang="ts">
 import { onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { IonPage, IonContent, IonText } from '@ionic/vue';
+import { authService } from '@/services/auth.service';
+import { useAuthStore } from '@/stores/auth.store';
 
 const router = useRouter();
+const route = useRoute();
+const authStore = useAuthStore();
 
-onMounted(() => {
-  // TODO: Handle OAuth callback
-  // After successful auth, redirect to tabs
-  setTimeout(() => {
-    router.push('/tabs/tab1');
-  }, 1000);
+onMounted(async () => {
+  // Google redirect returns here; wait for Firebase + backend session hydration
+  // before navigating to guarded routes to avoid bouncing back to /login.
+  try {
+    const isAuthenticated = await authService.checkAuth();
+    if (!isAuthenticated) {
+      await router.replace('/login');
+      return;
+    }
+
+    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : null;
+    if (redirect) {
+      await router.replace(redirect);
+      return;
+    }
+
+    // Default to home; if setup is incomplete, guards will send to /setup.
+    // If we already know setup is incomplete, go directly.
+    if (authStore.user && !authStore.isSetupComplete) {
+      await router.replace('/setup');
+      return;
+    }
+
+    await router.replace('/tabs/home');
+  } catch (e) {
+    console.warn('[AuthCallbackPage] auth callback failed:', e);
+    await router.replace('/login');
+  }
 });
 </script>
 
