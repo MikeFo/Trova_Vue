@@ -199,6 +199,18 @@ class CommunityService {
   }
 
   /**
+   * Slack user-scope callback for `users.profile:write` (custom status in Trova).
+   * Backend: POST /public/slack/profile-write-auth-user
+   * Redirect URI must match `getUrlSlackAuthCustomStatus` in trova-api (encodeURI(siteUrl + '/slack-profile-write-redirect')).
+   */
+  async slackProfileWriteAuthUser(code: string, redirectUri: string): Promise<{ slackTeamId?: string }> {
+    return apiService.post('/public/slack/profile-write-auth-user', {
+      code,
+      redirectUri,
+    });
+  }
+
+  /**
    * Update community fields via public PATCH (no Firebase required).
    * Backend: PATCH /public/community/edit
    */
