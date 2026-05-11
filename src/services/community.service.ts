@@ -181,6 +181,24 @@ class CommunityService {
   }
 
   /**
+   * Slack "update scopes" callback: exchange OAuth code for updated workspace token (public).
+   * Backend: POST /public/slack/update-scopes-successful
+   *
+   * Note: Slack requires redirect_uri to match exactly the one used in the authorize step.
+   */
+  async slackUpdateScopesSuccessful(
+    communityId: number,
+    code: string,
+    redirectUri: string
+  ): Promise<any> {
+    return apiService.post('/public/slack/update-scopes-successful', {
+      communityId,
+      code,
+      redirectUri,
+    });
+  }
+
+  /**
    * Update community fields via public PATCH (no Firebase required).
    * Backend: PATCH /public/community/edit
    */
