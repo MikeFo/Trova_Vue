@@ -7,6 +7,7 @@ import type { User } from '../stores/auth.store';
 
 export class AuthService {
   private authListenerSetup = false;
+  private redirectHandlingPromise: Promise<void> | null = null;
 
   // Lazy getter for auth store to avoid calling it before Pinia is initialized
   private get authStore() {
@@ -30,7 +31,7 @@ export class AuthService {
         this.authListenerSetup = true;
         // Handle Google sign-in redirect result (user returning from Google)
         // Must run before onAuthStateChanged; only resolves with a value when returning from redirect
-        this.handleRedirectResult(auth);
+        this.redirectHandlingPromise = this.handleRedirectResult(auth);
         // Listen for auth state changes - this will fire immediately with current user if authenticated
         onAuthStateChanged(auth, async (firebaseUser: FirebaseUser | null) => {
           if (firebaseUser) {
@@ -133,14 +134,14 @@ export class AuthService {
         return;
       }
 
-      // If auth state is already known (user exists), resolve immediately
-      if (auth.currentUser !== null) {
+      // Fast-path if already authenticated
+      if (auth.currentUser) {
         resolve(auth.currentUser);
         return;
       }
 
-      // Otherwise, wait for onAuthStateChanged to fire
-      // This will fire immediately if auth state is already determined, or when it's restored
+      // Otherwise, wait for onAuthStateChanged to fire.
+      // This will fire once Firebase has finished restoring auth state from persistence.
       let resolved = false;
       const unsubscribe = onAuthStateChanged(auth, (user) => {
         if (!resolved) {
@@ -150,14 +151,15 @@ export class AuthService {
         }
       });
 
-      // Timeout after 2 seconds - if auth state isn't determined by then, assume no user
+      // Timeout to avoid hanging route guards forever on broken environments/storage.
+      // Keep this comfortably above typical redirect/session restore times.
       setTimeout(() => {
         if (!resolved) {
           resolved = true;
           unsubscribe();
           resolve(null);
         }
-      }, 2000);
+      }, 8000);
     });
   }
 
@@ -297,6 +299,16 @@ export class AuthService {
       if (!auth) {
         // Without Firebase auth, only allow Slack-link gated sessions.
         return slackSessionService.hasValidatedSession();
+      }
+
+      // If we're returning from a Google redirect, ensure redirect processing has a chance
+      // to complete before we decide the user is unauthenticated (prevents login bounce).
+      if (this.redirectHandlingPromise) {
+        try {
+          await this.redirectHandlingPromise;
+        } catch {
+          // Non-fatal; auth state restore may still succeed even if redirect result handling fails.
+        }
       }
 
       // Wait for Firebase to determine auth state (it may still be restoring from localStorage)
