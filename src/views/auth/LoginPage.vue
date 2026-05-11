@@ -110,8 +110,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { onMounted, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { authService } from '@/services/auth.service';
 import { useAuthStore } from '@/stores/auth.store';
 import {
@@ -124,11 +124,37 @@ import {
 } from '@ionic/vue';
 
 const router = useRouter();
+const route = useRoute();
 const authStore = useAuthStore();
 const email = ref('');
 const password = ref('');
 const loading = ref(false);
 const logoError = ref(false);
+
+onMounted(async () => {
+  // After Google sign-in redirect, Firebase often returns to the same page (e.g. /login).
+  // If the session was restored, immediately route to the app instead of leaving the user
+  // stranded on the login screen.
+  try {
+    const isAuthenticated = await authService.checkAuth();
+    if (!isAuthenticated) return;
+
+    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : null;
+    if (redirect) {
+      await router.replace(redirect);
+      return;
+    }
+
+    if (authStore.user && !authStore.isSetupComplete) {
+      await router.replace('/setup');
+      return;
+    }
+
+    await router.replace('/tabs/home');
+  } catch {
+    // No-op: stay on login page if auth restore fails
+  }
+});
 
 async function handleLogin() {
   if (!email.value || !password.value) {
