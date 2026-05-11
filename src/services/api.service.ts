@@ -49,7 +49,7 @@ export class ApiService {
             try {
               const token = await firebaseAuth.auth.currentUser.getIdToken();
               if (token && config.headers) {
-                config.headers.Authorization = token;
+                config.headers.Authorization = `Bearer ${token}`;
               }
             } catch (tokenError) {
               // Continue without token - backend might handle auth differently
