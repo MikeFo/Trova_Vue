@@ -44,6 +44,62 @@ export class AuthService {
   }
 
   /**
+   * Link Firebase Google user to Trova backend (/users/me or signup).
+   * Used after redirect or popup Google sign-in.
+   */
+  private async hydrateBackendUserAfterGoogleLogin(firebaseUser: FirebaseUser): Promise<void> {
+    try {
+      await firebaseUser.getIdToken();
+    } catch {
+      // Non-fatal; API interceptor can fetch a token on demand.
+    }
+
+    const givenName = firebaseUser.displayName?.split(' ')[0] || '';
+    const familyName = firebaseUser.displayName?.split(' ').slice(1).join(' ') || '';
+
+    let user = await this.getUserProfile();
+    if (!user || !user.id) {
+      try {
+        user = await apiService.post<User>('/auth/signup?setEmailAsVerified=true&setCommunityFromEmail=true', {
+          fname: givenName,
+          lname: familyName,
+        });
+        if (user?.id) {
+          this.authStore.setUser(user);
+          slackSessionService.clearValidation();
+        }
+      } catch (error: any) {
+        const status = error?.status || error?.response?.status;
+        const isConflictOrServerError = status === 409 || status === 500;
+        if (isConflictOrServerError) {
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            await new Promise((r) => setTimeout(r, attempt * 500));
+            try {
+              user = await this.getUserProfile();
+              if (user?.id) {
+                this.authStore.setUser(user);
+                slackSessionService.clearValidation();
+                break;
+              }
+            } catch (_) {
+              if (attempt === 3) break;
+            }
+          }
+        } else {
+          await new Promise((r) => setTimeout(r, 500));
+          user = await this.getUserProfile();
+          if (user?.id) {
+            this.authStore.setUser(user);
+            slackSessionService.clearValidation();
+          }
+        }
+      }
+    } else {
+      this.authStore.setUser(user);
+    }
+  }
+
+  /**
    * Process the result of signInWithRedirect when the user returns from Google.
    * Runs once on app load; only does work when there is a pending redirect result.
    */
@@ -57,50 +113,7 @@ export class AuthService {
       const result = await getRedirectResult(auth);
       if (!result?.user) return;
 
-      const token = await result.user.getIdToken();
-      const givenName = result.user.displayName?.split(' ')[0] || '';
-      const familyName = result.user.displayName?.split(' ').slice(1).join(' ') || '';
-
-      let user = await this.getUserProfile();
-      if (!user || !user.id) {
-        try {
-          user = await apiService.post<User>('/auth/signup?setEmailAsVerified=true&setCommunityFromEmail=true', {
-            fname: givenName,
-            lname: familyName,
-          });
-          if (user?.id) {
-            this.authStore.setUser(user);
-            slackSessionService.clearValidation();
-          }
-        } catch (error: any) {
-          const status = error?.status || error?.response?.status;
-          const isConflictOrServerError = status === 409 || status === 500;
-          if (isConflictOrServerError) {
-            for (let attempt = 1; attempt <= 3; attempt++) {
-              await new Promise((r) => setTimeout(r, attempt * 500));
-              try {
-                user = await this.getUserProfile();
-                if (user?.id) {
-                  this.authStore.setUser(user);
-                  slackSessionService.clearValidation();
-                  break;
-                }
-              } catch (_) {
-                if (attempt === 3) break;
-              }
-            }
-          } else {
-            await new Promise((r) => setTimeout(r, 500));
-            user = await this.getUserProfile();
-            if (user?.id) {
-              this.authStore.setUser(user);
-              slackSessionService.clearValidation();
-            }
-          }
-        }
-      } else {
-        this.authStore.setUser(user);
-      }
+      await this.hydrateBackendUserAfterGoogleLogin(result.user);
     } catch (error) {
       console.warn('Redirect result handling failed:', error);
     } finally {
@@ -363,18 +376,29 @@ export class AuthService {
 
     this.authStore.isLoading = true;
     try {
-      // Web users should have durable sessions (normal expected behavior).
-      const { setPersistence, browserLocalPersistence } = await import('firebase/auth');
+      const { setPersistence, browserLocalPersistence, GoogleAuthProvider, signInWithPopup } =
+        await import('firebase/auth');
       await setPersistence(auth, browserLocalPersistence);
 
-      const { GoogleAuthProvider, signInWithRedirect } = await import('firebase/auth');
       const provider = new GoogleAuthProvider();
-      await signInWithRedirect(auth, provider);
-      // Page will redirect to Google; when user returns, handleRedirectResult() runs
+      // Popup avoids full-page redirect + getRedirectResult(), which is unreliable across
+      // vue.trova-staging.com → accounts.google.com → firebaseapp.com (storage / SPA timing).
+      const credential = await signInWithPopup(auth, provider);
+      await this.hydrateBackendUserAfterGoogleLogin(credential.user);
+
+      const user = this.authStore.user;
+      if (!user?.id) {
+        throw new Error('Google sign-in succeeded but your profile could not be loaded.');
+      }
     } catch (error: any) {
-      this.authStore.isLoading = false;
+      const code = error?.code || error?.originalError?.code;
+      if (code === 'auth/popup-blocked' || code === 'auth/cancelled-popup-request') {
+        throw new Error('Google sign-in was blocked or closed. Allow pop-ups for this site and try again.');
+      }
       console.error('Google sign in error:', error);
-      throw error;
+      throw error instanceof Error ? error : new Error('Google sign-in failed.');
+    } finally {
+      this.authStore.isLoading = false;
     }
   }
 
