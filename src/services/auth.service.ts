@@ -29,23 +29,9 @@ export class AuthService {
       const { auth } = useFirebase();
       if (auth) {
         this.authListenerSetup = true;
-        // Handle Google sign-in redirect result (user returning from Google)
-        // Must run before onAuthStateChanged; only resolves with a value when returning from redirect
-        this.redirectHandlingPromise = this.handleRedirectResult(auth);
-        // Listen for auth state changes - this will fire immediately with current user if authenticated
-        onAuthStateChanged(auth, async (firebaseUser: FirebaseUser | null) => {
-          if (firebaseUser) {
-            try {
-              await this.getUserProfile();
-            } catch (error) {
-              console.warn('Failed to get user profile on auth state change:', error);
-            }
-          } else {
-            // No Firebase user: do not auto-authenticate via any cached server/session state.
-            // Slack-link access is handled separately via secret-based gating.
-            this.authStore.setUser(null);
-          }
-        });
+        // Complete redirect OAuth before subscribing: otherwise onAuthStateChanged can fire
+        // once with null while getRedirectResult is still pending and clear the Pinia user.
+        void this.bootstrapAuthAfterRedirect(auth);
       }
     } catch (error) {
       console.warn('Firebase auth not available yet:', error);
@@ -119,6 +105,30 @@ export class AuthService {
       console.warn('Redirect result handling failed:', error);
     } finally {
       this.authStore.isLoading = false;
+    }
+  }
+
+  /**
+   * Finish Google redirect handling before attaching the global auth listener so
+   * onAuthStateChanged does not fire once with null and clear the store mid-redirect.
+   */
+  private async bootstrapAuthAfterRedirect(auth: Auth): Promise<void> {
+    try {
+      this.redirectHandlingPromise = this.handleRedirectResult(auth);
+      await this.redirectHandlingPromise;
+      onAuthStateChanged(auth, async (firebaseUser: FirebaseUser | null) => {
+        if (firebaseUser) {
+          try {
+            await this.getUserProfile();
+          } catch (error) {
+            console.warn('Failed to get user profile on auth state change:', error);
+          }
+        } else {
+          this.authStore.setUser(null);
+        }
+      });
+    } catch (error) {
+      console.warn('Auth bootstrap failed:', error);
     }
   }
 
